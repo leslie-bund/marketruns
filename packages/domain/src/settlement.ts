@@ -91,18 +91,31 @@ export function settle(input: SettlementInput): SettlementOutcome {
     };
   }
 
+  // Disputed mode: the evidence layer marks which Exchange Points confirmed.
+  // Confirmed stops still settle; the Buyer recovers the disputed residual.
+  // A full refund exists only when no Exchange Point was confirmed — a failure
+  // before the Runner took custody. The platform books no revenue on a run that
+  // closes disputed, and absorbs an additional, capped loss only when the
+  // evidence is ambiguous (ADR-0007).
   const disputed = input.dispute ?? { ambiguous: true };
-  if (!disputed.ambiguous) {
-    const { dispute: _dispute, ...resolvedInput } = input;
-    return settle({ ...resolvedInput, mode: "completed" });
+  const completedGoods = input.sellers.filter((seller) => seller.stopCompleted);
+  const completedTotal = completedGoods.reduce((sum, seller) => sum + seller.amountKobo, 0);
+  const confirmedFraction = input.sellers.length === 0 ? 0 : completedGoods.length / input.sellers.length;
+  const runnerPayout = floor(input.deliveryPriceKobo * confirmedFraction);
+  const residual = goodsTotal - completedTotal + input.deliveryPriceKobo - runnerPayout + input.deliveryMarginKobo;
+  let platformLoss = 0;
+  if (disputed.ambiguous) {
+    requireKobo(disputed.requestedPlatformLossKobo ?? 0, "requestedPlatformLossKobo");
+    platformLoss = Math.min(disputed.requestedPlatformLossKobo ?? 0, policy.ambiguousLossCapKobo);
   }
-  requireKobo(disputed.requestedPlatformLossKobo ?? 0, "requestedPlatformLossKobo");
-  const platformLoss = Math.min(disputed.requestedPlatformLossKobo ?? 0, policy.ambiguousLossCapKobo);
   return {
-    sellers: input.sellers.map(({ sellerId }) => ({ sellerId, amountKobo: 0 })),
-    runnerKobo: 0,
+    sellers: input.sellers.map(({ sellerId, amountKobo, stopCompleted }) => ({
+      sellerId,
+      amountKobo: stopCompleted ? amountKobo : 0,
+    })),
+    runnerKobo: runnerPayout,
     platformKobo: 0,
-    buyerRefundKobo: goodsTotal + input.deliveryPriceKobo + input.deliveryMarginKobo,
+    buyerRefundKobo: residual + platformLoss,
     platformLossKobo: platformLoss,
   };
 }

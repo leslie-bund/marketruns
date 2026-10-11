@@ -38,9 +38,39 @@ describe("Settlement", () => {
     const outcome = settle({
       ...base,
       mode: "disputed",
+      sellers: [base.sellers[0]!, { ...base.sellers[1]!, stopCompleted: false }],
       dispute: { ambiguous: true, requestedPlatformLossKobo: 99_000 },
     });
     expect(outcome.platformLossKobo).toBe(5_000);
+    expect(outcome.buyerRefundKobo).toBe(11_300);
+    // Ledger balances: capture 17,300 + platform-funded loss 5,000 = outflows.
+    expect(outcome.sellers.reduce((sum, seller) => sum + seller.amountKobo, 0) + outcome.runnerKobo + outcome.buyerRefundKobo)
+      .toBe(17_300 + 5_000);
+  });
+
+  it("settles a resolved dispute per confirmed stops with no platform compensation", () => {
+    const outcome = settle({ ...base, mode: "disputed", dispute: { ambiguous: false } });
+    expect(outcome).toEqual({
+      sellers: [{ sellerId: "seller-a", amountKobo: 10_000 }, { sellerId: "seller-b", amountKobo: 5_000 }],
+      runnerKobo: 2_000,
+      platformKobo: 0,
+      buyerRefundKobo: 300,
+      platformLossKobo: 0,
+    });
+  });
+
+  it("refunds in full only when no Exchange Point was confirmed — a pre-custody failure", () => {
+    const outcome = settle({
+      ...base,
+      mode: "disputed",
+      sellers: [
+        { ...base.sellers[0]!, stopCompleted: false },
+        { ...base.sellers[1]!, stopCompleted: false },
+      ],
+      dispute: { ambiguous: true, requestedPlatformLossKobo: 0 },
+    });
+    expect(outcome.sellers).toEqual([{ sellerId: "seller-a", amountKobo: 0 }, { sellerId: "seller-b", amountKobo: 0 }]);
+    expect(outcome.runnerKobo).toBe(0);
     expect(outcome.buyerRefundKobo).toBe(17_300);
   });
 });
