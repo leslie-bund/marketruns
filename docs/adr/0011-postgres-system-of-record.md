@@ -1,0 +1,3 @@
+# Postgres (Neon via Hyperdrive) is the system of record, ledger included
+
+All persistent data — including the money ledger, settlement records, and product archives — lives in Postgres on Neon, reached from Workers via Hyperdrive, with Drizzle for migrations and queries. We rejected D1 (Cloudflare's SQLite) for this role: it has database-size and write-throughput ceilings that a financial ledger with reconciliation and analytics queries will hit, and migrating a ledger mid-flight is one of the most painful moves in software. D1 may still appear for non-critical edge-local data, but never for money or audit records.
