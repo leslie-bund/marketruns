@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@market-runs/domain": "workspace:*" },
-  "devDependencies": { "@cloudflare/workers-types": "^4.20250109.0", "typescript": "^5.7.3" }
+  "dependencies": {
+    "@market-runs/domain": "workspace:*",
+    "@market-runs/proto": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.23",
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.14.0"
+  }
 }
