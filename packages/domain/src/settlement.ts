@@ -93,16 +93,17 @@ export function settle(input: SettlementInput): SettlementOutcome {
 
   // Disputed mode: the evidence layer marks which Exchange Points confirmed.
   // Confirmed stops still settle; the Buyer recovers the disputed residual.
-  // A full refund exists only when no Exchange Point was confirmed — a failure
-  // before the Runner took custody. The platform books no revenue on a run that
-  // closes disputed, and absorbs an additional, capped loss only when the
-  // evidence is ambiguous (ADR-0007).
+  // A full refund of goods and delivery exists only when no Exchange Point was
+  // confirmed — a failure before the Runner took custody. The platform retains
+  // its delivery margin on disputed closes (founder decision, 2026-10-11) and
+  // absorbs an additional, capped loss only when the evidence is ambiguous
+  // (ADR-0007).
   const disputed = input.dispute ?? { ambiguous: true };
   const completedGoods = input.sellers.filter((seller) => seller.stopCompleted);
   const completedTotal = completedGoods.reduce((sum, seller) => sum + seller.amountKobo, 0);
   const confirmedFraction = input.sellers.length === 0 ? 0 : completedGoods.length / input.sellers.length;
   const runnerPayout = floor(input.deliveryPriceKobo * confirmedFraction);
-  const residual = goodsTotal - completedTotal + input.deliveryPriceKobo - runnerPayout + input.deliveryMarginKobo;
+  const buyersPool = goodsTotal - completedTotal + input.deliveryPriceKobo - runnerPayout;
   let platformLoss = 0;
   if (disputed.ambiguous) {
     requireKobo(disputed.requestedPlatformLossKobo ?? 0, "requestedPlatformLossKobo");
@@ -114,8 +115,8 @@ export function settle(input: SettlementInput): SettlementOutcome {
       amountKobo: stopCompleted ? amountKobo : 0,
     })),
     runnerKobo: runnerPayout,
-    platformKobo: 0,
-    buyerRefundKobo: residual + platformLoss,
+    platformKobo: input.deliveryMarginKobo,
+    buyerRefundKobo: buyersPool + platformLoss,
     platformLossKobo: platformLoss,
   };
 }
