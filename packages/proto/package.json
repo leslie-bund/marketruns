@@ -1,0 +1,13 @@
+{
+  "name": "@market-runs/proto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run" },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "zod": "^3.25.76"
+  }
+}
