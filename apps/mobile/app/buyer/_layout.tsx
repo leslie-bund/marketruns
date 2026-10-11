@@ -1,0 +1,4 @@
+import { Stack, Link } from "expo-router";
+import { Pressable, Text, View } from "react-native";
+import { colors } from "../../src/ui";
+export default function BuyerLayout() { return <><Stack screenOptions={{ headerShown: true, headerStyle: { backgroundColor: colors.paper }, headerTintColor: colors.ink, headerTitleStyle: { fontWeight: "800" }, headerRight: () => <Link href="/" asChild><Pressable><Text style={{ color: colors.green, fontWeight: "700" }}>Switch role</Text></Pressable></Link> }}><Stack.Screen name="index" options={{ title: "Buyer" }} /><Stack.Screen name="post" options={{ title: "Post an Intent" }} /><Stack.Screen name="products" options={{ title: "Products" }} /><Stack.Screen name="negotiation" options={{ title: "Negotiation" }} /><Stack.Screen name="cart" options={{ title: "Your Cart" }} /><Stack.Screen name="checkout" options={{ title: "Checkout" }} /></Stack></>; }
