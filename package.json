@@ -2,8 +2,15 @@
   "name": "market-runs",
   "private": true,
   "packageManager": "pnpm@9.15.4",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "test": "pnpm --filter @market-runs/domain test && pnpm --filter @market-runs/proto test"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.45.4"
   }
 }
