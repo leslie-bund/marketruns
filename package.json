@@ -10,6 +10,7 @@
     "test": "pnpm --filter @market-runs/domain test && pnpm --filter @market-runs/proto test"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "drizzle-kit": "^0.31.11",
     "drizzle-orm": "^0.45.4"
   }
