@@ -1,0 +1,32 @@
+name = "market-runs-edge"
+main = "../apps/edge/src/index.ts"
+compatibility_date = "2025-01-01"
+
+[durable_objects]
+bindings = [
+  { name = "MARKET_DO", class_name = "MarketDO" },
+  { name = "PRODUCT_DO", class_name = "ProductDO" },
+  { name = "CART_DO", class_name = "CartDO" },
+  { name = "RUN_DO", class_name = "RunDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MarketDO", "ProductDO", "CartDO", "RunDO"]
+
+[[queues.producers]]
+binding = "ARCHIVE_QUEUE"
+queue = "archive-snapshots"
+
+[[r2_buckets]]
+binding = "ARCHIVE_BUCKET"
+bucket_name = "market-runs-archive"
+
+[[kv_namespaces]]
+binding = "MARKET_CONFIG"
+id = "set-with-wrangler"
+
+# Hyperdrive config is provisioned with wrangler; set via wrangler secrets — never commit the Neon connection string.
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "set-with-wrangler"

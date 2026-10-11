@@ -1,0 +1,8 @@
+name = "market-runs-archive"
+main = "../apps/archive/src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[queues.consumers]]
+queue = "archive-snapshots"
+max_batch_size = 10
+max_batch_timeout = 5

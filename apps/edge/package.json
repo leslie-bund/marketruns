@@ -1,0 +1,8 @@
+{
+  "name": "@market-runs/edge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@market-runs/domain": "workspace:*" },
+  "devDependencies": { "@cloudflare/workers-types": "^4.20250109.0", "typescript": "^5.7.3" }
+}

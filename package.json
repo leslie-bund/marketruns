@@ -1,0 +1,9 @@
+{
+  "name": "market-runs",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "test": "pnpm --filter @market-runs/domain test"
+  }
+}
