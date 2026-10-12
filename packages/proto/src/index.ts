@@ -20,7 +20,7 @@ import {
   RunnerLocationUpdatedSchema,
 } from "./run.js";
 import { SettlementReleasedSchema } from "./settlement.js";
-import { CartRetiredSchema, ProductRetiredSchema } from "./archive.js";
+import { CartRetiredSchema, ProductRetiredSchema, RunRetiredSchema } from "./archive.js";
 import {
   KycVerificationResultSchema,
   PaymentFundsCapturedSchema,
@@ -71,6 +71,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   SettlementReleasedSchema,
   ProductRetiredSchema,
   CartRetiredSchema,
+  RunRetiredSchema,
   PaymentHoldPlacedSchema,
   PaymentFundsCapturedSchema,
   PaymentFundsReleasedSchema,

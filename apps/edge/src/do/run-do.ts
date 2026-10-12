@@ -473,9 +473,23 @@ export class RunDO extends DurableObject<Env> {
         platformLossKobo: outcome.platformLossKobo,
         releasedAt: now,
       };
-      // Proto has no run.retired archive schema yet; the retirement snapshot
-      // is the final run record (status "closed"), persisted by the consumer.
-      const retirementSnapshot: ServerEvent = { type: "run.updated", run };
+      const retirementSnapshot: ServerEvent = {
+        type: "run.retired",
+        runId: run.id,
+        cartId: run.id.startsWith("run:") ? run.id.slice(4) : run.id,
+        market: run.market,
+        status: run.status,
+        floorRateKobo: run.floorRateKobo,
+        delivery: run.delivery,
+        stops: run.stops,
+        mode: "completed",
+        settlementLegs: outcome.sellers,
+        runnerKobo: outcome.runnerKobo,
+        platformKobo: outcome.platformKobo,
+        buyerRefundKobo: outcome.buyerRefundKobo,
+        platformLossKobo: outcome.platformLossKobo,
+        closedAt: now,
+      };
       broadcast(this.ctx, released);
       broadcast(this.ctx, retirementSnapshot);
       await this.env.ARCHIVE_QUEUE.sendBatch([

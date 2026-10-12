@@ -2,6 +2,9 @@ import { z } from "zod";
 import { TimestampSchema } from "./primitives.js";
 import { ProductSchema } from "./negotiation.js";
 import { CartSchema } from "./cart.js";
+import { DeliverySchema, KoboSchema } from "./primitives.js";
+import { RunStatusSchema, RunStopSchema } from "./run.js";
+import { SettlementModeSchema, SellerSettlementSchema } from "./settlement.js";
 
 /**
  * Retirement = snapshot to Postgres/R2 via the archive queue, then delete DO
@@ -35,3 +38,23 @@ export const CartRetiredSchema = z.object({
   snapshot: CartSchema,
 });
 export type CartRetired = z.infer<typeof CartRetiredSchema>;
+
+/** Immutable close record sent before settlement.released so its FK exists. */
+export const RunRetiredSchema = z.object({
+  type: z.literal("run.retired"),
+  runId: z.string().min(1),
+  cartId: z.string().min(1),
+  market: z.string().min(1),
+  status: RunStatusSchema,
+  floorRateKobo: KoboSchema,
+  delivery: DeliverySchema,
+  stops: z.array(RunStopSchema),
+  mode: SettlementModeSchema,
+  settlementLegs: z.array(SellerSettlementSchema),
+  runnerKobo: KoboSchema,
+  platformKobo: KoboSchema,
+  buyerRefundKobo: KoboSchema,
+  platformLossKobo: KoboSchema,
+  closedAt: TimestampSchema,
+});
+export type RunRetired = z.infer<typeof RunRetiredSchema>;
