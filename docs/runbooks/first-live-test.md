@@ -336,10 +336,14 @@ anything.
    ```
 
    Save the output and **attach it to the session log** (the last line is
-   always `RECONCILE_EXIT=0|1`). Expected: exit 0 apart from the accepted
-   2026-10-15 baseline (§0 item 3). Every WARN (pending transfers,
-   refund-manual rows, stale holds) must have a one-line explanation in the
-   log — the WARN budget is 0 unexplained.
+   always `RECONCILE_EXIT=0|1`). Expected: exit 0; if the accepted 2026-10-15
+   baseline rows are still present, only their known dispatch gaps are
+   tolerated (§0 item 3). Every WARN (pending transfers, refund-manual rows,
+   stale holds) must have a one-line explanation in the log — the WARN budget
+   is 0 unexplained.
+
+   At the top of the log, record the session posture: identity mode (Smile ID
+   sandbox vs stub) and payments gate (`PAYMENTS_REQUIRED` on/off).
 
 2. **Collect feedback while it's fresh** — one row per tester per task:
 
@@ -360,7 +364,8 @@ anything.
    - **H1 evidence — trust features ignored**: testers confirming handoffs
      without looking at the photo/QR, or treating them as ceremony.
    - **H3 evidence — money doesn't tie out**: reconcile FAIL beyond the
-     accepted baseline, or any WARN nobody can explain.
+     accepted baseline (if it is still present), or any WARN nobody can
+     explain.
    - **Workaround habits**: testers inventing off-system paths (calling each
      other instead of using offers, sharing one phone, paying "outside the
      app" as a joke that lands) — workarounds are product signal, not
