@@ -82,11 +82,16 @@ export function settle(input: SettlementInput): SettlementOutcome {
     const platformFee = floor((input.deliveryPriceKobo * policy.platformFeeBps) / bps);
     const sellerPayouts = completedGoods.map(({ sellerId, amountKobo }) => ({ sellerId, amountKobo }));
     sellerPayouts.push(...failedGoods.map(({ sellerId }) => ({ sellerId, amountKobo: 0 })));
+    const buyerRefund = goodsTotal - completedTotal + input.deliveryPriceKobo - disruption - platformFee + input.deliveryMarginKobo;
+    const capturedTotal = goodsTotal + input.deliveryPriceKobo + input.deliveryMarginKobo;
+    if (buyerRefund >= capturedTotal) {
+      throw new Error("aborted settlement must retain friction — a full-capture refund violates ADR-0008");
+    }
     return {
       sellers: sellerPayouts,
       runnerKobo: disruption,
       platformKobo: platformFee,
-      buyerRefundKobo: goodsTotal - completedTotal + input.deliveryPriceKobo - disruption - platformFee + input.deliveryMarginKobo,
+      buyerRefundKobo: buyerRefund,
       platformLossKobo: 0,
     };
   }

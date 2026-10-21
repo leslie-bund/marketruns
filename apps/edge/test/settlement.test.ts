@@ -36,12 +36,12 @@ describe("RunDO settlement trigger", () => {
     expect((await offerProduct("st-product-1", "st-intent-1", "st")).status).toBe(200); // 165_000 kobo goods
     expect((await acceptProduct("st-product-1")).status).toBe(200);
 
-    const accepted = await checkout("cart:st");
+    const accepted = await checkout("cart:st:buyer:anonymous");
     expect(accepted.status).toBe(200);
     const checkoutEvent = await readJson(accepted);
     expect(checkoutEvent.type).toBe("checkout.accepted");
     const runId = String(checkoutEvent.runId);
-    expect(runId).toBe("run:cart:st");
+    expect(runId).toBe("run:cart:st:buyer:anonymous");
     const floorRateKobo = Number(checkoutEvent.floorRateKobo);
     expect(floorRateKobo).toBe(170_000);
 

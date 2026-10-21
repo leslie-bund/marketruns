@@ -4,10 +4,26 @@ import { parseArchiveMessage } from "../src/messages.js";
 describe("archive message parsing", () => {
   it("accepts run.retired snapshots", () => {
     expect(parseArchiveMessage({
-      type: "run.retired", runId: "run:cart:a", cartId: "cart:a", market: "market-a", status: "closed",
+      type: "run.retired", runId: "run:cart:a", cartId: "cart:a", market: "market-a",
+      buyerId: "buyer-a", runnerId: "runner-a", status: "closed",
       floorRateKobo: 1, delivery: { kind: "plus-code", plusCode: "ABC" }, stops: [], mode: "completed",
       settlementLegs: [], runnerKobo: 0, platformKobo: 0, buyerRefundKobo: 0, platformLossKobo: 0, closedAt: 1,
     }).success).toBe(true);
+  });
+
+  it("accepts run.started announcements, string-serialized or parsed", () => {
+    const body = {
+      type: "run.started", runId: "run:cart:a", market: "market-a", status: "assigned",
+      runnerId: null, buyerId: "buyer-a", startedAt: 1, stopCount: 2,
+      storeIds: ["Amina's Fresh Store"],
+    };
+    expect(parseArchiveMessage(body).success).toBe(true);
+    expect(parseArchiveMessage(JSON.stringify(body)).success).toBe(true);
+    expect(parseArchiveMessage({ ...body, runnerId: "runner-a" }).success).toBe(true);
+    expect(parseArchiveMessage({ ...body, stopCount: -1 }).success).toBe(false);
+    // storeIds is required: the CartDO always knows the cart's stores at checkout.
+    const { storeIds: _omitted, ...noStores } = body;
+    expect(parseArchiveMessage(noStores).success).toBe(false);
   });
 
   it("rejects unknown types and malformed payloads", () => {

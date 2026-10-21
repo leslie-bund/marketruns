@@ -6,6 +6,7 @@
   "dependencies": {
     "@market-runs/domain": "workspace:*",
     "@market-runs/proto": "workspace:*",
+    "hono": "^4.13.13",
     "zod": "^3.25.76"
   },
   "devDependencies": {

@@ -6,7 +6,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "plugins": ["expo-router", ["expo-camera", { "cameraPermission": "Market Runs uses the camera to scan Handoff QR challenges and capture evidence.", "microphonePermission": false }], "expo-status-bar"],
+    "plugins": ["expo-router", ["expo-camera", { "cameraPermission": "Market Runs uses the camera to scan Handoff QR challenges and capture evidence.", "microphonePermission": false }], "expo-secure-store", "expo-status-bar"],
     "experiments": { "typedRoutes": true },
     "ios": { "supportsTablet": true },
     "android": { "edgeToEdgeEnabled": true, "permissions": ["CAMERA"] }

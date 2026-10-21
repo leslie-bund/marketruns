@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { INTENT_TTL_MS, marketCloseGateOk } from "@market-runs/domain";
-import type { Intent, IntentPosted, ServerEvent } from "@market-runs/proto";
-import type { Env } from "../env.js";
+import type { DiscoveryResponse, Intent, IntentPosted, MarketJoined, Product, ServerEvent, Store, StoreRegistered } from "@market-runs/proto";
+import { ProductOfferedSchema } from "@market-runs/proto";
+import type { Env } from "../config/env.js";
 import {
-  STATE_KEY,
   acceptHibernatedWebSocket,
   broadcast,
   expectCommand,
@@ -16,14 +16,23 @@ import {
   notFound,
   parseClientCommand,
   parseInternal,
-} from "../protocol.js";
+} from "./runtime/index.js";
+import { fetchInternal } from "./transport.js";
+import { STATE_KEY } from "./state.js";
 import {
+  IntentProductRequestSchema,
+  MARKET_OPEN_WINDOW_MS,
   MarketConfigSchema,
+  ModerateVocabularyRequestSchema,
   defaultMarketConfig,
   type CloseGateResponse,
   type IntentLookupResponse,
+  type IntentProductRequest,
+  type IntentProductsResponse,
   type MarketConfig,
-} from "../internal.js";
+  type ModerateVocabularyRequest,
+  type ModerateVocabularyResponse,
+} from "./schemas.js";
 
 interface StoredIntent {
   intent: Intent;
@@ -34,9 +43,28 @@ interface StoredIntent {
 interface MarketState {
   marketId?: string;
   intents: StoredIntent[];
+  /**
+   * Products offered against each open intent, in offer order — the buyer's
+   * discovery index. Populated by the ProductDO at offer time; entries for
+   * expired intents are pruned on read.
+   */
+  intentProducts: Record<string, string[]>;
+  /**
+   * The market's store registry (GLOSSARY: Store). A store's shop items feed
+   * the market vocabulary that scopes intents to stores (ADR-0006).
+   */
+  stores: Store[];
+  /** Participants who joined this market (all roles). */
+  members: MarketMember[];
   config?: MarketConfig;
   /** Deterministic-time seam: epoch offset added to Date.now(). 0 in production. */
   timeOffsetMs?: number;
+}
+
+interface MarketMember {
+  participantId: string;
+  role: "buyer" | "seller" | "runner";
+  joinedAt: number;
 }
 
 /**
@@ -45,7 +73,7 @@ interface MarketState {
  * retirement via the archive queue (ADR-0010).
  */
 export class MarketDO extends DurableObject<Env> {
-  private state: MarketState = { intents: [] };
+  private state: MarketState = { intents: [], intentProducts: {}, stores: [], members: [] };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -57,7 +85,10 @@ export class MarketDO extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     // Doctrine: load state from storage at the start of every fetch.
-    this.state = (await this.ctx.storage.get<MarketState>(STATE_KEY)) ?? { intents: [] };
+    this.state = (await this.ctx.storage.get<MarketState>(STATE_KEY)) ?? { intents: [], intentProducts: {}, stores: [], members: [] };
+    this.state.intentProducts ??= {}; // storage written before the discovery index existed
+    this.state.stores ??= []; // storage written before the store registry existed
+    this.state.members ??= []; // storage written before membership existed
     const url = new URL(request.url);
     const path = url.pathname.endsWith("/") && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
@@ -69,8 +100,56 @@ export class MarketDO extends DurableObject<Env> {
       if (command instanceof Response) return command;
       return internalErrorGuard(() => this.postIntent(command));
     }
+    if (request.method === "POST" && path === "/store") {
+      const parsed = await parseClientCommand(request);
+      const command = expectCommand(parsed, "store.registered");
+      if (command instanceof Response) return command;
+      return internalErrorGuard(() => this.registerStore(command));
+    }
+    if (request.method === "POST" && path === "/join") {
+      const parsed = await parseClientCommand(request);
+      const command = expectCommand(parsed, "market.joined");
+      if (command instanceof Response) return command;
+      return internalErrorGuard(() => this.joinMarket(command));
+    }
+    if (request.method === "GET" && path === "/members") {
+      return jsonResponse({ members: this.state.members });
+    }
+    if (request.method === "GET" && path === "/stores") {
+      return jsonResponse({ stores: this.state.stores });
+    }
+    if (request.method === "GET" && path === "/vocabulary") {
+      return jsonResponse({ shopItems: this.vocabulary() });
+    }
     if (request.method === "GET" && path === "/intents") {
-      return this.listOpenIntents();
+      // Scoped read: ?shopItems=Tomatoes,Peppers returns only intents whose
+      // shop item a store supplies — the vocabulary is the room (ADR-0006).
+      const scoped = url.searchParams.get("shopItems");
+      return this.listOpenIntents(scoped ? scoped.split(",").map((item) => item.trim()).filter(Boolean) : null);
+    }
+    if (request.method === "GET" && path === "/discovery") {
+      return internalErrorGuard(() => this.discover(url, request.headers.get("x-participant-id")));
+    }
+    if (request.method === "GET" && path.startsWith("/intent/") && path.endsWith("/products")) {
+      const intentId = decodeURIComponent(path.slice("/intent/".length, -"/products".length));
+      return this.listIntentProducts(intentId);
+    }
+    if (request.method === "GET" && path.startsWith("/intents/") && path.endsWith("/products")) {
+      // Public scope form: /markets/:market/intents/:id/products.
+      const intentId = decodeURIComponent(path.slice("/intents/".length, -"/products".length));
+      return this.listIntentProducts(intentId);
+    }
+    if (request.method === "POST" && path === "/intent-product") {
+      // ProductDO → MarketDO at offer time: index the product under its intent.
+      const parsed = await parseInternal(request, IntentProductRequestSchema);
+      if (!parsed.ok) return parsed.response;
+      return internalErrorGuard(() => this.indexIntentProduct(parsed.data));
+    }
+    if (request.method === "POST" && path === "/moderate-vocabulary") {
+      // Ops-only vocabulary curation (reached via the /ops/api guard).
+      const parsed = await parseInternal(request, ModerateVocabularyRequestSchema);
+      if (!parsed.ok) return parsed.response;
+      return internalErrorGuard(() => this.moderateVocabulary(parsed.data));
     }
     if (request.method === "GET" && path.startsWith("/intent/")) {
       return this.getIntent(path.slice("/intent/".length));
@@ -84,11 +163,14 @@ export class MarketDO extends DurableObject<Env> {
     if (request.method === "POST" && path === "/config") {
       const parsed = await parseInternal(request, MarketConfigSchema);
       if (!parsed.ok) return parsed.response;
-      this.state.config = parsed.data;
+      // Every write through this route is an ops write (the edge guards it
+      // with requireOps): mark it so the dev-stage lazy rollover never
+      // touches it — an ops-closed market stays closed.
+      this.state.config = { ...parsed.data, opsConfigured: true };
       const headerMarket = request.headers.get("x-market-id");
       if (this.state.marketId === undefined && headerMarket !== null) this.state.marketId = headerMarket;
       await this.ctx.storage.put(STATE_KEY, this.state);
-      return jsonResponse(parsed.data);
+      return jsonResponse(this.state.config);
     }
     return notFound(`MarketDO route not found: ${request.method} ${path}`);
   }
@@ -114,6 +196,7 @@ export class MarketDO extends DurableObject<Env> {
       createdAt: now,
       status: "open",
       ...(command.note !== undefined ? { note: command.note } : {}),
+      ...(command.buyerId !== undefined ? { buyerId: command.buyerId } : {}),
     };
     this.state.intents.push({ intent, expiresAt: now + INTENT_TTL_MS });
     await this.ctx.storage.put(STATE_KEY, this.state);
@@ -124,13 +207,184 @@ export class MarketDO extends DurableObject<Env> {
     return jsonResponse(event);
   }
 
-  /** Open, unexpired intents visible to matching stores. */
-  private listOpenIntents(): Response {
+  /** Seller registers a store when joining the market. `storeId` is the client idempotency key. */
+  private async registerStore(command: StoreRegistered): Promise<Response> {
+    this.state.marketId ??= command.market;
+
+    const existing = this.state.stores.find((store) => store.id === command.storeId);
+    if (existing) {
+      // Idempotent replay of the same registration.
+      return jsonResponse({ type: "store.recorded", store: existing } satisfies ServerEvent);
+    }
+
+    const store: Store = {
+      id: command.storeId,
+      market: command.market,
+      name: command.name,
+      exchangePoint: command.exchangePoint,
+      shopItems: command.shopItems,
+      joinedAt: this.now(),
+    };
+    this.state.stores.push(store);
+    await this.ctx.storage.put(STATE_KEY, this.state);
+
+    const event: ServerEvent = { type: "store.recorded", store };
+    broadcast(this.ctx, event);
+    return jsonResponse(event);
+  }
+
+  /**
+   * A participant joins the market (idempotent per participant). Membership
+   * also upserts the global markets index in KV so the zone becomes
+   * discoverable in the market list.
+   */
+  private async joinMarket(command: MarketJoined): Promise<Response> {
+    this.state.marketId ??= command.market;
     const now = this.now();
+    if (!this.state.members.some((member) => member.participantId === command.participantId)) {
+      this.state.members.push({ participantId: command.participantId, role: command.role, joinedAt: now });
+      await this.ctx.storage.put(STATE_KEY, this.state);
+    }
+    await this.upsertMarketsIndex(command.market).catch(() => undefined); // index heals on next join
+
+    const event: ServerEvent = {
+      type: "market.member-recorded",
+      market: command.market,
+      participantId: command.participantId,
+      role: command.role,
+      joinedAt: now,
+    };
+    broadcast(this.ctx, event);
+    return jsonResponse(event);
+  }
+
+  /** The global markets index lives in MARKET_CONFIG KV (dev home of the zone registry). */
+  private async upsertMarketsIndex(market: string): Promise<void> {
+    const current = (await this.env.MARKET_CONFIG.get("markets:index", "json")) as Array<{ id: string }> | null;
+    const index = current ?? [];
+    if (!index.some((entry) => entry.id === market)) {
+      index.push({ id: market });
+      await this.env.MARKET_CONFIG.put("markets:index", JSON.stringify(index));
+    }
+  }
+
+  /** The market's item vocabulary: the union of every store's shop items (ADR-0006 — grown, not governed). */
+  private vocabulary(): string[] {
+    const items = new Set<string>();
+    for (const store of this.state.stores) {
+      for (const item of store.shopItems) items.add(item);
+    }
+    return [...items].sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Ops vocabulary moderation (ADR-0006: the platform curates normalization
+   * and synonyms, not a canon). `remove` deletes the item from every store's
+   * shop items; `rename` rewrites it in place, deduping when the target is
+   * already listed by the same store. Matching is case-insensitive — the same
+   * semantics as the /intents scope filter. A store that loses its last shop
+   * item stays registered; it simply stops matching intents.
+   *
+   * No broadcast: the proto ServerEvent union has no vocabulary/store-update
+   * event and proto is not edited here — readers re-fetch /vocabulary.
+   */
+  private async moderateVocabulary(data: ModerateVocabularyRequest): Promise<Response> {
+    const needle = (data.action === "remove" ? data.item : data.from).toLowerCase();
+    const affectedStores: ModerateVocabularyResponse["affectedStores"] = [];
+    for (const store of this.state.stores) {
+      const next: string[] = [];
+      let changed = false;
+      for (let i = 0; i < store.shopItems.length; i += 1) {
+        const item = store.shopItems[i]!;
+        if (item.toLowerCase() !== needle) {
+          next.push(item);
+          continue;
+        }
+        if (data.action === "remove") {
+          changed = true;
+          continue;
+        }
+        const replacement = data.to;
+        if (replacement === item) {
+          next.push(item); // already canonical here — nothing to rewrite
+          continue;
+        }
+        changed = true;
+        // Dedupe: drop the rewrite when the store already lists the target
+        // (earlier in the rebuilt list or later in the original one).
+        const listed =
+          next.some((kept) => kept.toLowerCase() === replacement.toLowerCase()) ||
+          store.shopItems.some((other, j) => j > i && other.toLowerCase() === replacement.toLowerCase());
+        if (!listed) next.push(replacement);
+      }
+      if (!changed) continue;
+      store.shopItems = next;
+      affectedStores.push({ id: store.id, name: store.name });
+    }
+    if (affectedStores.length > 0) await this.ctx.storage.put(STATE_KEY, this.state);
+    const body: ModerateVocabularyResponse = { vocabulary: this.vocabulary(), affectedStores };
+    return jsonResponse(body);
+  }
+
+  /** Open, unexpired intents — optionally scoped to the shop items a store supplies. */
+  private listOpenIntents(shopItems: string[] | null): Response {
+    const now = this.now();
+    const scope = shopItems === null ? null : new Set(shopItems.map((item) => item.toLowerCase()));
     const intents = this.state.intents
       .filter((stored) => stored.expiresAt > now)
-      .map((stored) => stored.intent);
+      .map((stored) => stored.intent)
+      .filter((intent) => scope === null || scope.has(intent.shopItem.toLowerCase()));
     return jsonResponse({ intents });
+  }
+
+  /**
+   * The filtered discovery read (proto/discovery.ts): open intents scoped to
+   * the caller — `?shopItems=` is the seller scope (the store's items, the
+   * same vocabulary match as /intents — ADR-0006) and `?buyerId=` is the
+   * buyer scope, falling back to the forwarded participant identity header
+   * (ADR-0015). Both filters apply when both are given. Each intent carries
+   * its live products inline, so clients never fan out per intent. A
+   * scope-less call returns nothing: discovery is the filtered pathway.
+   */
+  private async discover(url: URL, headerBuyerId: string | null): Promise<Response> {
+    const scoped = url.searchParams.get("shopItems");
+    const shopItems = scoped === null ? null : scoped.split(",").map((item) => item.trim()).filter(Boolean);
+    const buyerId = url.searchParams.get("buyerId") || headerBuyerId;
+    if ((shopItems === null || shopItems.length === 0) && !buyerId) {
+      return jsonResponse({ intents: [] } satisfies DiscoveryResponse);
+    }
+    const now = this.now();
+    const scope = shopItems === null || shopItems.length === 0 ? null : new Set(shopItems.map((item) => item.toLowerCase()));
+    const intents = this.state.intents
+      .filter((stored) => stored.expiresAt > now)
+      .map((stored) => stored.intent)
+      .filter(
+        (intent) =>
+          (scope === null || scope.has(intent.shopItem.toLowerCase())) &&
+          (buyerId === null || intent.buyerId === buyerId),
+      );
+    const entries = await Promise.all(
+      intents.map(async (intent) => ({ intent, products: await this.liveProducts(intent.id) })),
+    );
+    return jsonResponse({ intents: entries } satisfies DiscoveryResponse);
+  }
+
+  /**
+   * The intent's live products, read fresh from their ProductDOs (statuses
+   * stay current; retired products 404 and drop out). Server-side fan-out,
+   * bounded by the caller's scope — the client makes the one discovery call.
+   */
+  private async liveProducts(intentId: string): Promise<Product[]> {
+    const ids = this.state.intentProducts[intentId] ?? [];
+    const products = await Promise.all(
+      ids.map(async (id) => {
+        const stub = this.env.PRODUCT_DO.get(this.env.PRODUCT_DO.idFromName(id));
+        const result = await fetchInternal(stub, new Request("http://do/"), ProductOfferedSchema).catch(() => null);
+        if (result === null || result instanceof Response) return null;
+        return result.product;
+      }),
+    );
+    return products.filter((product): product is Product => product !== null);
   }
 
   /** Internal: ProductDO offer lookup — is this intent open, and when does it die? */
@@ -142,6 +396,26 @@ export class MarketDO extends DurableObject<Env> {
     }
     const body: IntentLookupResponse = { found: true, intent: stored.intent, expiresAt: stored.expiresAt };
     return jsonResponse(body);
+  }
+
+  /** ProductDO → MarketDO: index a freshly offered product under its intent. */
+  private async indexIntentProduct(data: IntentProductRequest): Promise<Response> {
+    const ids = this.state.intentProducts[data.intentId] ?? [];
+    if (!ids.includes(data.productId)) ids.push(data.productId);
+    this.state.intentProducts[data.intentId] = ids;
+    await this.ctx.storage.put(STATE_KEY, this.state);
+    return jsonResponse({ indexed: true });
+  }
+
+  /** Buyer discovery: the products offered against an open intent. */
+  private listIntentProducts(intentId: string): Response {
+    const now = this.now();
+    const stored = this.state.intents.find((candidate) => candidate.intent.id === intentId);
+    if (!stored || stored.expiresAt <= now) {
+      return jsonResponse({ productIds: [] } satisfies IntentProductsResponse);
+    }
+    const productIds = this.state.intentProducts[intentId] ?? [];
+    return jsonResponse({ productIds } satisfies IntentProductsResponse);
   }
 
   /**
@@ -169,23 +443,37 @@ export class MarketDO extends DurableObject<Env> {
 
   /** Config precedence: DO state (ops writes), then MARKET_CONFIG KV, then defaults. */
   private async config(): Promise<MarketConfig> {
-    if (this.state.config) return this.state.config;
-    const marketId = this.state.marketId;
-    if (marketId) {
-      try {
-        const fromKv = await this.env.MARKET_CONFIG.get(`market-config:${marketId}`, "json");
-        const parsed = MarketConfigSchema.safeParse(fromKv);
-        if (parsed.success) {
-          this.state.config = parsed.data;
-          await this.ctx.storage.put(STATE_KEY, this.state);
-          return parsed.data;
+    if (!this.state.config) {
+      const marketId = this.state.marketId;
+      if (marketId) {
+        try {
+          const fromKv = await this.env.MARKET_CONFIG.get(`market-config:${marketId}`, "json");
+          const parsed = MarketConfigSchema.safeParse(fromKv);
+          if (parsed.success) {
+            // KV configs are operator-seeded: treat them as ops-set unless
+            // explicitly marked otherwise, so they never roll forward.
+            this.state.config = { ...parsed.data, opsConfigured: parsed.data.opsConfigured ?? true };
+            await this.ctx.storage.put(STATE_KEY, this.state);
+          }
+        } catch {
+          // KV unavailable (e.g. local test runtime) — fall through to defaults.
         }
-      } catch {
-        // KV unavailable (e.g. local test runtime) — fall through to defaults.
+      }
+      if (!this.state.config) {
+        this.state.config = defaultMarketConfig(this.now());
+        await this.ctx.storage.put(STATE_KEY, this.state);
       }
     }
-    this.state.config = defaultMarketConfig(this.now());
-    await this.ctx.storage.put(STATE_KEY, this.state);
+
+    // Dev-stage lazy rollover (ADR-0013): an auto-generated config whose
+    // closeAt has passed would refuse every checkout forever. For the
+    // dev/stage phase, roll it forward by the default open window when the
+    // config is next evaluated, persist, and continue as open. Ops-set
+    // configs (opsConfigured) never roll — an ops-closed market stays closed.
+    if (this.state.config.opsConfigured !== true && this.state.config.closeAt <= this.now()) {
+      this.state.config = { ...this.state.config, closeAt: this.now() + MARKET_OPEN_WINDOW_MS };
+      await this.ctx.storage.put(STATE_KEY, this.state);
+    }
     return this.state.config;
   }
 
@@ -204,13 +492,23 @@ export class MarketDO extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     // Doctrine: load state from storage at the start of the alarm.
-    this.state = (await this.ctx.storage.get<MarketState>(STATE_KEY)) ?? { intents: [] };
+    this.state = (await this.ctx.storage.get<MarketState>(STATE_KEY)) ?? { intents: [], intentProducts: {}, stores: [], members: [] };
+    this.state.intentProducts ??= {};
+    this.state.stores ??= [];
     const now = this.now();
     const expired = this.state.intents.filter((stored) => stored.expiresAt <= now);
     for (const stored of expired) {
       broadcast(this.ctx, { type: "intent.expired", intentId: stored.intent.id, expiredAt: now });
     }
     this.state.intents = this.state.intents.filter((stored) => stored.expiresAt > now);
+    // The discovery index dies with its intent: drop intentProducts entries
+    // for every intent that is gone (expired here, or orphaned by state written
+    // before pruning existed). Without this the single-blob state grows until
+    // the DO value limit throws.
+    const liveIntentIds = new Set(this.state.intents.map((stored) => stored.intent.id));
+    for (const intentId of Object.keys(this.state.intentProducts)) {
+      if (!liveIntentIds.has(intentId)) delete this.state.intentProducts[intentId];
+    }
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
   }

@@ -16,6 +16,14 @@ export const ProductStatusSchema = z.enum([
 ]);
 export type ProductStatus = z.infer<typeof ProductStatusSchema>;
 
+/** One price move in a Negotiation thread: who moved, to what, when. */
+export const PriceMoveSchema = z.object({
+  by: z.enum(["buyer", "seller"]),
+  priceKobo: KoboSchema,
+  at: TimestampSchema,
+});
+export type PriceMove = z.infer<typeof PriceMoveSchema>;
+
 export const ProductSchema = z.object({
   id: z.string().min(1),
   intentId: z.string().min(1),
@@ -27,6 +35,8 @@ export const ProductSchema = z.object({
   exchangePoint: z.string().min(1),
   expiresAt: TimestampSchema,
   status: ProductStatusSchema,
+  /** Camera-only capture at offer time; the signed R2 reference, never bytes. */
+  photoCaptureRef: z.string().min(1).optional(),
 });
 export type Product = z.infer<typeof ProductSchema>;
 
@@ -34,6 +44,12 @@ export type Product = z.infer<typeof ProductSchema>;
 export const ProductOfferedSchema = z.object({
   type: z.literal("product.offered"),
   product: ProductSchema,
+  /**
+   * The negotiation thread so far (initial offer plus every adjustment).
+   * Carried on the ProductDO read response so clients can render history;
+   * absent on the bare broadcast.
+   */
+  priceHistory: z.array(PriceMoveSchema).optional(),
 });
 export type ProductOffered = z.infer<typeof ProductOfferedSchema>;
 

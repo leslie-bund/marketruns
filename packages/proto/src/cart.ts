@@ -41,6 +41,18 @@ export const CheckoutRequestedSchema = z.object({
   type: z.literal("checkout.requested"),
   cartId: z.string().min(1),
   delivery: DeliverySchema,
+  /**
+   * Buyer identity, client-supplied until participant auth lands on the wire
+   * (documented proto gap). Absent → the run is anchored to "buyer:anonymous"
+   * and reputation/ledger attribution is limited accordingly.
+   */
+  buyerId: z.string().min(1).optional(),
+  /**
+   * Payment hold reference (the checkout charge's txRef), required when the
+   * edge runs with PAYMENTS_REQUIRED on: checkout is gated on a verified hold
+   * covering the checkout total. Absent → unpaid dev checkout (dev default).
+   */
+  paymentRef: z.string().min(1).optional(),
 });
 export type CheckoutRequested = z.infer<typeof CheckoutRequestedSchema>;
 

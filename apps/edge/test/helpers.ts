@@ -1,7 +1,9 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import type { Env } from "../src/env.js";
-import { STATE_KEY } from "../src/protocol.js";
-import { defaultMarketConfig, internalPost, type MarketConfig } from "../src/internal.js";
+import { STATE_KEY } from "../src/do/state.js";
+import type { MarketConfig } from "../src/do/schemas.js";
+import { defaultMarketConfig } from "../src/do/schemas.js";
+import { internalPost } from "../src/do/transport.js";
 
 /** cloudflare:test env augmented with the edge bindings (see test/ambient.d.ts). */
 export const bindings = env as unknown as Env;
@@ -23,7 +25,7 @@ export async function readJson(response: Response): Promise<Record<string, unkno
   return (await response.json()) as Record<string, unknown>;
 }
 
-export async function postIntent(intentId: string, market = "Balogun"): Promise<Response> {
+export async function postIntent(intentId: string, market = "Balogun", buyerId?: string): Promise<Response> {
   return marketStub(market).fetch(
     internalPost("/intent", {
       type: "intent.posted",
@@ -34,6 +36,7 @@ export async function postIntent(intentId: string, market = "Balogun"): Promise<
       priceBand: { minKobo: 120_000, maxKobo: 180_000 },
       note: "Firm, ripe tomatoes please",
       market,
+      ...(buyerId !== undefined ? { buyerId } : {}),
     }),
   );
 }
@@ -59,9 +62,18 @@ export async function offerProduct(
   );
 }
 
-export async function acceptProduct(productId: string): Promise<Response> {
+/**
+ * Accept a product directly at the ProductDO. `buyerId` rides the same
+ * internal x-participant-id header command.ts sets from the auth seam —
+ * it keys the buyer's cart (`cart:<market>:<buyerId>`).
+ */
+export async function acceptProduct(productId: string, buyerId?: string): Promise<Response> {
   return productStub(productId).fetch(
-    internalPost("/accept", { type: "product.accepted", productId }),
+    internalPost(
+      "/accept",
+      { type: "product.accepted", productId },
+      buyerId !== undefined ? new Headers({ "x-participant-id": buyerId }) : undefined,
+    ),
   );
 }
 
@@ -71,9 +83,18 @@ export async function checkout(
     kind: "plus-code",
     plusCode: "6FR5+8X Lagos",
   },
+  buyerId?: string,
+  /** Payment hold reference (txRef) for gated checkout (PAYMENTS_REQUIRED). */
+  paymentRef?: string,
 ): Promise<Response> {
   return cartStub(cartId).fetch(
-    internalPost("/checkout", { type: "checkout.requested", cartId, delivery }),
+    internalPost("/checkout", {
+      type: "checkout.requested",
+      cartId,
+      delivery,
+      ...(buyerId !== undefined ? { buyerId } : {}),
+      ...(paymentRef !== undefined ? { paymentRef } : {}),
+    }),
   );
 }
 
@@ -88,7 +109,16 @@ export async function setMarketConfig(market: string, overrides: Partial<MarketC
   );
 }
 
-export { internalPost } from "../src/internal.js";
+export { internalPost } from "../src/do/transport.js";
+export { cartIdForBuyer, runIdForCart } from "../src/config/ids.js";
+
+/**
+ * The cart id a header-less (anonymous) test flow lands in: no caller header
+ * and no intent buyerId ⇒ the anonymous fallback.
+ */
+export function anonymousCartId(market: string): string {
+  return `cart:${market}:buyer:anonymous`;
+}
 
 /**
  * Deterministic-time seam for tests: shift the DO's clock by writing an

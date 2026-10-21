@@ -6,9 +6,8 @@ import type {
   ProductAccepted,
   ServerEvent,
 } from "@market-runs/proto";
-import type { Env } from "../env.js";
+import type { Env } from "../config/env.js";
 import {
-  STATE_KEY,
   acceptHibernatedWebSocket,
   broadcast,
   conflict,
@@ -23,18 +22,16 @@ import {
   parseClientCommand,
   parseInternal,
   serializeEvent,
-} from "../protocol.js";
-import {
-  IntentLookupResponseSchema,
-  OfferProductRequestSchema,
-  RetireProductRequestSchema,
-  cartIdForMarket,
-  fetchInternal,
-  internalPost,
-  type CartAppendRequest,
-  type OfferProductRequest,
-  type RetireProductRequest,
-} from "../internal.js";
+} from "./runtime/index.js";
+import { STATE_KEY } from "./state.js";
+import type {
+  CartAppendRequest,
+  OfferProductRequest,
+  RetireProductRequest,
+} from "./schemas.js";
+import { IntentLookupResponseSchema, OfferProductRequestSchema, RetireProductRequestSchema } from "./schemas.js";
+import { fetchInternal, internalPost } from "./transport.js";
+import { cartIdForBuyer } from "../config/ids.js";
 
 interface PriceMove {
   by: "buyer" | "seller";
@@ -47,6 +44,8 @@ interface ProductState {
   /** The market of the intent this product answers; determines its cart. */
   market?: string;
   intentExpiresAt?: number;
+  /** The intent's buyer (when the wire carried one), for archive attribution. */
+  intentBuyerId?: string | undefined;
   priceHistory: PriceMove[];
   retired: boolean;
   /** Deterministic-time seam: epoch offset added to Date.now(). 0 in production. */
@@ -93,17 +92,22 @@ export class ProductDO extends DurableObject<Env> {
       const parsed = await parseClientCommand(request);
       const command = expectCommand(parsed, "product.accepted");
       if (command instanceof Response) return command;
-      return internalErrorGuard(() => this.accept(command));
+      // The accepting buyer's identity arrives as an internal header: the
+      // product.accepted wire shape carries no buyerId (proto gap), so
+      // command.ts forwards the header-resolved identity out of band
+      // (ADR-0015), exactly like x-market-id on config writes.
+      return internalErrorGuard(() => this.accept(command, request.headers.get("x-participant-id") ?? undefined));
     }
     if (request.method === "POST" && path === "/retire") {
       const parsed = await parseInternal(request, RetireProductRequestSchema);
       if (!parsed.ok) return parsed.response;
-      return internalErrorGuard(() => this.retire(parsed.data, this.now()));
+      return internalErrorGuard(() => this.retire(parsed.data, this.now(), request.headers.get("x-request-id") ?? undefined));
     }
     if (request.method === "GET" && path === "/") {
       const product = this.state.product;
       if (!product || this.state.retired) return notFound("product is retired or unknown — products are never resurrected");
-      const event: ServerEvent = { type: "product.offered", product };
+      // The read path carries the negotiation thread so clients can render history.
+      const event: ServerEvent = { type: "product.offered", product, priceHistory: this.state.priceHistory };
       return jsonResponse(event);
     }
     return notFound(`ProductDO route not found: ${request.method} ${path}`);
@@ -147,12 +151,22 @@ export class ProductDO extends DurableObject<Env> {
       exchangePoint: data.exchangePoint,
       expiresAt,
       status: "available",
+      ...(data.photoCaptureRef !== undefined ? { photoCaptureRef: data.photoCaptureRef } : {}),
     };
     this.state.product = product;
     this.state.market = data.market;
     this.state.intentExpiresAt = intentExpiresAt;
+    this.state.intentBuyerId = lookup.found ? lookup.intent.buyerId : undefined;
     this.state.priceHistory = [{ by: "seller", priceKobo: data.priceKobo, at: createdAt }];
     await this.ctx.storage.put(STATE_KEY, this.state);
+
+    // Index the product under its intent so buyers can discover it. A failed
+    // index leaves discovery stale but the product fully valid — the buyer's
+    // own negotiation path still reaches it via the negotiation thread.
+    await this.env.MARKET_DO
+      .get(this.env.MARKET_DO.idFromName(data.market))
+      .fetch(internalPost("/intent-product", { intentId: data.intentId, productId: data.productId }))
+      .catch(() => undefined);
 
     if (expiresAt <= now) return this.retire({ reason: "expired" }, now);
     await this.ctx.storage.setAlarm(expiresAt);
@@ -196,8 +210,13 @@ export class ProductDO extends DurableObject<Env> {
    * Accept-once. The first accept transitions the product to "accepted"
    * exactly once; every later accept is 409, and accepts after retirement are
    * rejected (products are retired, never resurrected).
+   *
+   * The acceptance lands in the buyer's own cart (`cart:<market>:<buyerId>`):
+   * the buyer identity is the header-resolved caller when present, else the
+   * intent's recorded buyer, else the anonymous fallback — never purely
+   * client-claimed on the accept wire.
    */
-  private async accept(command: ProductAccepted): Promise<Response> {
+  private async accept(command: ProductAccepted, callerBuyerId?: string): Promise<Response> {
     const product = this.state.product;
     if (!product || this.state.retired) {
       return notFound("product is retired or unknown — products are never resurrected");
@@ -220,9 +239,10 @@ export class ProductDO extends DurableObject<Env> {
     product.status = "accepted";
     await this.ctx.storage.put(STATE_KEY, this.state);
 
-    const cartId = cartIdForMarket(market);
+    const buyerId = callerBuyerId ?? this.state.intentBuyerId ?? "buyer:anonymous";
+    const cartId = cartIdForBuyer(market, buyerId);
     const cartStub = this.env.CART_DO.get(this.env.CART_DO.idFromName(cartId));
-    const appendBody: CartAppendRequest = { cartId, market, product };
+    const appendBody: CartAppendRequest = { cartId, market, buyerId, product };
     const append = await cartStub.fetch(internalPost("/accept", appendBody));
     if (!append.ok) {
       // The cart refused (retired/checked out): the acceptance did not
@@ -236,7 +256,7 @@ export class ProductDO extends DurableObject<Env> {
   }
 
   /** Retirement: snapshot to the archive queue, tell attached sockets, delete DO storage. */
-  private async retire(request: RetireProductRequest, now: number): Promise<Response> {
+  private async retire(request: RetireProductRequest, now: number, requestId?: string): Promise<Response> {
     const product = this.state.product;
     this.state.retired = true;
     if (product) {
@@ -248,6 +268,9 @@ export class ProductDO extends DurableObject<Env> {
         reason: request.reason,
         retiredAt: now,
         snapshot: product,
+        ...(this.state.market !== undefined ? { market: this.state.market } : {}),
+        ...(this.state.intentBuyerId !== undefined ? { buyerId: this.state.intentBuyerId } : {}),
+        ...(requestId !== undefined ? { requestId } : {}),
       };
       broadcast(this.ctx, event);
       await this.env.ARCHIVE_QUEUE.send(serializeEvent(event));

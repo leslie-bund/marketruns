@@ -34,6 +34,41 @@ describe("Settlement", () => {
     expect(outcome.buyerRefundKobo).toBeLessThan(17_300);
   });
 
+  it("keeps exact abort friction and a balanced ledger against the 17,300 capture", () => {
+    const outcome = settle({
+      ...base,
+      mode: "aborted",
+      sellers: [base.sellers[0]!, { ...base.sellers[1]!, stopCompleted: false }],
+    });
+    expect(outcome.runnerKobo).toBe(500);
+    expect(outcome.platformKobo).toBe(200);
+    expect(outcome.buyerRefundKobo).toBe(6_600);
+    expect(outcome.sellers.reduce((sum, seller) => sum + seller.amountKobo, 0) + outcome.runnerKobo + outcome.platformKobo + outcome.buyerRefundKobo)
+      .toBe(17_300);
+  });
+
+  it("refuses an abort that would refund the full capture — zero delivery price leaves no friction (ADR-0008)", () => {
+    expect(() =>
+      settle({
+        ...base,
+        mode: "aborted",
+        deliveryPriceKobo: 0,
+        sellers: base.sellers.map((seller) => ({ ...seller, stopCompleted: false })),
+      }),
+    ).toThrow(/ADR-0008/);
+  });
+
+  it("refuses an abort whose friction rounds to zero on a negligible delivery price (ADR-0008)", () => {
+    expect(() =>
+      settle({
+        ...base,
+        mode: "aborted",
+        deliveryPriceKobo: 3,
+        sellers: base.sellers.map((seller) => ({ ...seller, stopCompleted: false })),
+      }),
+    ).toThrow(/ADR-0008/);
+  });
+
   it("caps the platform loss for an ambiguous dispute", () => {
     const outcome = settle({
       ...base,

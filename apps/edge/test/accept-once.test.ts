@@ -23,7 +23,7 @@ describe("ProductDO accept-once", () => {
     const accepted = await readJson(first);
     expect(accepted.type).toBe("cart.updated");
     const cart = accepted.cart as { id: string; acceptanceCount: number; products: Array<{ id: string; status: string }> };
-    expect(cart.id).toBe("cart:ao");
+    expect(cart.id).toBe("cart:ao:buyer:anonymous");
     expect(cart.acceptanceCount).toBe(1);
     expect(cart.products[0]?.status).toBe("accepted");
 

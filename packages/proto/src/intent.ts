@@ -15,6 +15,8 @@ export const IntentSchema = z.object({
   market: z.string().min(1),
   createdAt: TimestampSchema,
   status: IntentStatusSchema,
+  /** Client-supplied buyer identity until participant auth lands on the wire. */
+  buyerId: z.string().min(1).optional(),
 });
 export type Intent = z.infer<typeof IntentSchema>;
 
@@ -28,6 +30,8 @@ export const IntentPostedSchema = z.object({
   priceBand: PriceBandSchema,
   note: z.string().optional(),
   market: z.string().min(1),
+  /** Echoed from the posted intent; absent → the wire carried no buyer identity. */
+  buyerId: z.string().min(1).optional(),
 });
 export type IntentPosted = z.infer<typeof IntentPostedSchema>;
 

@@ -1,5 +1,47 @@
 import { Link } from "expo-router";
-import { Text } from "react-native";
-import { api } from "../../src/api/client";
+import { Image, Text, View } from "react-native";
+import { captureUrl } from "../../src/api";
+import { useBuyerProducts, useMyIntents } from "../../src/features/buyer";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
-export default function Products() { return <Page eyebrow="RESPONSES TO YOUR INTENTS" title="Products"><Section title="Available nearby">{api.getProducts().map(product => <Card key={product.id}><Pill active>AVAILABLE · 17 MIN LEFT</Pill><Text style={{ color: colors.ink, fontSize: 19, fontWeight: "800" }}>{product.quantity} {product.unit} {product.shopItem}</Text><Text style={s.body}>From {product.sellerName}</Text><Text style={s.muted}>Pickup Exchange Point · {product.exchangePoint}</Text><Text style={{ color: colors.green, fontSize: 21, fontWeight: "800" }}>{money(product.priceKobo)}</Text><Link href="/buyer/negotiation" asChild><Button title="Open Negotiation" /></Link></Card>)}</Section><Text style={s.muted}>Products are ephemeral and retire when their Intent expires.</Text></Page>; }
+
+function minutesLeft(expiresAt: number): number {
+  return Math.max(0, Math.ceil((expiresAt - Date.now()) / 60_000));
+}
+
+export default function Products() {
+  const intents = useMyIntents();
+  const { products } = useBuyerProducts(intents.data, 3000);
+
+  return (
+    <Page eyebrow="RESPONSES TO YOUR INTENTS" title="Products">
+      <Section title="Available nearby">
+        {products.length === 0 ? (
+          <Card><Text style={s.muted}>No products responding yet — sellers see your intent the moment it's posted.</Text></Card>
+        ) : null}
+        {products.map((product) => (
+          <Card key={product.id}>
+            <Pill active>{product.status.toUpperCase()} · {minutesLeft(product.expiresAt)} MIN LEFT</Pill>
+            <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
+              {product.photoCaptureRef ? (
+                <Image
+                  source={{ uri: captureUrl(product.photoCaptureRef) }}
+                  style={{ width: 56, height: 56, borderRadius: 12, backgroundColor: "#E5EBE3" }}
+                />
+              ) : null}
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.ink, fontSize: 19, fontWeight: "800" }}>{product.quantity} {product.unit} {product.shopItem}</Text>
+                <Text style={s.body}>From {product.sellerName}</Text>
+              </View>
+            </View>
+            <Text style={s.muted}>Pickup Exchange Point · {product.exchangePoint}</Text>
+            <Text style={{ color: colors.green, fontSize: 21, fontWeight: "800" }}>{money(product.priceKobo)}</Text>
+            <Link href={{ pathname: "/buyer/negotiation", params: { productId: product.id } }} asChild>
+              <Button title={product.status === "negotiating" ? "Continue Negotiation" : "Open Negotiation"} />
+            </Link>
+          </Card>
+        ))}
+      </Section>
+      <Text style={s.muted}>Products are ephemeral and retire when their Intent expires.</Text>
+    </Page>
+  );
+}

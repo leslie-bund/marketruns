@@ -1,0 +1,10 @@
+{
+  "name": "@market-runs/test-db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/integration-db.ts" },
+  "dependencies": {
+    "postgres": "^3.4.5"
+  }
+}

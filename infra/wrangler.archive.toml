@@ -1,8 +1,17 @@
 name = "market-runs-archive"
 main = "../apps/archive/src/index.ts"
 compatibility_date = "2025-01-01"
+# The postgres-js driver (Postgres via Hyperdrive/DATABASE_URL) uses Node APIs.
+compatibility_flags = ["nodejs_compat"]
 
 [[queues.consumers]]
 queue = "archive-snapshots"
 max_batch_size = 10
 max_batch_timeout = 5
+
+[[r2_buckets]]
+binding = "ARCHIVE_BUCKET"
+bucket_name = "market-runs-archive"
+
+# DATABASE_URL (dev) or the Hyperdrive binding (prod) is provided at deploy
+# time — never committed. Dev: a local Postgres container (infra/README).

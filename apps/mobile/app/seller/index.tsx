@@ -1,5 +1,94 @@
-import { Link } from "expo-router";
-import { Text, View } from "react-native";
-import { api } from "../../src/api/client";
+import { Link, router } from "expo-router";
+import { Text, View, Pressable} from "react-native";
+import { identities, useActiveMarket, useActiveParticipant, useActiveStore } from "../../src/api";
+import { PayoutAccountCard, useOpenIntents, useSellerBadges, useSellerProducts } from "../../src/features/seller";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
-export default function SellerHome() { const intents = api.getIntents("Seller"); const stores = api.getStores(); const negotiations = api.getNegotiations(); return <Page eyebrow="YOUR STORES · BALOGUN" title="Good morning"><Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}><Pill active>{stores.length} STORES ACTIVE</Pill><Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Fresh demand is nearby.</Text><Text style={{ color: "#DCEAE1", lineHeight: 19 }}>Matching Shop Items put your Store in front of Buyers.</Text></Card><Section title="Intents for your Shop Items">{intents.map(intent => <Card key={intent.id}><View style={s.row}><View style={{ flex: 1 }}><Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>{intent.quantity} {intent.unit} {intent.shopItem}</Text><Text style={s.muted}>Buyer Price Band · {money(intent.priceBand.minKobo)}–{money(intent.priceBand.maxKobo)}</Text></View><Pill active>MATCH</Pill></View><Text style={s.body}>{intent.note ?? "No extra note"}</Text><Link href={{ pathname: "/seller/respond", params: { intentId: intent.id, shopItem: intent.shopItem } }} asChild><Button title="Respond with Product" /></Link></Card>)}</Section><Link href="/seller/negotiations" asChild><Card><View style={s.row}><View><Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Active Negotiations</Text><Text style={s.muted}>{negotiations.length} private threads</Text></View><Text style={{ color: colors.green }}>→</Text></View></Card></Link></Page>; }
+
+export default function SellerHome() {
+  const { store, loading } = useActiveStore();
+  const { participant } = useActiveParticipant();
+  const market = useActiveMarket();
+  const intents = useOpenIntents(store?.shopItems ?? null);
+  const mine = useSellerProducts(store?.name);
+  const badges = useSellerBadges(store);
+  const open = intents.data?.filter((intent) => intent.status === "open") ?? [];
+
+  if (!loading && store === null) {
+    return (
+      <Page eyebrow="SELLER" title="Join your market">
+        <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}>
+          <Pill active>NO STORE ON THIS DEVICE</Pill>
+          <Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Create your store to start trading.</Text>
+          <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
+            Pick the shop items you supply — they decide which buyer intents reach you.
+          </Text>
+        </Card>
+        <Link href="/seller/join" asChild><Button title={`Join ${market}`} /></Link>
+      </Page>
+    );
+  }
+
+  return (
+    <Page eyebrow={`YOUR STORES · ${(store?.name ?? "…").toUpperCase()}`} title="Good morning">
+      <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}>
+        <Pill active>STORE ACTIVE · {(store?.exchangePoint ?? "").toUpperCase()}</Pill>
+        <Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Fresh demand is nearby.</Text>
+        <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
+          {intents.error ? `Edge: ${intents.error}` : `Intents matching your ${store?.shopItems.length ?? 0} shop item(s).`}
+        </Text>
+      </Card>
+
+      <Section title="Intents for your Shop Items">
+        {open.length === 0 ? <Card><Text style={s.muted}>No open intents for your items right now.</Text></Card> : null}
+        {open.map((intent) => (
+          <Card key={intent.id}>
+            <View style={s.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>{intent.quantity} {intent.unit} {intent.shopItem}</Text>
+                <Text style={s.muted}>Buyer Price Band · {money(intent.priceBand.minKobo)}–{money(intent.priceBand.maxKobo)}</Text>
+              </View>
+              <Pill active>MATCH</Pill>
+            </View>
+            <Text style={s.body}>{intent.note ?? "No extra note"}</Text>
+            <Link
+              href={{ pathname: "/seller/respond", params: { intentId: intent.id, shopItem: intent.shopItem, quantity: String(intent.quantity), unit: intent.unit } }}
+              asChild
+            >
+              <Button title="Respond with Product" />
+            </Link>
+          </Card>
+        ))}
+      </Section>
+
+      <Pressable onPress={() => router.push("/seller/negotiations")}>
+<Card>
+          <View style={s.row}>
+            <View>
+              <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Active Negotiations</Text>
+              <Text style={s.muted}>{mine.products.length} live product(s)</Text>
+            </View>
+            <Text style={{ color: colors.green }}>→</Text>
+          </View>
+        </Card>
+        </Pressable>
+
+      <Pressable onPress={() => router.push("/seller/trip")}>
+<Card style={badges.trip > 0 ? { borderColor: colors.orange, borderWidth: 2 } : undefined}>
+          <View style={s.row}>
+            <View>
+              <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Trip & Handoffs at your Stall</Text>
+              <Text style={badges.trip > 0 ? { color: colors.orange, fontWeight: "700", fontSize: 13 } : s.muted}>
+                {badges.trip > 0 ? "Runner waiting — show the QR now" : "Live trip map · show the one-time QR when a runner arrives"}
+              </Text>
+            </View>
+            <Text style={{ color: colors.green }}>→</Text>
+          </View>
+        </Card>
+        </Pressable>
+
+      <Section title="Payouts">
+        <PayoutAccountCard participantId={participant?.id ?? identities.seller.id} />
+      </Section>
+    </Page>
+  );
+}

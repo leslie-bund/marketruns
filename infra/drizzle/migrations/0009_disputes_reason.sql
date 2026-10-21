@@ -1,0 +1,1 @@
+ALTER TABLE "disputes" ADD COLUMN "reason" text DEFAULT '' NOT NULL;

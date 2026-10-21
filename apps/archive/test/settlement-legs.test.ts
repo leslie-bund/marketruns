@@ -17,7 +17,7 @@ const disputed: SettlementInput = {
 describe("settlement ledger legs", () => {
   it("maps completed settlement", () => {
     const outcome = settle(completed);
-    const legs = settlementLegs(outcome, { buyerId: "buyer-1" });
+    const legs = settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" });
     expect(legs.find((leg) => leg.account === "seller_payable")?.creditKobo).toBe(10_000);
     expect(legs.find((leg) => leg.account === "runner_payable")?.creditKobo).toBe(2_000);
     expect(legs.find((leg) => leg.account === "platform_revenue")?.creditKobo).toBe(1_100);
@@ -26,7 +26,7 @@ describe("settlement ledger legs", () => {
 
   it("maps abort friction with platform fee, runner disruption, and buyer remainder", () => {
     const outcome = settle(aborted);
-    const legs = settlementLegs(outcome, { buyerId: "buyer-1" });
+    const legs = settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" });
     // Exact split per MVP_ABORT_SPLIT (delivery-based): disruption 25%,
     // platform fee 10% of the 2,000 delivery price; the buyer receives the
     // remainder of the 12,100 capture — never a full refund (ADR-0008).
@@ -41,13 +41,13 @@ describe("settlement ledger legs", () => {
   it("caps ambiguous platform loss", () => {
     const outcome = settle(disputed);
     expect(outcome.platformLossKobo).toBe(MVP_ABORT_SPLIT.ambiguousLossCapKobo);
-    expect(settlementLegs(outcome, { buyerId: "buyer-1" }).find((leg) => leg.account === "platform_loss")?.debitKobo)
+    expect(settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" }).find((leg) => leg.account === "platform_loss")?.debitKobo)
       .toBe(MVP_ABORT_SPLIT.ambiguousLossCapKobo);
   });
 
   it("balances every settlement mode", () => {
     for (const input of [completed, aborted, disputed]) {
-      expect(isBalanced(settlementLegs(settle(input), { buyerId: "buyer-1" }))).toBe(true);
+      expect(isBalanced(settlementLegs(settle(input), { buyerId: "buyer-1", runnerId: "runner-1" }))).toBe(true);
     }
   });
 });

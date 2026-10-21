@@ -64,12 +64,25 @@ A fixed location, operated by a partner merchant, where a buyer collects their c
 A custody transfer during a run — seller to runner at a pickup, runner to buyer (or muster point) at the end.
 
 **Handoff**:
-The confirmation of an exchange point: the runner scans a one-time challenge shown by the other party, photo evidence is captured, and the buyer is notified.
+The confirmation of an exchange point: the runner scans a one-time challenge shown by the other party and attaches photo evidence — the photo is required to confirm; a handoff without it stays pending and is shown to all parties as awaiting photo — and the buyer is notified.
 _Avoid_: sign-off, scan
 
 **Settlement**:
 The computation performed when a run closes that releases payment to sellers and the runner, applying the rules for completed, partial, aborted, and disputed runs.
 _Avoid_: payout, reconciliation
+
+**Dispatch**:
+The execution of a settlement's payment legs against payment providers, after the settlement decision. A dispatch carries the settlement record's legs verbatim and never decides money. Reserved for money movement only — never a synonym for a run or delivery.
+
+**Payment Hold**:
+A buyer's charge confirmed server-side and held against their cart before checkout (`payment_holds`: held → released | partially-refunded | refunded | failed). When payments are required, a checkout must bind a confirmed hold covering goods plus delivery; a confirmed hold survives a failed checkout and is reusable on retry.
+
+**Refund**:
+The return of buyer money decided by the settlement, executed by the payments worker after the decision — by provider refund for card charges, or an honest terminal `refund-manual` state for methods the system cannot return money through. A refund, like a dispatch, never decides money.
+_Avoid_: reversal, chargeback
+
+**Payout Account**:
+A seller's saved bank destination for settlement payouts, collected resolve-then-save (bank list → provider account-name lookup → save). Resolution at dispatch is DB-first; selling is never blocked on having one.
 
 **Trip Auction**:
 The short bidding window after a cart locks, in which runners offer prices for the cart's run. The lowest price wins; the floor rate guarantees a taker.

@@ -10,6 +10,11 @@ export default defineWorkersConfig({
     poolOptions: {
       workers: {
         wrangler: { configPath: "../../infra/wrangler.edge.toml" },
+        miniflare: {
+          // Tests never touch the network: an empty OSRM base URL disables
+          // routing, so checkout uses the market's static floor-rate inputs.
+          bindings: { OSRM_BASE_URL: "" },
+        },
         // Pending DO alarms left over from timer tests trip the pool's
         // per-file storage-isolation bookkeeping ("Isolated storage failed"),
         // not the assertions. Isolation is preserved by convention instead:

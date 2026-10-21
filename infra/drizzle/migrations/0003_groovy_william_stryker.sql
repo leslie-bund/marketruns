@@ -1,0 +1,1 @@
+ALTER TABLE "live_runs" ADD COLUMN "store_ids" text[] DEFAULT '{}'::text[] NOT NULL;

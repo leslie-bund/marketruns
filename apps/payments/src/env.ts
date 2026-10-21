@@ -1,0 +1,13 @@
+import type { DatabaseEnv } from "./db.js";
+
+/** Payments worker bindings (infra/wrangler.payments.toml). */
+export interface Env extends DatabaseEnv {
+  /**
+   * Which PaymentDispatcher moves the money ("stub" is the dev default).
+   * Vendor selection strings and vendor config keys (secret key, webhook
+   * hash, base URL) are defined ONLY in the dispatcher module and its vendor
+   * quarantine folder (ADR-0009); they arrive here as plain env entries and
+   * are validated there.
+   */
+  PAYMENT_DISPATCHER?: string;
+}

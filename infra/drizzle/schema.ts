@@ -24,6 +24,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   index,
   integer,
   jsonb,
@@ -34,6 +35,13 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+
+/** bytea column (drizzle has no built-in): Uint8Array in, postgres-js Buffer out. */
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "bytea",
+  toDriver: (value) => value,
+  fromDriver: (value) => new Uint8Array(value),
+});
 
 /* ------------------------------------------------------------------------ */
 /* Snapshots mirroring packages/domain and packages/proto shapes.            */
@@ -219,14 +227,17 @@ export const archivedProducts = pgTable(
     intentId: text("intent_id").notNull(),
     /** Set once the product was accepted into a cart; NULL otherwise. */
     cartId: text("cart_id"),
-    storeId: text("store_id")
-      .notNull()
-      .references(() => stores.id),
+    /**
+     * Textual references, NOT foreign keys (migration 0001): stores/markets
+     * anchoring is a founder-decision item (schema README), and the edge only
+     * knows the seller's display name and market string. The archive records
+     * them verbatim; the FKs return when the anchor tables have writers.
+     */
+    storeId: text("store_id").notNull(),
     /** Inherited from the store, frozen at retirement for market analytics. */
-    marketId: text("market_id")
-      .notNull()
-      .references(() => markets.id),
-    buyerId: text("buyer_id").notNull(),
+    marketId: text("market_id").notNull(),
+    /** Buyer when the intent carried one on the wire; NULL otherwise. */
+    buyerId: text("buyer_id"),
     finalPriceKobo: bigint("final_price_kobo", { mode: "number" }).notNull(),
     quantity: integer("quantity").notNull(),
     /** Why retired: accepted | expired | withdrawn | cart_expired. */
@@ -253,14 +264,53 @@ export const archivedProducts = pgTable(
 /* Run close records (GLOSSARY.md: one Run per Cart, one Runner per Run).   */
 /* ------------------------------------------------------------------------ */
 
+/**
+ * Live-run index (admin ops dashboard): one row per Run from run.started
+ * until the run.retired / settlement.released archive messages mark it
+ * retired (retired_at + final status). Postgres is the system of record
+ * (ADR-0011) — the RunDO announces starts on the archive queue and the
+ * archive consumer upserts here, so queue redelivery is a no-op replay.
+ */
+export const liveRuns = pgTable(
+  "live_runs",
+  {
+    runId: text("run_id").primaryKey(),
+    market: text("market").notNull(),
+    status: text("status").notNull(),
+    /** NULL until a Runner is assigned (internal runner at the floor rate at MVP). */
+    runnerId: text("runner_id"),
+    buyerId: text("buyer_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    /** Set when run.retired / settlement.released retires the run; NULL while live. */
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    stopCount: integer("stop_count").notNull().default(0),
+    /**
+     * The stores with products in this run's cart (from run.started; the same
+     * textual store reference archived_products.store_id records — Products
+     * carry the store's trading identity as sellerName, not a registry id).
+     * Text array, matching disputes.evidence_refs; powers the storeId filter
+     * for seller run discovery.
+     */
+    storeIds: text("store_ids").array().notNull().default(sql`'{}'::text[]`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("live_runs_market_idx").on(table.market),
+    index("live_runs_status_idx").on(table.status),
+    index("live_runs_retired_at_idx").on(table.retiredAt),
+    check("live_runs_status_valid", sql`${table.status} IN ('assigned', 'collecting', 'delivering', 'delivered', 'closed', 'aborted')`),
+    check("live_runs_stop_count_nonnegative", sql`${table.stopCount} >= 0`),
+  ],
+);
+
 export const runsArchive = pgTable(
   "runs_archive",
   {
     id: text("id").primaryKey(),
     cartId: text("cart_id").notNull(),
-    marketId: text("market_id")
-      .notNull()
-      .references(() => markets.id),
+    /** Textual reference, not an FK — see archived_products (migration 0001). */
+    marketId: text("market_id").notNull(),
     buyerId: text("buyer_id").notNull(),
     runnerId: text("runner_id").notNull(),
     status: text("status").notNull(),
@@ -363,6 +413,166 @@ export const ledgerEntries = pgTable(
 );
 
 /* ------------------------------------------------------------------------ */
+/* Payment dispatches (apps/payments): one row per settlement payout leg,    */
+/* written by the payment-dispatch queue consumer. The settlement function    */
+/* already decided the money (ADR-0007/0008) — these rows record EXECUTION    */
+/* of the payout legs against the PSP abstraction, never a new money          */
+/* decision. Idempotent on idempotency_key (at-least-once queue → no-op       */
+/* replay). Vendor names never appear here (ADR-0009): provider_ref is the    */
+/* vendor-neutral transfer reference returned by the dispatcher.              */
+/* ------------------------------------------------------------------------ */
+
+export const DISPATCH_ACCOUNTS = ["seller", "runner", "platform"] as const;
+export type DispatchAccount = (typeof DISPATCH_ACCOUNTS)[number];
+
+export const DISPATCH_STATUSES = ["pending", "sent", "queued", "failed", "completed"] as const;
+export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+
+export const paymentDispatches = pgTable(
+  "payment_dispatches",
+  {
+    /** Deterministic, edge-issued: `<runId>:dispatch:<legIndex>`. */
+    id: text("id").primaryKey(),
+    /**
+     * Per-leg idempotency key: `settlement:<settlementRecordId>:leg:<index>`.
+     * Queue redelivery replays the same keys; the consumer onConflict-no-ops.
+     */
+    idempotencyKey: text("idempotency_key").notNull(),
+    settlementRecordId: text("settlement_record_id").notNull(),
+    runId: text("run_id").notNull(),
+    market: text("market").notNull(),
+    /** One of DISPATCH_ACCOUNTS — the party the transfer reaches. */
+    account: text("account").notNull(),
+    /** Participant paid; the platform leg carries the literal "platform". */
+    partyId: text("party_id").notNull(),
+    amountKobo: bigint("amount_kobo", { mode: "number" }).notNull(),
+    memo: text("memo").notNull().default(""),
+    /** One of DISPATCH_STATUSES; `pending` = recorded, not yet dispatched. */
+    status: text("status").notNull().default("pending"),
+    providerRef: text("provider_ref"),
+    failureReason: text("failure_reason"),
+    /** Dispatcher invocations so far (queue retries + ops replays). */
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("payment_dispatches_idempotency_key_unique").on(table.idempotencyKey),
+    index("payment_dispatches_run_id_idx").on(table.runId),
+    index("payment_dispatches_settlement_record_id_idx").on(table.settlementRecordId),
+    index("payment_dispatches_status_idx").on(table.status),
+    check("payment_dispatches_account_valid", sql`${table.account} IN ('seller', 'runner', 'platform')`),
+    check(
+      "payment_dispatches_status_valid",
+      sql`${table.status} IN ('pending', 'sent', 'queued', 'failed', 'completed')`,
+    ),
+    check("payment_dispatches_amount_nonnegative", sql`${table.amountKobo} >= 0`),
+    check("payment_dispatches_attempts_nonnegative", sql`${table.attempts} >= 0`),
+  ],
+);
+
+/* ------------------------------------------------------------------------ */
+/* Payment holds + refunds (apps/payments): the collection side. A hold is    */
+/* the buyer's collected money, verified server-side against the provider     */
+/* before the edge gates checkout on it; the refund rail executes the         */
+/* settlement's buyerRefundKobo leg against the hold (ADR-0023: refunds       */
+/* release against the hold; the settlement function remains the only money   */
+/* decision, ADR-0007/0008). Vendor-neutral columns only (ADR-0009):          */
+/* provider_tx_id / provider_ref are integration-layer references.            */
+/* ------------------------------------------------------------------------ */
+
+export const HOLD_STATUSES = ["held", "released", "partially-refunded", "refunded", "failed"] as const;
+export type HoldStatus = (typeof HOLD_STATUSES)[number];
+
+export const paymentHolds = pgTable(
+  "payment_holds",
+  {
+    /** Deterministic: `hold:<txRef>`. */
+    id: text("id").primaryKey(),
+    /** Client-generated checkout reference; UNIQUE — confirm is idempotent on it. */
+    txRef: text("tx_ref").notNull(),
+    /** Integration-layer transaction id from the server-side verify call. */
+    providerTxId: text("provider_tx_id").notNull(),
+    cartId: text("cart_id").notNull(),
+    /** Bound at checkout once the run exists; NULL before. */
+    runId: text("run_id"),
+    buyerId: text("buyer_id").notNull(),
+    amountKobo: bigint("amount_kobo", { mode: "number" }).notNull(),
+    /** Provider-reported payment method (card, bank_transfer, …) — drives the refund rail. */
+    paymentMethod: text("payment_method").notNull(),
+    status: text("status").notNull().default("held"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("payment_holds_tx_ref_unique").on(table.txRef),
+    index("payment_holds_run_id_idx").on(table.runId),
+    index("payment_holds_buyer_id_idx").on(table.buyerId),
+    index("payment_holds_status_idx").on(table.status),
+    check(
+      "payment_holds_status_valid",
+      sql`${table.status} IN ('held', 'released', 'partially-refunded', 'refunded', 'failed')`,
+    ),
+    check("payment_holds_amount_nonnegative", sql`${table.amountKobo} >= 0`),
+  ],
+);
+
+export const REFUND_STATUSES = ["pending", "processing", "completed", "failed", "refund-manual"] as const;
+export type RefundStatus = (typeof REFUND_STATUSES)[number];
+
+export const paymentRefunds = pgTable(
+  "payment_refunds",
+  {
+    /** Deterministic: `refund:<settlementRecordId>` — one refund per settlement. */
+    id: text("id").primaryKey(),
+    holdId: text("hold_id").notNull(),
+    /** UNIQUE: queue redelivery of payment.refund-requested is a no-op replay. */
+    settlementRecordId: text("settlement_record_id").notNull(),
+    amountKobo: bigint("amount_kobo", { mode: "number" }).notNull(),
+    status: text("status").notNull().default("pending"),
+    /** Integration-layer refund reference (vendor-neutral, ADR-0009). */
+    providerRef: text("provider_ref"),
+    failureReason: text("failure_reason"),
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("payment_refunds_settlement_record_unique").on(table.settlementRecordId),
+    index("payment_refunds_hold_id_idx").on(table.holdId),
+    index("payment_refunds_status_idx").on(table.status),
+    check(
+      "payment_refunds_status_valid",
+      sql`${table.status} IN ('pending', 'processing', 'completed', 'failed', 'refund-manual')`,
+    ),
+    check("payment_refunds_amount_positive", sql`${table.amountKobo} > 0`),
+    check("payment_refunds_attempts_nonnegative", sql`${table.attempts} >= 0`),
+  ],
+);
+
+/**
+ * Saved payout accounts (one per participant): the RecipientResolver's
+ * DB-first source. Accounts are stored ONLY after provider-side resolution
+ * (account name enquiry) — an unresolved account is never persisted, because
+ * a wrong account silently misdirects settlement money.
+ */
+export const payoutAccounts = pgTable(
+  "payout_accounts",
+  {
+    participantId: text("participant_id").primaryKey(),
+    bankCode: text("bank_code").notNull(),
+    accountNumber: text("account_number").notNull(),
+    /** Provider-resolved account name, captured at save time. */
+    accountName: text("account_name").notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    /** Set on revoke; the account no longer resolves for dispatches. */
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+);
+
+/* ------------------------------------------------------------------------ */
 /* Disputes (ADR-0007: evidence-first; ambiguous losses absorbed, capped).  */
 /* ------------------------------------------------------------------------ */
 
@@ -376,6 +586,8 @@ export const disputes = pgTable(
     /** The settlement computed for this dispute, once released; NULL while open. */
     settlementRecordId: text("settlement_record_id").references(() => settlementRecords.id),
     raisedByParticipantId: text("raised_by_participant_id").notNull(),
+    /** Why the dispute was raised — free text from the run.retired dispute block (ADR-0019). */
+    reason: text("reason").notNull().default(""),
     /** Signed R2 references to photo evidence / scan logs for this dispute. */
     evidenceRefs: text("evidence_refs").array().notNull().default(sql`'{}'::text[]`),
     /** TRUE when the evidence layer could not resolve the dispute unambiguously. */
@@ -391,5 +603,191 @@ export const disputes = pgTable(
     index("disputes_status_idx").on(table.status),
     check("disputes_status_valid", sql`${table.status} IN ('open', 'under_review', 'resolved')`),
     check("disputes_absorbed_loss_nonnegative", sql`${table.absorbedLossKobo} >= 0`),
+  ],
+);
+
+/* ------------------------------------------------------------------------ */
+/* Identity / auth (apps/identity owns these tables; the edge NEVER touches  */
+/* Postgres — ADR-0011 archive pattern. Vendor-neutral: no biometric or FIDO  */
+/* vendor names here, ADR-0009).                                             */
+/* ------------------------------------------------------------------------ */
+
+export const CREDENTIAL_TYPES = ["fido", "device-key"] as const;
+export const DEVICE_RESET_STATUSES = ["pending", "approved", "rejected"] as const;
+export const FACE_ATTEMPT_OUTCOMES = ["pass", "fail"] as const;
+export const SIMILARITY_BUCKETS = ["low", "medium", "high"] as const;
+
+/**
+ * Face enrollments — one per participant (upserted on re-enrollment, e.g.
+ * after an approved device reset).
+ *
+ * TRADEOFF, recorded deliberately: the embedding is AES-256-GCM encrypted
+ * (owner's stated priority is encryption at rest), so it lives in bytea and
+ * CANNOT use pgvector's `<=>` cosine index — encrypted bytes are opaque to
+ * the index. Verification decrypts server-side and compares in memory
+ * (packages/domain face-match). At pilot scale (one candidate row per
+ * participant) that is a single decrypt + 512-float dot product — free.
+ * The path back, if a later decision trades encryption for indexed
+ * similarity search, is: add a plaintext `vector(512)` column with an
+ * ivfflat `vector_cosine_ops` index beside this one and backfill.
+ *
+ * VENDOR-HELD MODE (ADR-0022 amendment): when the active face provider holds
+ * the biometric reference itself, no vendor returns raw embeddings — the
+ * embedding/iv/auth_tag columns stay NULL and `provider_ref` records the
+ * provider-side user reference the participant's face is keyed under. The
+ * mode is legible per row: NULL provider_ref = self-held embedding, non-NULL
+ * = vendor-held reference.
+ */
+export const faceEnrollments = pgTable("face_enrollments", {
+  participantId: text("participant_id").primaryKey(),
+  /** Snapshot of the role asserted by the edge at enrollment (dev-stage internal trust). */
+  role: text("role").notNull(),
+  /** AES-256-GCM ciphertext of the 512-dim Float32 embedding (tag split out below). NULL when vendor-held. */
+  embeddingEncrypted: bytea("embedding_encrypted"),
+  /** 12-byte GCM nonce. NULL when vendor-held. */
+  iv: bytea("iv"),
+  /** 16-byte GCM authentication tag (WebCrypto appends it; we store it separately). NULL when vendor-held. */
+  authTag: bytea("auth_tag"),
+  /** Embedding model version (vendor-neutral label, e.g. "stub-sha512" for the dev stub). */
+  modelVersion: text("model_version").notNull(),
+  /** Provider-side enrollment reference when the biometric is vendor-held; NULL for self-held embeddings. */
+  providerRef: text("provider_ref"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
+});
+
+/**
+ * Async face jobs — enrollment/authentication submissions to a provider that
+ * processes asynchronously (submit → 202 → callback/poll, ADR-0009 seam).
+ * The identity worker answers enroll/verify with its own `id` (the polling
+ * key for GET /auth/face/job/:id); `provider_job_id` correlates provider
+ * callbacks back to the row. Sessions for passed authentication jobs are
+ * issued lazily when the client collects the result, and are re-derivable
+ * from auth_sessions (HMAC is deterministic) — the raw token is never stored.
+ */
+export const FACE_JOB_KINDS = ["enrollment", "authentication"] as const;
+export const FACE_JOB_STATUSES = ["pending", "passed", "failed"] as const;
+
+export const faceAuthJobs = pgTable(
+  "face_auth_jobs",
+  {
+    id: text("id").primaryKey(),
+    /** UNIQUE: provider callbacks/polls correlate exactly one job. */
+    providerJobId: text("provider_job_id").notNull(),
+    participantId: text("participant_id").notNull(),
+    /** Role snapshot at submission — written to the enrollment row on completion. */
+    role: text("role").notNull(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull().default("pending"),
+    failureReason: text("failure_reason"),
+    /** jti of the session issued when a passed authentication was collected. */
+    sessionTokenId: text("session_token_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("face_auth_jobs_provider_job_id_unique").on(table.providerJobId),
+    index("face_auth_jobs_participant_id_idx").on(table.participantId),
+    index("face_auth_jobs_status_idx").on(table.status),
+    check("face_auth_jobs_kind_valid", sql`${table.kind} IN ('enrollment', 'authentication')`),
+    check("face_auth_jobs_status_valid", sql`${table.status} IN ('pending', 'passed', 'failed')`),
+  ],
+);
+
+/**
+ * Device credentials — the keychain/FIDO fallback login seam.
+ * unique(participant_id, credential_type) enforces one credential per
+ * participant per type; the identity worker's FIDO_UPSERT_ENABLED toggle
+ * replaces the row instead of 409-ing so multi-device testing can cycle
+ * registrations without an ops reset.
+ */
+export const deviceCredentials = pgTable(
+  "device_credentials",
+  {
+    id: text("id").primaryKey(),
+    participantId: text("participant_id").notNull(),
+    credentialType: text("credential_type").notNull(),
+    /** FIDO: the credential public key. device-key: NULL (only the hash is kept). */
+    publicKey: text("public_key"),
+    /** device-key: SHA-256 hex of the device-generated secret. fido: NULL. */
+    secretHash: text("secret_hash"),
+    deviceLabel: text("device_label"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("device_credentials_participant_type_unique").on(table.participantId, table.credentialType),
+    index("device_credentials_participant_id_idx").on(table.participantId),
+    check("device_credentials_type_valid", sql`${table.credentialType} IN ('fido', 'device-key')`),
+  ],
+);
+
+/**
+ * Issued session tokens (jti registry). The edge verifies HMAC signatures
+ * LOCALLY with the shared secret — no per-request round trip; this table is
+ * the revocation/audit record consulted by /auth/session/validate when
+ * revocation matters (device reset, disputes).
+ */
+export const authSessions = pgTable(
+  "auth_sessions",
+  {
+    tokenId: text("token_id").primaryKey(),
+    participantId: text("participant_id").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("auth_sessions_participant_id_idx").on(table.participantId),
+    index("auth_sessions_expires_at_idx").on(table.expiresAt),
+  ],
+);
+
+/**
+ * Device-reset requests — the dispute-like flow: participant reports a lost
+ * device, ops approves/rejects over the internal seam, and approval revokes
+ * the participant's device credentials (and optionally live sessions) so
+ * re-enrollment can proceed.
+ */
+export const deviceResetRequests = pgTable(
+  "device_reset_requests",
+  {
+    id: text("id").primaryKey(),
+    participantId: text("participant_id").notNull(),
+    reason: text("reason").notNull(),
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+  },
+  (table) => [
+    index("device_reset_requests_participant_id_idx").on(table.participantId),
+    index("device_reset_requests_status_idx").on(table.status),
+    check("device_reset_requests_status_valid", sql`${table.status} IN ('pending', 'approved', 'rejected')`),
+  ],
+);
+
+/**
+ * Per-attempt face-verification audit log. Every verify call writes one row,
+ * pass or fail — the anti-hill-climbing record: a banded similarity, never
+ * the raw score (no score oracle even in the database's own audit trail).
+ */
+export const faceAuthAttempts = pgTable(
+  "face_auth_attempts",
+  {
+    id: text("id").primaryKey(),
+    participantId: text("participant_id").notNull(),
+    outcome: text("outcome").notNull(),
+    similarityBucket: text("similarity_bucket"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("face_auth_attempts_participant_id_idx").on(table.participantId),
+    index("face_auth_attempts_created_at_idx").on(table.createdAt),
+    check("face_auth_attempts_outcome_valid", sql`${table.outcome} IN ('pass', 'fail')`),
+    check(
+      "face_auth_attempts_bucket_valid",
+      sql`${table.similarityBucket} IS NULL OR ${table.similarityBucket} IN ('low', 'medium', 'high')`,
+    ),
   ],
 );

@@ -16,6 +16,15 @@ export type Timestamp = z.infer<typeof TimestampSchema>;
 export const QuantitySchema = z.number().int().positive();
 export type Quantity = z.infer<typeof QuantitySchema>;
 
+/**
+ * Request correlation id (x-request-id). Honored when a caller supplies one
+ * within this charset/length, otherwise the edge generates a UUID. Rides
+ * queue messages optionally (append-only) so a user action is traceable
+ * across workers.
+ */
+export const RequestIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9._:-]+$/);
+export type RequestId = z.infer<typeof RequestIdSchema>;
+
 export const RoleSchema = z.enum(["Buyer", "Seller", "Runner"]);
 export type Role = z.infer<typeof RoleSchema>;
 

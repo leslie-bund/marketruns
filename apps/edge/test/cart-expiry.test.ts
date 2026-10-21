@@ -27,7 +27,7 @@ describe("CartDO shared lap-timer deadline", () => {
     expect(cart.acceptanceCount).toBe(2);
 
     // Move the cart clock past its deadline (first acceptance + 40 min < 61 min).
-    const stub = cartStub("cart:ce");
+    const stub = cartStub("cart:ce:buyer:anonymous");
     await shiftTime(stub, 61 * 60 * 1000);
     const ran = await runDurableObjectAlarm(stub);
     expect(ran).toBe(true);

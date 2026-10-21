@@ -1,0 +1,84 @@
+# OPTIONAL — the whole dev stack runs fully stubbed (stub payment dispatcher,
+# stub face verifier) with NO infra/.dev.vars file at all. You only need this
+# file to opt a worker into a real vendor.
+#
+# To opt in: copy this file to infra/.dev.vars (same folder — wrangler reads
+# .dev.vars next to the --config file, verified: `npx wrangler dev --config
+# infra/wrangler.payments.toml` run from the repo root loads
+# infra/.dev.vars). infra/.dev.vars is gitignored; NEVER commit real keys.
+#
+# Every vendor selector and credential line below is commented out ON PURPOSE:
+# an uncommented PLACEHOLDER looks like a configured key to the fail-loud
+# config guards, so the stack would make live vendor calls with bogus
+# credentials instead of refusing to start.
+# - Flutterwave block: uncomment ONLY with a real FLWSECK_TEST key from your
+#   own dashboard.
+# - Smile ID block: uncomment ONLY with real sandbox keys from your own
+#   Smile ID dashboard.
+#
+# These values are read by ALL workers you start with a config in infra/ —
+# keys a worker doesn't use are simply ignored.
+
+# ── Payments worker: Flutterwave dispatcher (ADR-0009/0023) ─────────────────
+# Uncomment to switch the dispatcher from the dev stub to real test-mode
+# transfers — only together with a REAL test key below, never the placeholder:
+# PAYMENT_DISPATCHER=flutterwave
+
+# Your Flutterwave TEST secret key (dashboard → Settings → API keys). Test
+# keys (FLWSECK_TEST-…) hit the same production host — there is no separate
+# sandbox base URL. Uncomment and replace the placeholder:
+# FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-X
+
+# Webhook secret hash: any random string YOU invent (e.g. `openssl rand -hex
+# 32`), pasted identically into dashboard → Settings → Webhooks → Secret hash.
+# Flutterwave echoes it back in the `verif-hash` header; the worker rejects
+# mismatches with 401. Leave unset (commented out) to disable
+# /webhooks/transfers (503).
+# FLUTTERWAVE_WEBHOOK_SECRET_HASH=
+
+# Optional overrides (defaults shown):
+# FLUTTERWAVE_BASE_URL=https://api.flutterwave.com
+# FLUTTERWAVE_CALLBACK_URL=
+
+# Test-mode transfer accelerator (LOCAL DEV ONLY — NEVER in production):
+# truthy appends the provider's magic `_PMCKDU_1` suffix to every outgoing
+# transfer reference so mock transfers settle SUCCESSFUL in ~1 min instead of
+# sitting PENDING ~10 min (provider-documented). Webhook/lookup references are
+# stripped back to the bare idempotency key before row matching, so this is
+# invisible upstream. The failure variant `_PMCK_ST_FDU_1` exists for failure
+# drills but is NOT wired — append it to a reference manually when drilling.
+# FLUTTERWAVE_TEST_MODE=1
+
+# Dev payout recipients (JSON, keyed by partyId). Without it, the demo
+# parties fall back to Flutterwave's documented TEST bank accounts
+# (Access Bank 044 / 0690000031-33 — test mode only, no real money moves):
+# DEV_PAYOUT_RECIPIENTS={"seller:amina":{"bank":"044","account":"0690000031","name":"Amina"},"runner:internal":{"bank":"044","account":"0690000032"},"platform":{"bank":"044","account":"0690000033"}}
+
+# Local Postgres (dev) — the payments/archive/identity workers read this:
+# DATABASE_URL=postgres://postgres:postgres@localhost:54322/market_runs
+
+# ── Identity worker: Smile ID face vendor (ADR-0009/0022) ───────────────────
+# Uncomment to switch the face verifier from the dev stub to Smile ID
+# SmartSelfie™ (vendor-held biometric reference; enrollment/verify become
+# async jobs — submit → 202 pending → poll GET /auth/face/job/:jobId or
+# webhook) — only together with REAL sandbox keys below:
+# FACE_VERIFIER=smileid
+
+# Smile ID SANDBOX keys (Dashboard → Developer Settings; sandbox and
+# production keys are NOT interchangeable). Uncomment and replace the
+# placeholders:
+# SMILEID_PARTNER_ID=0000
+# SMILEID_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Environment selector (default shown; sandbox hits testapi.smileidentity.com):
+# SMILEID_ENV=sandbox
+
+# Callback URL for job results (optional — when unset, Smile ID uses the
+# partner default configured in Dashboard → Developer → Security Settings →
+# Callback URLs). Point it at https://<your-host>/callbacks/smileid; webhooks
+# are signed (Response-Signature header) and verified with the api key.
+# SMILEID_CALLBACK_URL=
+
+# HTTPS URL of the privacy notice shown at capture time — forwarded in the
+# vendor consent record (NDPA 2023: biometrics are sensitive personal data).
+# SMILEID_PRIVACY_NOTICE_URL=

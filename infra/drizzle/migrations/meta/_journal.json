@@ -8,6 +8,69 @@
       "when": 1791749793367,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791821911919,
+      "tag": "0001_archive_relax_refs",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791997317561,
+      "tag": "0002_workable_valkyrie",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792038295756,
+      "tag": "0003_groovy_william_stryker",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792069075605,
+      "tag": "0004_stormy_iron_patriot",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792069117332,
+      "tag": "0005_payment_dispatches",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792124029896,
+      "tag": "0006_payment_dispatch_completed",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792177623394,
+      "tag": "0007_payment_holds_refunds_payout_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792177655760,
+      "tag": "0008_smileid_vendor_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792333074588,
+      "tag": "0009_disputes_reason",
+      "breakpoints": true
     }
   ]
 }

@@ -28,14 +28,14 @@ describe("CartDO checkout close gate", () => {
     expect((await offerProduct("cg-product-1", "cg-intent-1", "cg")).status).toBe(200);
     expect((await acceptProduct("cg-product-1")).status).toBe(200);
 
-    const refused = await checkout("cart:cg");
+    const refused = await checkout("cart:cg:buyer:anonymous");
     expect(refused.status).toBe(409);
     const body = await readJson(refused);
     expect(body.error).toBe("market-close-gate");
     expect(String(body.refusal)).toContain("closes at");
 
     // The cart is still open and checkout can be retried after reopening.
-    const view = await cartStub("cart:cg").fetch(new Request("http://do/"));
+    const view = await cartStub("cart:cg:buyer:anonymous").fetch(new Request("http://do/"));
     expect(view.status).toBe(200);
     const cart = (await readJson(view)).cart as { status: string };
     expect(cart.status).toBe("open");
@@ -57,11 +57,11 @@ describe("CartDO checkout close gate", () => {
     expect((await offerProduct("cg-product-3", "cg-intent-2", "cg")).status).toBe(200);
     expect((await acceptProduct("cg-product-3")).status).toBe(200);
 
-    const accepted = await checkout("cart:cg");
+    const accepted = await checkout("cart:cg:buyer:anonymous");
     expect(accepted.status).toBe(200);
     const body = await readJson(accepted);
     expect(body.type).toBe("checkout.accepted");
-    expect(body.runId).toBe("run:cart:cg");
+    expect(body.runId).toBe("run:cart:cg:buyer:anonymous");
     expect(body.floorRateKobo).toBe(170_000); // default config floor rate
   });
 });

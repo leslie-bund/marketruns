@@ -3,3 +3,7 @@ dist
 .wrangler
 .env
 .dev.vars
+.gitnexus
+.DS_Store
+.dev-logs
+kimi-export-session*.md

@@ -22,13 +22,23 @@ import {
   SettlementReleasedSchema,
   CartSchema,
   ProductSchema,
+  RunRetiredSchema,
   RunSchema,
+  RunStartedSchema,
 } from "../src/index.js";
 
 /** Serialize → deserialize → parse, proving the wire format round-trips. */
 function roundTrip<S extends z.ZodTypeAny>(schema: S, value: unknown): z.infer<S> {
   return schema.parse(JSON.parse(JSON.stringify(value)));
 }
+
+const settlementInputs = {
+  mode: "completed",
+  sellers: [{ sellerId: "seller-1", amountKobo: 250_000, stopCompleted: true }],
+  deliveryPriceKobo: 180_000,
+  deliveryMarginKobo: 10_000,
+  goodsCommissionBps: 1_000,
+} as const;
 
 const now = 1_761_000_000_000;
 
@@ -255,6 +265,8 @@ describe("settlement family", () => {
     const settled = SettlementReleasedSchema.parse({
       type: "settlement.released",
       runId: "run-1",
+      buyerId: "buyer-1",
+      runnerId: "runner-1",
       mode: "completed",
       sellers: [{ sellerId: "seller-1", amountKobo: 250_000 }],
       runnerKobo: 180_000,
@@ -262,6 +274,7 @@ describe("settlement family", () => {
       buyerRefundKobo: 0,
       platformLossKobo: 0,
       releasedAt: now,
+      inputs: settlementInputs,
     });
     expect(settled.mode).toBe("completed");
   });
@@ -271,6 +284,8 @@ describe("settlement family", () => {
       SettlementReleasedSchema.safeParse({
         type: "settlement.released",
         runId: "run-1",
+        buyerId: "buyer-1",
+        runnerId: "runner-1",
         mode: "refunded",
         sellers: [],
         runnerKobo: 0,
@@ -278,6 +293,7 @@ describe("settlement family", () => {
         buyerRefundKobo: 250_000,
         platformLossKobo: 0,
         releasedAt: now,
+        inputs: settlementInputs,
       }).success,
     ).toBe(false);
   });
@@ -287,6 +303,8 @@ describe("settlement family", () => {
       SettlementReleasedSchema.safeParse({
         type: "settlement.released",
         runId: "run-1",
+        buyerId: "buyer-1",
+        runnerId: "runner-1",
         mode: "completed",
         sellers: [{ sellerId: "seller-1", amountKobo: 250_000.4 }],
         runnerKobo: 180_000,
@@ -294,6 +312,7 @@ describe("settlement family", () => {
         buyerRefundKobo: 0,
         platformLossKobo: 0,
         releasedAt: now,
+        inputs: settlementInputs,
       }).success,
     ).toBe(false);
   });
@@ -323,6 +342,52 @@ describe("archive family", () => {
       snapshot: { ...cart, status: "retired", products: [{ ...tomatoProduct, status: "retired" }] },
     });
     expect(retired.snapshot.products[0]?.status).toBe("retired");
+  });
+
+  it("round-trips a run.started announcement carrying the cart's stores", () => {
+    const started = roundTrip(RunStartedSchema, {
+      type: "run.started",
+      runId: "run:cart:Balogun:buyer:demo",
+      market: "Balogun",
+      status: "assigned",
+      runnerId: "runner:internal",
+      buyerId: "buyer:demo",
+      startedAt: now,
+      stopCount: 1,
+      storeIds: ["Amina's Fresh Store"],
+    });
+    expect(started.storeIds).toEqual(["Amina's Fresh Store"]);
+    // storeIds is required: the CartDO always knows the cart's stores at checkout.
+    expect(
+      RunStartedSchema.safeParse({
+        type: "run.started",
+        runId: "run:cart:Balogun:buyer:demo",
+        market: "Balogun",
+        status: "assigned",
+        runnerId: null,
+        buyerId: "buyer:demo",
+        startedAt: now,
+        stopCount: 1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries an optional requestId (correlation, append-only) and rejects malformed ids", () => {
+    const base = {
+      type: "run.started",
+      runId: "run:cart:Balogun:buyer:demo",
+      market: "Balogun",
+      status: "assigned",
+      runnerId: "runner:internal",
+      buyerId: "buyer:demo",
+      startedAt: now,
+      stopCount: 1,
+      storeIds: ["Amina's Fresh Store"],
+    };
+    expect(roundTrip(RunStartedSchema, { ...base, requestId: "trace-1.A:B_C" }).requestId).toBe("trace-1.A:B_C");
+    expect(RunStartedSchema.safeParse(base).success).toBe(true);
+    expect(RunStartedSchema.safeParse({ ...base, requestId: "has spaces" }).success).toBe(false);
+    expect(RunStartedSchema.safeParse({ ...base, requestId: "x".repeat(65) }).success).toBe(false);
   });
 });
 

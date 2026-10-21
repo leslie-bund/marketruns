@@ -20,22 +20,36 @@ import {
   RunnerLocationUpdatedSchema,
 } from "./run.js";
 import { SettlementReleasedSchema } from "./settlement.js";
-import { CartRetiredSchema, ProductRetiredSchema, RunRetiredSchema } from "./archive.js";
+import { StoreRecordedSchema, StoreRegisteredSchema } from "./store.js";
+import {
+  MarketJoinedSchema,
+  MarketMemberRecordedSchema,
+  ParticipantOnboardedSchema,
+  ParticipantRecordedSchema,
+} from "./participant.js";
+import { CartRetiredSchema, ProductRetiredSchema, RunRetiredSchema, RunStartedSchema } from "./archive.js";
 import {
   KycVerificationResultSchema,
+  PaymentDispatchRequestedSchema,
   PaymentFundsCapturedSchema,
   PaymentFundsReleasedSchema,
   PaymentHoldPlacedSchema,
+  PaymentRefundRequestedSchema,
 } from "./payments.js";
 
 export * from "./primitives.js";
 export * from "./intent.js";
+export * from "./discovery.js";
 export * from "./negotiation.js";
 export * from "./cart.js";
 export * from "./run.js";
 export * from "./settlement.js";
+export * from "./store.js";
+export * from "./participant.js";
 export * from "./archive.js";
 export * from "./payments.js";
+export * from "./admin.js";
+export * from "./auth.js";
 
 /**
  * Everything a client (buyer / seller / runner app) may send to the edge,
@@ -49,6 +63,9 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   HandoffChallengeScannedSchema,
   HandoffPhotoCapturedSchema,
   RunnerLocationUpdatedSchema,
+  StoreRegisteredSchema,
+  ParticipantOnboardedSchema,
+  MarketJoinedSchema,
 ]);
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 
@@ -69,12 +86,18 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   HandoffInitiatedSchema,
   HandoffConfirmedSchema,
   SettlementReleasedSchema,
+  RunStartedSchema,
   ProductRetiredSchema,
   CartRetiredSchema,
   RunRetiredSchema,
   PaymentHoldPlacedSchema,
   PaymentFundsCapturedSchema,
   PaymentFundsReleasedSchema,
+  PaymentDispatchRequestedSchema,
+  PaymentRefundRequestedSchema,
   KycVerificationResultSchema,
+  StoreRecordedSchema,
+  ParticipantRecordedSchema,
+  MarketMemberRecordedSchema,
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;

@@ -1,0 +1,24 @@
+name = "market-runs-payments"
+main = "../apps/payments/src/index.ts"
+compatibility_date = "2025-01-01"
+# The postgres-js driver (Postgres via Hyperdrive/DATABASE_URL) uses Node APIs.
+compatibility_flags = ["nodejs_compat"]
+
+[[queues.consumers]]
+queue = "payment-dispatch"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+# Failed dispatches exhaust retries into the DLQ; the payment_dispatches row
+# stays 'failed' and is re-runnable via POST /dispatches/:id/replay.
+dead_letter_queue = "payment-dispatch-dlq"
+
+[vars]
+# "stub" keeps zero-secret dev working. The Flutterwave dispatcher is chosen
+# via infra/.dev.vars (PAYMENT_DISPATCHER = "flutterwave" + the vendor keys —
+# see infra/.dev.vars.example); .dev.vars overrides these [vars] and is
+# gitignored (ADR-0009: vendor config lives only in the quarantine module).
+PAYMENT_DISPATCHER = "stub"
+
+# DATABASE_URL (dev) or the Hyperdrive binding (prod) is provided at deploy
+# time — never committed. Dev: a local Postgres container (infra/README).

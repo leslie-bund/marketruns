@@ -7,6 +7,7 @@
   "dependencies": {
     "@market-runs/domain": "workspace:*",
     "@market-runs/proto": "workspace:*",
+    "@market-runs/test-db": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "postgres": "^3.4.5",
     "zod": "^3.25.76"

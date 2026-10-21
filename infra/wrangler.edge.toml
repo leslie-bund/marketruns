@@ -7,16 +7,26 @@ bindings = [
   { name = "MARKET_DO", class_name = "MarketDO" },
   { name = "PRODUCT_DO", class_name = "ProductDO" },
   { name = "CART_DO", class_name = "CartDO" },
-  { name = "RUN_DO", class_name = "RunDO" }
+  { name = "RUN_DO", class_name = "RunDO" },
+  { name = "PARTICIPANT_DO", class_name = "ParticipantDO" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MarketDO", "ProductDO", "CartDO", "RunDO"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ParticipantDO"]
+
 [[queues.producers]]
 binding = "ARCHIVE_QUEUE"
 queue = "archive-snapshots"
+
+# Settlement payout legs → apps/payments consumer (ADR-0007 execution side).
+[[queues.producers]]
+binding = "PAYMENT_QUEUE"
+queue = "payment-dispatch"
 
 [[r2_buckets]]
 binding = "ARCHIVE_BUCKET"
@@ -25,6 +35,30 @@ bucket_name = "market-runs-archive"
 [[kv_namespaces]]
 binding = "MARKET_CONFIG"
 id = "set-with-wrangler"
+
+[vars]
+# Dev-only: base URL of the archive service for the ops console reputation
+# panel. In deployed environments this becomes a Service binding.
+OPS_ARCHIVE_URL = "http://localhost:8788"
+
+# Dev-only: base URL of the identity service for the /auth/* proxy
+# (face enroll/verify, device keys, sessions, device reset).
+# Service binding in prod, like OPS_ARCHIVE_URL.
+IDENTITY_URL = "http://localhost:8789"
+
+# Dev-only: base URL of the payments service for the ops console payments
+# proxy (/ops/api/admin/payments → GET /dispatches). Service binding in prod.
+PAYMENTS_URL = "http://localhost:8790"
+
+# Secrets stay out of this file — set them with wrangler:
+#   wrangler secret put IDENTITY_SESSION_SECRET   # on BOTH edge and identity
+#   wrangler secret put IDENTITY_INTERNAL_TOKEN   # on BOTH edge and identity — the edge
+#                                                 # injects it on the guarded /auth/* routes
+#   (IDENTITY_ENCRYPTION_KEY lives on the identity worker only)
+
+# Dev-only: the free public OSRM demo server (no key, demo usage policy).
+# Production must point at the self-hosted deployment — see infra/osrm.
+OSRM_BASE_URL = "https://router.project-osrm.org"
 
 # Hyperdrive config is provisioned with wrangler; set via wrangler secrets — never commit the Neon connection string.
 # [[hyperdrive]]
