@@ -3,8 +3,10 @@
 The first real-human test: 2–4 untrained friends on their own phones (Expo Go,
 over tunnels), the owner playing **runner + ops** from the laptop, with the ops
 dashboard as the session console. Money-in runs through Flutterwave **test
-mode**, face verification through the Smile ID **sandbox**. Nothing is real
-money; no real identity is verified.
+mode**. Face verification runs through the Smile ID **sandbox** when sandbox
+keys are available; otherwise the stub verifier (the default) is the sanctioned
+fallback — record that identity ran stubbed. Nothing is real money; no real
+identity is verified.
 
 This runbook is written to be followable cold by someone who did not build the
 system. Read §0–§2 the morning of the event; keep §5 (incidents) and §6
@@ -26,7 +28,7 @@ scenarios (see §6 incident scripts for sanctioned fallbacks).
 | 4 | Buyer collection key | `apps/mobile/.env` → `EXPO_PUBLIC_FLW_PUBLIC_KEY=FLWPUBK_TEST-…` | Set; unset silently degrades checkout to unpaid dev mode |
 | 5 | Payout dispatcher | `infra/.dev.vars` → `PAYMENT_DISPATCHER=flutterwave`, `FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-…`, and `FLUTTERWAVE_TEST_MODE=true` | Payments worker starts without throwing (a missing key throws at startup). `FLUTTERWAVE_TEST_MODE` (ADR-0026) appends the provider's mock-success suffix to transfer references so mock transfers complete in **~1 min instead of ~10** — strongly recommended for session day. The reconcile vendor check compares bare references, so transfers tie out as usual under test mode. |
 | 6 | Webhook hash | `infra/.dev.vars` → `FLUTTERWAVE_WEBHOOK_SECRET_HASH=<random 64-hex>`, same value pasted in Flutterwave dashboard → Settings → Webhooks → Secret hash | Unset ⇒ the webhook route 503s; wrong ⇒ 401. (Optional in dev — see §1.3 for the fallback.) |
-| 7 | Face verifier | `infra/.dev.vars` → `FACE_VERIFIER=smileid`, `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`, `SMILEID_ENV=sandbox` (default) | Identity worker starts without throwing (`FACE_VERIFIER=smileid` without keys throws at startup) |
+| 7 | Face verifier | `infra/.dev.vars` → `FACE_VERIFIER=smileid`, `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`, `SMILEID_ENV=sandbox` (default) | Identity worker starts without throwing (`FACE_VERIFIER=smileid` without keys throws at startup). **No Smile ID credentials yet?** Leave `FACE_VERIFIER` unset (stub default), restart, and record "identity stubbed" in the session log — the trust/money scenarios stay runnable; live KYC is not exercised. |
 | 8 | Paid-flow gate | `infra/.dev.vars` → `PAYMENTS_REQUIRED=true` | Edge requires a confirmed payment hold at checkout. **Only set this when testing the paid flow** — with it unset, checkout is the unpaid dev posture. |
 | 9 | Tunnel decision made | See §1.2 | Quick tunnel URL is printed; **named tunnel recommended** |
 | 10 | Flutterwave dashboard webhook | Dashboard → Settings → Webhooks | Points at `https://<edge-tunnel>/webhooks/transfers` — **the main edge tunnel** (the edge proxies `/webhooks/*` to the payments worker as a dumb pipe; hash verification stays at the worker). No second tunnel needed. See §1.3. |
@@ -137,19 +139,20 @@ Say this to every tester before they touch the phone:
 
 > **Consent wording — read verbatim:**
 >
-> "This test captures your face photo and ID number through sandbox services —
+> "This test captures your face photo and ID number through a test verifier —
 > no real verification happens, no real money moves, data is stored only on
 > this development machine and deleted after the test. Say yes to proceed."
 
 Then cover, in your own words but without skipping any:
 
 - **Never type a real BVN or NIN.** When a form asks for an ID number, type
-  **any 11 digits** (e.g. `12345678901`). Sandbox services do not check them
-  against anything real.
+  **any 11 digits** (e.g. `12345678901`). The sandbox/stub verifier does not
+  check them against anything real.
 - **Money is fake.** Test keys, test bank accounts, test cards. Nothing can
   reach a real account.
 - **Face verdicts are simulated.** The Smile ID sandbox returns canned
-  results; a "pass" does not mean your face was matched against a real record.
+  results (and in stub mode the verifier is local); a "pass" does not mean your
+  face was matched against a real record.
 - One phone = one person. If the app asks you to sign in as someone else, hand
   the phone back instead.
 - You are not being tested — the app is. Every time you get confused, that is
@@ -208,7 +211,8 @@ allows. Note every hesitation and every wrong tap — that is the data.
 | 5 | Seller | Return to seller home | Masked account shown with a change path | — |
 
 Sandbox face verdicts are simulated — expect enroll to pass regardless of the
-actual photo. If Smile ID is down, switch to the stub (§6, incident I2).
+actual photo. If Smile ID is down or unconfigured, the stub verifier does the
+same synchronously (§6, incident I2); note "identity stubbed" in the log.
 
 ### S2 — Happy-path paid run with photo handshakes
 
@@ -288,9 +292,10 @@ them.
   15 min by default). Reconcile WARNs past 30 min pending. This is lag, not
   loss — explain it in the session log. With `FLUTTERWAVE_TEST_MODE=true`
   (§0 item 5) the mock webhook lands in ~1 min, so these should be rare.
-- **L4 — Sandbox face verdicts are simulated.** Enroll/verify pass on canned
-  results; nothing here validates real liveness or matching. Say so in the
-  briefing (§2) and do not draw trust conclusions from sandbox verdicts.
+- **L4 — Face verdicts are simulated.** Sandbox enroll/verify pass on canned
+  results; in stub mode the verifier is local. Nothing here validates real
+  liveness or matching. Say so in the briefing (§2) and do not draw trust
+  conclusions from simulated verdicts.
 
 ---
 
@@ -301,7 +306,7 @@ them.
 | # | Symptom | Script |
 |---|---------|--------|
 | I1 | **Flutterwave webview fails** (buyer cannot reach the charge modal, or charges error immediately) | Flip the paid gate off: remove `PAYMENTS_REQUIRED=true` from `infra/.dev.vars`, restart the stack. Checkout falls back to the unpaid dev posture. **Continue all trust scenarios** (S2 handoffs, S3, S5a–c) — they do not depend on collection. Mark S2-step-4, S4, S5d as not-tested. |
-| I2 | **Smile ID sandbox down** (face jobs stuck pending / erroring) | Set `FACE_VERIFIER=stub` in `infra/.dev.vars`, restart. Face enroll/verify become synchronous stubs. Note in the session log that identity flows ran stubbed. |
+| I2 | **Smile ID sandbox down — or no Smile ID credentials** (face jobs stuck pending / erroring) | Set `FACE_VERIFIER=stub` in `infra/.dev.vars`, restart. Face enroll/verify become synchronous stubs. Note in the session log that identity flows ran stubbed. |
 | I3 | **Stuck hold** (a hold stays `held` with no settlement, or a dispatch never resolves) | 1. Run `node infra/reconcile.mjs` — it isolates the exact row and check that fails. 2. Ops-settle the affected run from the dashboard (run detail → ops settle). 3. Re-run reconcile; the hold must now tie out. **If a second stuck hold occurs in the same session: stop all payments scenarios** (flip `PAYMENTS_REQUIRED` off) and continue trust-only. |
 | I4 | **Tunnel drops** | Restart the tunnel (Ctrl-C the stack, `dev:all -- --tunnel` again; Postgres state and all server state survive — friends just re-scan the new QR / reload). If using a quick tunnel, re-register the Flutterwave webhook (§1.3) and redistribute the ops link. **Second drop in the session: switch to LAN mode** — same Wi-Fi, `EXPO_PUBLIC_EDGE_URL` = the Mac's LAN IP, no tunnels. |
 | I5 | **Tester types a real BVN/NIN** | Prevention is the briefing (§2) — but if it happens: do not panic, do not delete anything mid-session. Note the participant id. Identity stores embeddings encrypted at rest and IDs hash-only; after the session, delete the local Postgres container volume (throwaway dev container) as part of teardown, and say so to the tester. |
