@@ -103,6 +103,7 @@ describe("POST /webhooks/transfers", () => {
     const updated = (await store.byId(row!.id))!;
     expect(updated.status).toBe("failed");
     expect(updated.failureReason).toBe("DISBURSE FAILED: Insufficient funds");
+    expect(updated.failureRetryable).toBe(false);
   });
 
   it("matches by providerRef when the webhook carries no reference", async () => {
@@ -208,6 +209,7 @@ describe("POST /dispatches/sync", () => {
     expect(rows.get("run:cart:Balogun:buyer:1:dispatch:0")!.status).toBe("completed");
     expect(rows.get("run:cart:Balogun:buyer:1:dispatch:1")!.status).toBe("failed");
     expect(rows.get("run:cart:Balogun:buyer:1:dispatch:1")!.failureReason).toBe("Account resolve failed");
+    expect(rows.get("run:cart:Balogun:buyer:1:dispatch:1")!.failureRetryable).toBe(false);
     expect(rows.get("run:cart:Balogun:buyer:1:dispatch:2")!.status).toBe("queued"); // still in-flight
     expect(rows.get("fresh:dispatch")!.status).toBe("queued"); // too fresh to sync
     // Sync is not a re-execution: attempts never moved.

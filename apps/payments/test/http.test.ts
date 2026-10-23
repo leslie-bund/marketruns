@@ -28,11 +28,13 @@ async function seededStore(status: "pending" | "sent" | "failed" = "failed") {
 }
 
 describe("payments HTTP surface", () => {
-  it("GET /healthz reports the service", async () => {
-    const app = createPaymentsApp(new InMemoryDispatchStore(), new StubDispatcher());
+  it("GET /healthz reports the service and the active dispatcher", async () => {
+    const app = createPaymentsApp(new InMemoryDispatchStore(), new StubDispatcher(), {
+      dispatcherKind: "stub",
+    });
     const response = await app.fetch(new Request("http://payments/healthz"));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, service: "market-runs-payments" });
+    expect(await response.json()).toEqual({ ok: true, service: "market-runs-payments", dispatcher: "stub" });
   });
 
   it("GET /dispatches lists views, filterable by runId and status", async () => {

@@ -111,6 +111,8 @@ export function mapProviderTransfer(data: {
         status: "failed",
         providerRef,
         failureReason: data.complete_message?.trim() || "provider reported the transfer failed",
+        // A provider-terminal FAILED is not something a queue retry can undo.
+        retryable: false,
       };
     case "PENDING":
       return { status: "sent", providerRef };
@@ -138,18 +140,21 @@ export class FlutterwaveDispatcher implements PaymentDispatcher, TransferStatusL
   async dispatchTransfer(request: DispatchTransferRequest): Promise<DispatchTransferResult> {
     const recipient = await this.recipients.resolve(request.recipient.partyId, request.recipient.account);
     if (!recipient) {
-      return { status: "failed", failureReason: RECIPIENT_UNRESOLVED };
+      // A missing payout target is a configuration gap, not a transient error.
+      return { status: "failed", failureReason: RECIPIENT_UNRESOLVED, retryable: false };
     }
     if (request.amountKobo < MIN_PAYOUT_KOBO) {
       return {
         status: "failed",
         failureReason: `below-provider-minimum: NGN bank payouts start at ₦${MIN_PAYOUT_KOBO / KOBO_PER_NAIRA}`,
+        retryable: false,
       };
     }
     if (request.amountKobo > MAX_PAYOUT_KOBO) {
       return {
         status: "failed",
         failureReason: `above-provider-maximum: single NGN bank payouts cap at ₦${MAX_PAYOUT_KOBO / KOBO_PER_NAIRA}`,
+        retryable: false,
       };
     }
 
@@ -183,13 +188,19 @@ export class FlutterwaveDispatcher implements PaymentDispatcher, TransferStatusL
       // Network failure: the transfer MAY have been created. Safe to report
       // failed and retry — the duplicate-reference path below collapses the
       // retry onto the original transfer.
-      return { status: "failed", failureReason: `provider-unreachable: ${String(error)}` };
+      return { status: "failed", failureReason: `provider-unreachable: ${String(error)}`, retryable: true };
     }
 
     const envelope = await readJson(response);
     const parsed = EnvelopeSchema.safeParse(envelope);
     if (!parsed.success) {
-      return { status: "failed", failureReason: `provider-response-unparseable: HTTP ${response.status}` };
+      // A 2xx with an unreadable body may still have created the transfer;
+      // retrying is safe because the duplicate-reference path collapses it.
+      return {
+        status: "failed",
+        failureReason: `provider-response-unparseable: HTTP ${response.status}`,
+        retryable: response.status < 400 || retryableHttpStatus(response.status),
+      };
     }
 
     if (parsed.data.status !== "success") {
@@ -201,14 +212,24 @@ export class FlutterwaveDispatcher implements PaymentDispatcher, TransferStatusL
         // the original transfer was created with.
         const original = await this.lookupByReference(reference);
         if (original) return original;
-        return { status: "failed", failureReason: `duplicate-reference-unresolved: ${message}` };
+        // The original may not be visible yet (eventual consistency); retry
+        // so the next duplicate response can collapse onto it.
+        return {
+          status: "failed",
+          failureReason: `duplicate-reference-unresolved: ${message}`,
+          retryable: true,
+        };
       }
-      return { status: "failed", failureReason: message };
+      // 4xx validation is deterministic; 429/5xx can recover. A 2xx error
+      // envelope is a provider-side rejection, so do not spin the queue.
+      return { status: "failed", failureReason: message, retryable: retryableHttpStatus(response.status) };
     }
 
     const transfer = TransferDataSchema.safeParse(parsed.data.data);
     if (!transfer.success) {
-      return { status: "failed", failureReason: "provider-response-missing-transfer" };
+      // The create succeeded but the body is incomplete; a retry is safe
+      // (duplicate-collapse) and may return the original transfer.
+      return { status: "failed", failureReason: "provider-response-missing-transfer", retryable: true };
     }
     return mapProviderTransfer(transfer.data);
   }
@@ -262,4 +283,9 @@ async function readJson(response: Response): Promise<unknown> {
 function isDuplicateReference(message: string): boolean {
   const lower = message.toLowerCase();
   return lower.includes("already exists") || lower.includes("duplicate");
+}
+
+/** Provider throttling and server faults may clear on retry; 4xx validation cannot. */
+function retryableHttpStatus(status: number): boolean {
+  return status === 429 || status >= 500;
 }

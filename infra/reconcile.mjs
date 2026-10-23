@@ -23,10 +23,16 @@
  *   DATABASE_URL           default postgres://postgres:postgres@localhost:54322/market_runs
  *   FLUTTERWAVE_SECRET_KEY enables the vendor check (test keys hit the same host)
  *
+ * infra/.dev.vars is loaded when present (existing shell env wins), so the
+ * vendor check uses the same key as the workers instead of silently SKIPping.
+ *
  * Dependencies: `postgres` only (resolved from apps/payments — a workspace dep).
  */
 
 import { createRequire } from "node:module";
+import { loadDevVars } from "./dev-vars.mjs";
+
+loadDevVars();
 
 // infra/ has no package.json; resolve the workspace dep from apps/payments.
 const require = createRequire(new URL("../apps/payments/package.json", import.meta.url));
@@ -35,6 +41,8 @@ const postgres = require("postgres");
 const DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:54322/market_runs";
 const FLUTTERWAVE_BASE_URL = "https://api.flutterwave.com";
 const KOBO_PER_NAIRA = 100;
+/** Mirrors apps/payments/src/flutterwave/dispatcher.ts (test-mode accelerator). */
+const TEST_MODE_SUCCESS_SUFFIX = "_PMCKDU_1";
 /** Queue max_retries=5 (infra/wrangler.payments.toml) + the initial attempt. */
 const DEFAULT_MAX_ATTEMPTS = 6;
 
@@ -83,16 +91,22 @@ Options:
   --market=NAME          scope all checks to one market (runs_archive.market_id / payment_dispatches.market)
   --pending-minutes=N    WARN on pending/sent/queued dispatches older than N minutes (default 30)
   --held-hours=N         WARN on holds still 'held' older than N hours (default 24)
-  --max-attempts=N       'failed' dispatch with attempts >= N is exhausted → FAIL (default 6 = queue max_retries 5 + 1)
+  --max-attempts=N       retryable 'failed' dispatch with attempts >= N is exhausted → FAIL (default 6 = queue max_retries 5 + 1);
+                         a non-retryable failure is a FAIL immediately
 
 Exit code: 1 when any check FAILs (any unexplained kobo stops the test); 0 otherwise.
-Env: DATABASE_URL (default ${DEFAULT_DATABASE_URL}), FLUTTERWAVE_SECRET_KEY (enables the vendor check).`);
+Env: DATABASE_URL (default ${DEFAULT_DATABASE_URL}), FLUTTERWAVE_SECRET_KEY (enables the vendor check).
+infra/.dev.vars is loaded when present; existing shell env wins.`);
 }
 
 /* ------------------------------------------------------------ small utils */
 
 /** postgres.js returns bigint columns as BigInt (types option below); kobo fits safely in Number here. */
 const kobo = (value) => Number(value ?? 0);
+const bareReference = (reference) =>
+  reference.endsWith(TEST_MODE_SUCCESS_SUFFIX)
+    ? reference.slice(0, -TEST_MODE_SUCCESS_SUFFIX.length)
+    : reference;
 const minutesAgo = (date) => (Date.now() - date.getTime()) / 60_000;
 const hoursAgo = (date) => (Date.now() - date.getTime()) / 3_600_000;
 
@@ -268,8 +282,10 @@ async function checkHoldConservation(sql, opts, settlementsByRun) {
  * `settlement:<settlementRecordId>:leg:<index>`. Rebuild the expected legs
  * from the stored outcome and require an exact per-leg amount match.
  * States: completed/sent/queued/pending are terminal-or-progressing;
- * 'failed' with attempts exhausted (queue max_retries 5 + 1) is a FAIL;
- * pending/sent/queued older than the threshold is a WARN.
+ * 'failed' with failure_retryable=false is a terminal FAIL immediately (the
+ * same request cannot succeed); retryable 'failed' with attempts exhausted
+ * (queue max_retries 5 + 1) is also a FAIL; retryable failures with attempts
+ * remaining, and pending/sent/queued older than the threshold, are WARNs.
  */
 async function checkDispatchCompleteness(sql, opts, settlements, runnerByRun) {
   const check = makeCheck("dispatch-completeness");
@@ -277,7 +293,7 @@ async function checkDispatchCompleteness(sql, opts, settlements, runnerByRun) {
   const dispatches = await sql`
     SELECT d.id, d.idempotency_key, d.settlement_record_id, d.run_id, d.market,
            d.account, d.party_id, d.amount_kobo, d.status, d.provider_ref,
-           d.failure_reason, d.attempts, d.updated_at
+           d.failure_reason, d.failure_retryable, d.attempts, d.updated_at
     FROM payment_dispatches d
     ${marketFilter}
   `;
@@ -341,7 +357,10 @@ async function checkDispatchCompleteness(sql, opts, settlements, runnerByRun) {
       continue;
     }
     if (d.status === "failed") {
-      if (d.attempts >= opts.maxAttempts) {
+      if (d.failure_retryable === false) {
+        fail(check, "payment_dispatches", d.id, { amountKobo: kobo(d.amount_kobo), attempts: d.attempts, failureReason: d.failure_reason },
+          "terminal dispatch failure (not retryable) — retrying the same request cannot succeed; fix the cause and replay from the ops console");
+      } else if (d.attempts >= opts.maxAttempts) {
         fail(check, "payment_dispatches", d.id, { amountKobo: kobo(d.amount_kobo), attempts: d.attempts, failureReason: d.failure_reason },
           `failed with attempts exhausted (>= ${opts.maxAttempts}) — this leg's kobo never moved; replay from the ops console or investigate`);
       } else {
@@ -465,8 +484,10 @@ async function checkSettlementLedger(sql, settlements) {
  * Check 6 — vendor tie-out (Flutterwave Transfers v3), only with
  * FLUTTERWAVE_SECRET_KEY. Our per-leg idempotencyKey is sent as the transfer
  * `reference`; amounts cross the boundary as naira (kobo/100, exact to 2dp).
- * Local rows executed by the stub dispatcher (`stub:` provider refs) are
- * reported as skipped — they never hit the provider.
+ * In test mode the provider echoes the `_PMCKDU_1` accelerator suffix, so
+ * comparison strips it before matching. Local rows executed by the stub
+ * dispatcher (`stub:` provider refs) are reported as skipped — they never hit
+ * the provider.
  */
 async function checkVendor(sql, opts, dispatches, holds, secretKey) {
   const check = makeCheck("vendor");
@@ -510,7 +531,7 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
 
   const transferByReference = new Map();
   for (const t of transfers) {
-    if (t.reference) transferByReference.set(String(t.reference), t);
+    if (t.reference) transferByReference.set(bareReference(String(t.reference)), t);
   }
 
   let matched = 0;
@@ -549,7 +570,7 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
   const localKeys = new Set(dispatches.map((d) => d.idempotency_key));
   let providerOrphans = 0;
   for (const t of transfers) {
-    const reference = String(t.reference ?? "");
+    const reference = bareReference(String(t.reference ?? ""));
     if (!reference.startsWith("settlement:")) continue; // unrelated account activity is not ours to reconcile
     if (!localKeys.has(reference)) {
       providerOrphans += 1;

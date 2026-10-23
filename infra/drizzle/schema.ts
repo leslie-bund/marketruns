@@ -451,6 +451,12 @@ export const paymentDispatches = pgTable(
     status: text("status").notNull().default("pending"),
     providerRef: text("provider_ref"),
     failureReason: text("failure_reason"),
+    /**
+     * Failed rows: true = a queue retry may recover (network/5xx/ambiguous);
+     * false = deterministic rejection (unknown recipient, provider validation,
+     * amount limits) that only an ops replay after a fix can change.
+     */
+    failureRetryable: boolean("failure_retryable").notNull().default(true),
     /** Dispatcher invocations so far (queue retries + ops replays). */
     attempts: integer("attempts").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -144,6 +144,7 @@ describe("FlutterwaveDispatcher status mapping", () => {
     const result = await dispatcher.dispatchTransfer(request);
     expect(result.status).toBe("failed");
     expect(result.failureReason).toBe("Account resolve failed");
+    expect(result.retryable).toBe(false);
   });
 
   it("error envelope → failed with the provider message", async () => {
@@ -155,6 +156,7 @@ describe("FlutterwaveDispatcher status mapping", () => {
     expect(result.status).toBe("failed");
     expect(result.failureReason).toBe("No account number or recipient identifier passed");
     expect(result.providerRef).toBeUndefined();
+    expect(result.retryable).toBe(false);
   });
 
   it("duplicate reference collapses onto the ORIGINAL transfer looked up by reference", async () => {
@@ -183,6 +185,7 @@ describe("FlutterwaveDispatcher status mapping", () => {
     const result = await dispatcher.dispatchTransfer(request);
     expect(result.status).toBe("failed");
     expect(result.failureReason).toMatch(/duplicate-reference-unresolved/);
+    expect(result.retryable).toBe(true);
   });
 
   it("network failure → failed (retryable; the duplicate path collapses the retry)", async () => {
@@ -193,6 +196,7 @@ describe("FlutterwaveDispatcher status mapping", () => {
     const result = await dispatcher.dispatchTransfer(request);
     expect(result.status).toBe("failed");
     expect(result.failureReason).toMatch(/provider-unreachable/);
+    expect(result.retryable).toBe(true);
   });
 });
 
@@ -204,7 +208,7 @@ describe("FlutterwaveDispatcher guards (no HTTP call made)", () => {
       ...request,
       recipient: { partyId: "seller:unknown", account: "seller" },
     });
-    expect(result).toEqual({ status: "failed", failureReason: "recipient-unresolved" });
+    expect(result).toEqual({ status: "failed", failureReason: "recipient-unresolved", retryable: false });
     expect(calls).toHaveLength(0);
   });
 
@@ -214,6 +218,7 @@ describe("FlutterwaveDispatcher guards (no HTTP call made)", () => {
     const result = await dispatcher.dispatchTransfer({ ...request, amountKobo: 5_000 }); // ₦50
     expect(result.status).toBe("failed");
     expect(result.failureReason).toMatch(/below-provider-minimum/);
+    expect(result.retryable).toBe(false);
     expect(calls).toHaveLength(0);
   });
 
@@ -223,6 +228,7 @@ describe("FlutterwaveDispatcher guards (no HTTP call made)", () => {
     const result = await dispatcher.dispatchTransfer({ ...request, amountKobo: 100_000_001 });
     expect(result.status).toBe("failed");
     expect(result.failureReason).toMatch(/above-provider-maximum/);
+    expect(result.retryable).toBe(false);
     expect(calls).toHaveLength(0);
   });
 });
@@ -258,13 +264,30 @@ describe("mapProviderTransfer", () => {
 describe("DevRecipientResolver", () => {
   it("falls back to Flutterwave's documented TEST accounts for the demo parties", async () => {
     const resolver = new DevRecipientResolver();
-    expect(await resolver.resolve("seller:amina", "seller")).toEqual({
+    expect(await resolver.resolve("Amina's Fresh Store", "seller")).toEqual({
       accountBank: "044",
       accountNumber: "0690000031",
       accountName: "TEST — Forrest Green",
     });
+    expect((await resolver.resolve("Mama Ngozi Provisions", "seller"))?.accountNumber).toBe("0690000032");
+    expect((await resolver.resolve("Emeka Phones & Accessories", "seller"))?.accountNumber).toBe("0690000033");
+    // Pre-ADR-0018 fixtures still resolve.
+    expect((await resolver.resolve("seller:amina", "seller"))?.accountNumber).toBe("0690000031");
     expect((await resolver.resolve("runner:internal", "runner"))?.accountNumber).toBe("0690000032");
     expect((await resolver.resolve("platform", "platform"))?.accountNumber).toBe("0690000033");
+  });
+
+  it("omits the published test accounts when the key is live, unless the env map names the party", async () => {
+    const live = new DevRecipientResolver(undefined, { includeTestDefaults: false });
+    expect(await live.resolve("Amina's Fresh Store", "seller")).toBeNull();
+    expect(await live.resolve("runner:internal", "runner")).toBeNull();
+
+    const explicit = new DevRecipientResolver(
+      JSON.stringify({ "Amina's Fresh Store": { bank: "058", account: "0123456789" } }),
+      { includeTestDefaults: false },
+    );
+    expect((await explicit.resolve("Amina's Fresh Store", "seller"))?.accountNumber).toBe("0123456789");
+    expect(await explicit.resolve("platform", "platform")).toBeNull();
   });
 
   it("env entries override the defaults per partyId", async () => {

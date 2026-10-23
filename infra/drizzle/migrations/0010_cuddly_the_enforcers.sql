@@ -1,0 +1,1 @@
+ALTER TABLE "payment_dispatches" ADD COLUMN "failure_retryable" boolean DEFAULT true NOT NULL;

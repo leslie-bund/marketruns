@@ -12,10 +12,13 @@ import { dispatchRow, legIdempotencyKey, type DispatchRow, type DispatchStore } 
  * idempotency key; a redelivered message finds its rows and
  *   - `sent` / `queued` / `completed` legs are skipped (no double payout, ever),
  *   - `pending` rows (crash between insert and dispatch) are dispatched,
- *   - `failed` rows are retried — this is the queue-retry path.
- * If any leg fails, the message is retried with backoff; after the queue's
- * max_retries it lands in the DLQ and the row stays `failed`, visible to ops
- * via GET /dispatches?status=failed and re-runnable via the replay endpoint.
+ *   - retryable `failed` rows are re-dispatched — the queue-retry path,
+ *   - terminal (`failureRetryable === false`) `failed` rows are skipped and
+ *     acked; retrying the same deterministic rejection cannot help.
+ * Retryable failures retry with backoff and eventually reach the DLQ. Terminal
+ * failures are left for ops replay via POST /dispatches/:id/replay. In either
+ * case the run's hold stays held — a failed leg means the money is not
+ * reconciled, so release() must never run.
  */
 
 /** The slice of the Workers queue Message API this consumer uses (mockable in tests). */
@@ -41,7 +44,9 @@ export async function handleDispatchRequested(
   holds?: HoldStore,
 ): Promise<void> {
   let deepestAttempts = 0;
-  let anyFailed = false;
+  let retryableFailure = false;
+  /** Any leg left failed (terminal or retryable) keeps the hold blocked. */
+  let blockingFailure = false;
 
   for (let index = 0; index < value.legs.length; index += 1) {
     let row: DispatchRow | null;
@@ -58,6 +63,16 @@ export async function handleDispatchRequested(
     // converge via webhook/sync, never via re-dispatch.
     if (row.status === "sent" || row.status === "queued" || row.status === "completed") continue;
 
+    if (row.status === "failed") {
+      // A deterministic rejection stays failed until an operator replays it.
+      // Do not re-dispatch it on every queue redelivery: the provider would
+      // reject it identically, and the hold must stay blocked.
+      if (row.failureRetryable === false) {
+        blockingFailure = true;
+        continue;
+      }
+    }
+
     const leg = value.legs[index];
     if (!leg) throw new Error(`leg ${index} is out of range`);
     const result = await dispatcher.dispatchTransfer({
@@ -68,29 +83,42 @@ export async function handleDispatchRequested(
     });
     await store.recordResult(row.id, result);
     if (result.status === "failed") {
-      anyFailed = true;
-      deepestAttempts = Math.max(deepestAttempts, row.attempts + 1);
+      blockingFailure = true;
+      const retryable = result.retryable !== false;
+      if (retryable) {
+        retryableFailure = true;
+        deepestAttempts = Math.max(deepestAttempts, row.attempts + 1);
+      }
       console.error(
         JSON.stringify({
           event: "payment.dispatch_failed",
           dispatchId: row.id,
           failureReason: result.failureReason ?? "unknown",
+          retryable,
           ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
         }),
       );
     }
   }
 
-  if (anyFailed) {
+  if (retryableFailure) {
     message.retry({ delaySeconds: retryDelaySeconds(deepestAttempts) });
-  } else {
-    // Every leg is executed or in-flight: the run's collected hold is
-    // released (held → released). A partially-refunded/refunded hold keeps
-    // its refund state — release() never overwrites it.
-    if (holds) {
-      const hold = await holds.byRunId(value.runId);
-      if (hold) await holds.release(hold.id);
-    }
-    message.ack();
+    return;
   }
+  if (blockingFailure) {
+    // Terminal failure(s) remain and nothing is left to retry: ack so the
+    // queue does not spin, but never release the hold — the money is not
+    // reconciled. The row stays failed and replayable from the ops console.
+    message.ack();
+    return;
+  }
+
+  // Every leg is executed or in-flight: the run's collected hold is released
+  // (held → released). A partially-refunded/refunded hold keeps its refund
+  // state — release() never overwrites it.
+  if (holds) {
+    const hold = await holds.byRunId(value.runId);
+    if (hold) await holds.release(hold.id);
+  }
+  message.ack();
 }

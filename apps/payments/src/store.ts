@@ -30,6 +30,8 @@ export interface DispatchRow {
   status: PaymentDispatchStatus;
   providerRef: string | null;
   failureReason: string | null;
+  /** Failed rows: true = queue retry may recover; false = deterministic, ops replay only. */
+  failureRetryable: boolean;
   attempts: number;
   createdAt: Date;
   updatedAt: Date;
@@ -67,6 +69,8 @@ export interface DispatchStore {
 export interface DispatchStatusUpdate {
   status: PaymentDispatchStatus;
   failureReason?: string | null;
+  /** Defaults to false for a failed status (provider-terminal), true otherwise. */
+  retryable?: boolean;
 }
 
 /** Deterministic per-leg coordinates (the edge emits legs in settlement order). */
@@ -95,6 +99,7 @@ export function dispatchRow(message: PaymentDispatchRequested, legIndex: number)
     status: "pending",
     providerRef: null,
     failureReason: null,
+    failureRetryable: true,
     attempts: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -167,6 +172,10 @@ export class DrizzleDispatchStore implements DispatchStore {
         status: result.status,
         providerRef: result.providerRef ?? null,
         failureReason: result.failureReason ?? null,
+        // A successful retry clears the terminal flag; a failed result defaults
+        // to retryable for backward compatibility with dispatchers that do not
+        // classify their failures yet.
+        failureRetryable: result.status === "failed" ? result.retryable !== false : true,
         attempts: sql`${paymentDispatches.attempts} + 1`,
         updatedAt: new Date(),
       })
@@ -179,6 +188,9 @@ export class DrizzleDispatchStore implements DispatchStore {
       .set({
         status: update.status,
         ...(update.failureReason !== undefined ? { failureReason: update.failureReason } : {}),
+        // Provider webhooks/sync report terminal outcomes; a failed transfer
+        // there is not a candidate for the queue retry path.
+        failureRetryable: update.retryable ?? (update.status !== "failed"),
         updatedAt: new Date(),
       })
       .where(eq(paymentDispatches.id, id));

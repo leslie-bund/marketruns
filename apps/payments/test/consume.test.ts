@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { handleDispatchRequested, retryDelaySeconds } from "../src/consume.js";
 import { StubDispatcher, type DispatchTransferResult, type PaymentDispatcher } from "../src/dispatcher.js";
-import { FakeMessage, InMemoryDispatchStore, sampleDispatchRequest } from "./helpers.js";
+import {
+  FakeMessage,
+  InMemoryDispatchStore,
+  InMemoryHoldStore,
+  sampleDispatchRequest,
+  sampleHold,
+} from "./helpers.js";
 
 /** Dispatcher double whose per-leg results are scripted by partyId. */
 class ScriptedDispatcher implements PaymentDispatcher {
@@ -75,6 +81,7 @@ describe("payment dispatch consumer", () => {
     expect(byParty.get("seller:amina")?.status).toBe("sent");
     expect(byParty.get("runner:internal")?.status).toBe("failed");
     expect(byParty.get("runner:internal")?.failureReason).toBe("provider timeout");
+    expect(byParty.get("runner:internal")?.failureRetryable).toBe(true);
     expect(byParty.get("platform")?.status).toBe("sent");
 
     // Queue redelivery after the retry delay: the runner leg recovers.
@@ -88,6 +95,39 @@ describe("payment dispatch consumer", () => {
     expect(store.rows.get("run:cart:Balogun:buyer:1:dispatch:1")?.status).toBe("sent");
     expect(store.rows.get("run:cart:Balogun:buyer:1:dispatch:1")?.attempts).toBe(2);
     expect(second.acked).toBe(true);
+  });
+
+  it("terminal failure → ack without retry, keeps the hold held, and never re-dispatches on replay", async () => {
+    const store = new InMemoryDispatchStore();
+    const holds = new InMemoryHoldStore();
+    const hold = sampleHold({ runId: sampleDispatchRequest().runId });
+    await holds.insertIfAbsent(hold);
+    const failing = new ScriptedDispatcher({
+      "runner:internal": {
+        status: "failed",
+        failureReason: "recipient-unresolved",
+        retryable: false,
+      },
+    });
+
+    const first = new FakeMessage("m-1");
+    await handleDispatchRequested(store, failing, first, sampleDispatchRequest(), holds);
+
+    expect(first.acked).toBe(true);
+    expect(first.retries).toHaveLength(0);
+    expect(store.rows.get("run:cart:Balogun:buyer:1:dispatch:1")?.status).toBe("failed");
+    expect(store.rows.get("run:cart:Balogun:buyer:1:dispatch:1")?.failureRetryable).toBe(false);
+    expect((await holds.byId(hold.id))?.status).toBe("held");
+
+    // A redelivery must not burn attempts on a deterministic rejection or
+    // release the hold; only an operator replay after a fix may do that.
+    const replay = new FakeMessage("m-2");
+    await handleDispatchRequested(store, failing, replay, sampleDispatchRequest(), holds);
+
+    expect(failing.calls).toHaveLength(3); // only the first delivery dispatched
+    expect(store.rows.get("run:cart:Balogun:buyer:1:dispatch:1")?.attempts).toBe(1);
+    expect(replay.acked).toBe(true);
+    expect((await holds.byId(hold.id))?.status).toBe("held");
   });
 
   it("re-dispatches legs left pending by a crash between insert and dispatch", async () => {

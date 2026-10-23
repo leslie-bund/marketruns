@@ -77,7 +77,12 @@ export function createVendorIntegration(
   const config = flutterwaveConfig(env);
   const resolvers: RecipientResolver[] = [];
   if (deps.payoutAccounts) resolvers.push(new DbRecipientResolver(deps.payoutAccounts));
-  resolvers.push(new DevRecipientResolver(env.DEV_PAYOUT_RECIPIENTS));
+  // Test-account fallbacks only for a FLWSECK_TEST key: a live key must never
+  // pay a published mock account. Explicit DEV_PAYOUT_RECIPIENTS still apply.
+  const testKey = config.secretKey.startsWith("FLWSECK_TEST-");
+  resolvers.push(
+    new DevRecipientResolver(env.DEV_PAYOUT_RECIPIENTS, { includeTestDefaults: testKey }),
+  );
   const dispatcher: PaymentDispatcher & TransferStatusLookup = new FlutterwaveDispatcher(
     config,
     new ChainRecipientResolver(resolvers),

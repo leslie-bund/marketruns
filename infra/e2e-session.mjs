@@ -28,10 +28,13 @@
  * Usage:
  *   node infra/e2e-session.mjs [--edge http://localhost:8787]
  *
- * Env:
+ * Env (existing shell values win over infra/.dev.vars, which is loaded when present):
  *   EDGE_URL      edge base URL (default http://localhost:8787; --edge wins)
+ *   PAYMENTS_URL  payments worker base URL (default http://localhost:8790)
  *   DATABASE_URL  dev Postgres (default postgres://postgres:postgres@localhost:54322/market_runs)
  *   OPS_TOKEN     forwarded as x-ops-token when the edge guards ops routes
+ *   PAYMENT_DISPATCHER / FLUTTERWAVE_*  reported in preflight; the vendor key
+ *                 is inherited by the reconcile child
  *
  * Exit: 0 pass · 1 assertion failure · 2 environment/usage failure.
  * The last line is always E2E_SESSION_EXIT=<code> (RECONCILE_EXIT-style).
@@ -42,6 +45,11 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadDevVars } from "./dev-vars.mjs";
+
+// The workers read infra/.dev.vars; the Node scripts must see the same
+// dispatcher/vendor posture (and pass the key to the reconcile child).
+loadDevVars();
 
 // infra/ has no package.json; resolve the workspace dep from apps/payments.
 const require = createRequire(new URL("../apps/payments/package.json", import.meta.url));
@@ -254,13 +262,30 @@ function expectedDispatchLegs(outcome, ids) {
 
 /* --------------------------------------------------------------- preflight */
 
-async function preflight(edge, sql, maskedDb) {
+async function preflight(edge, paymentsUrl, sql, maskedDb) {
   section("preflight — stack must already be running");
   const health = await req("GET", `${edge}/healthz`, { timeoutMs: 3_000 });
   if (health.status !== 200) {
     envFail(`edge unreachable at ${edge}/healthz — start the stack: npx pnpm@9.15.4 dev:all`);
   }
   console.log(`  • edge ${edge} healthy`);
+
+  const paymentsHealth = await req("GET", `${paymentsUrl}/healthz`, { timeoutMs: 3_000 });
+  if (paymentsHealth.status !== 200 || typeof paymentsHealth.json?.dispatcher !== "string") {
+    envFail(
+      `payments unreachable at ${paymentsUrl}/healthz — start the stack: npx pnpm@9.15.4 dev:all` +
+        ` (active dispatcher is read from the worker, not assumed from .dev.vars)`,
+    );
+  }
+  const activeDispatcher = paymentsHealth.json.dispatcher;
+  const configuredDispatcher = process.env.PAYMENT_DISPATCHER ?? "stub";
+  console.log(
+    `  • payments ${paymentsUrl} healthy: dispatcher=${activeDispatcher}` +
+      (activeDispatcher === configuredDispatcher
+        ? ""
+        : ` (configured=${configuredDispatcher} — worker is stale or started with different env; restart the stack)`),
+  );
+
   try {
     await sql`SELECT 1`;
   } catch {
@@ -615,7 +640,7 @@ async function assertDb(label, sql, ctx) {
   const dispatchDeadline = Date.now() + DB_POLL_MS;
   let dispatches = [];
   for (;;) {
-    dispatches = await sql`SELECT idempotency_key, account, party_id, amount_kobo, status, attempts FROM payment_dispatches WHERE settlement_record_id = ${recordId} ORDER BY id`;
+    dispatches = await sql`SELECT idempotency_key, account, party_id, amount_kobo, status, attempts, failure_reason, failure_retryable FROM payment_dispatches WHERE settlement_record_id = ${recordId} ORDER BY id`;
     const allPresent = dispatches.length >= expectedDispatches.length;
     const allExecuted = allPresent && dispatches.every((d) => kobo(d.attempts) >= 1);
     if (allExecuted || Date.now() > dispatchDeadline) break;
@@ -628,15 +653,17 @@ async function assertDb(label, sql, ctx) {
       return row && row.account === leg.account && row.party_id === leg.party_id && kobo(row.amount_kobo) === leg.amount_kobo;
     });
   check(
-    `${label}: every settlement leg executed exactly once (payment_dispatches, per-leg idempotency keys)`,
+    `${label}: every settlement leg has exactly one dispatch row (payment_dispatches, per-leg idempotency keys)`,
     dispatchOk,
     `dispatches ${JSON.stringify(dispatches.map((d) => d.idempotency_key))}`,
   );
   const badStatus = dispatches.find((d) => !["pending", "queued", "sent", "completed"].includes(d.status) || kobo(d.attempts) < 1);
   check(
-    `${label}: dispatch legs executed cleanly (stub dispatcher: sent; no failures)`,
+    `${label}: dispatch legs executed cleanly (no failed rows)`,
     dispatchOk && !badStatus,
-    badStatus ? `status=${badStatus.status} attempts=${kobo(badStatus.attempts)} key=${badStatus.idempotency_key}` : undefined,
+    badStatus
+      ? `status=${badStatus.status} attempts=${kobo(badStatus.attempts)} retryable=${badStatus.failure_retryable} reason=${badStatus.failure_reason ?? "none"} key=${badStatus.idempotency_key}`
+      : undefined,
   );
 
   const refunds = await sql`SELECT count(*)::int AS n FROM payment_refunds WHERE settlement_record_id = ${recordId}`;
@@ -733,8 +760,16 @@ async function main() {
   try {
     console.log("== market-runs e2e session rehearsal (runbook S3 dispute + S4 abort) ==");
     console.log(`edge: ${opts.edge}   db: ${maskedDb}`);
+    const dispatcher = process.env.PAYMENT_DISPATCHER ?? "stub";
+    const testModeRaw = String(process.env.FLUTTERWAVE_TEST_MODE ?? "").trim();
+    const testMode = testModeRaw !== "" && testModeRaw !== "0" && testModeRaw.toLowerCase() !== "false";
+    console.log(
+      `config: dispatcher=${dispatcher}${dispatcher === "flutterwave" ? ` (${testMode ? "test mode" : "live mode"})` : ""}` +
+        `   checkout=${process.env.PAYMENTS_REQUIRED ? "gated" : "unpaid-dev"}`,
+    );
 
-    await preflight(opts.edge, sql, maskedDb);
+    const paymentsUrl = process.env.PAYMENTS_URL ?? "http://localhost:8790";
+    await preflight(opts.edge, paymentsUrl, sql, maskedDb);
     await ensureMarketOpen(opts.edge);
 
     const tag = Date.now().toString(36);

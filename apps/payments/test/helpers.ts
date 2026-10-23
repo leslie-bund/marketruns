@@ -67,6 +67,7 @@ export class InMemoryDispatchStore implements DispatchStore {
     row.status = result.status;
     row.providerRef = result.providerRef ?? null;
     row.failureReason = result.failureReason ?? null;
+    row.failureRetryable = result.status === "failed" ? result.retryable !== false : true;
     row.attempts += 1;
     row.updatedAt = new Date();
   }
@@ -76,6 +77,7 @@ export class InMemoryDispatchStore implements DispatchStore {
     if (!row) throw new Error(`dispatch ${id} is unknown`);
     row.status = update.status;
     if (update.failureReason !== undefined) row.failureReason = update.failureReason;
+    row.failureRetryable = update.retryable ?? (update.status !== "failed");
     row.updatedAt = new Date();
   }
 

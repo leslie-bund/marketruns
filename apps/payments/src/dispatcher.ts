@@ -33,6 +33,15 @@ export interface DispatchTransferResult {
   /** Vendor-neutral transfer reference for reconciliation; required unless failed. */
   providerRef?: string;
   failureReason?: string;
+  /**
+   * Only meaningful when status is "failed". `true` (the default when omitted)
+   * means a queue retry may succeed — network/5xx/ambiguous outcomes. `false`
+   * means a deterministic rejection (unknown recipient, provider validation,
+   * amount outside limits): retrying the same request cannot change it, so the
+   * consumer stops retrying, keeps the hold blocked, and leaves the row for an
+   * operator replay after the cause is fixed.
+   */
+  retryable?: boolean;
 }
 
 export interface PaymentDispatcher {

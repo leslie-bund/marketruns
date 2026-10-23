@@ -67,6 +67,12 @@ let banksCache: { fetchedAt: number; items: Array<{ code: string; name: string }
 
 export interface PaymentsAppOptions {
   /**
+   * Active dispatch integration label for GET /healthz (e.g. "stub" or the
+   * configured vendor kind). Ops truth only — no secrets, no money semantics.
+   * Defaults to "custom" for directly-constructed test apps.
+   */
+  dispatcherKind?: string;
+  /**
    * Transfer-outcome webhook support from the resolved dispatch integration
    * (vendor-neutral hooks). Absent or `secret: null` = POST
    * /webhooks/transfers refuses with 503.
@@ -148,7 +154,11 @@ async function routeRequest(
   const url = new URL(request.url);
 
   if (request.method === "GET" && url.pathname === "/healthz") {
-    return Response.json({ ok: true, service: "market-runs-payments" });
+    return Response.json({
+      ok: true,
+      service: "market-runs-payments",
+      dispatcher: options.dispatcherKind ?? "custom",
+    });
   }
 
   if (request.method === "GET" && url.pathname === "/dispatches") {
@@ -718,6 +728,7 @@ export default {
       const payoutAccounts = new DrizzlePayoutAccountStore(db);
       const integration = resolveDispatchIntegration(env, { payoutAccounts });
       return await handleFetch(new DrizzleDispatchStore(db), integration.dispatcher, request, {
+        dispatcherKind: env.PAYMENT_DISPATCHER ?? "stub",
         ...(integration.webhook !== undefined ? { webhook: integration.webhook } : {}),
         collections: { holds, refunds, gateway: integration.gateway ?? null },
         payouts: { accounts: payoutAccounts, gateway: integration.gateway ?? null },

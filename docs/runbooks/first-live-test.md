@@ -26,7 +26,7 @@ scenarios (see §6 incident scripts for sanctioned fallbacks).
 | 2 | Demo driver passes end-to-end | Ops console → "Dev demo driver" panel (collapsed at the bottom) | Buyer → seller → runner wire flow completes with no error feed entries |
 | 3 | Reconcile exits 0 modulo baseline | `node infra/reconcile.mjs` (full stack up so queued dispatches land first) | Exit 0. **If the two known 2026-10-15 baseline settlements are still present**, the only accepted exceptions are their 6 payout legs with no dispatch rows (created before the payments worker existed) — document them once in the session log and never re-litigate them. A fresh/reset dev DB will not have them. Any *other* FAIL, or any unexplained WARN, is no-go. |
 | 4 | Buyer collection key | `apps/mobile/.env` → `EXPO_PUBLIC_FLW_PUBLIC_KEY=FLWPUBK_TEST-…` | Set; unset silently degrades checkout to unpaid dev mode |
-| 5 | Payout dispatcher | `infra/.dev.vars` → `PAYMENT_DISPATCHER=flutterwave`, `FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-…`, and `FLUTTERWAVE_TEST_MODE=true` | Payments worker starts without throwing (a missing key throws at startup). `FLUTTERWAVE_TEST_MODE` (ADR-0026) appends the provider's mock-success suffix to transfer references so mock transfers complete in **~1 min instead of ~10** — strongly recommended for session day. The reconcile vendor check compares bare references, so transfers tie out as usual under test mode. |
+| 5 | Payout dispatcher | `infra/.dev.vars` → `PAYMENT_DISPATCHER=flutterwave`, `FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-…`, and `FLUTTERWAVE_TEST_MODE=true` | Payments worker starts without throwing (a missing key throws at startup). `FLUTTERWAVE_TEST_MODE` (ADR-0026) appends the provider's mock-success suffix so mock transfers complete in **~1 min instead of ~10**; reconcile strips the same suffix. **Known blocker (2026-10-23):** Flutterwave caps transfer references at 64 chars and the current idempotency keys are longer (66+; 75 with the suffix), so every real payout leg is rejected until the provider-reference alias lands (ADR-0024/0026, see `infra/README.md`). For session-day money scenarios use the stub dispatcher until that fix is in; do not promise real Flutterwave payouts. |
 | 6 | Webhook hash | `infra/.dev.vars` → `FLUTTERWAVE_WEBHOOK_SECRET_HASH=<random 64-hex>`, same value pasted in Flutterwave dashboard → Settings → Webhooks → Secret hash | Unset ⇒ the webhook route 503s; wrong ⇒ 401. (Optional in dev — see §1.3 for the fallback.) |
 | 7 | Face verifier | `infra/.dev.vars` → `FACE_VERIFIER=smileid`, `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`, `SMILEID_ENV=sandbox` (default) | Identity worker starts without throwing (`FACE_VERIFIER=smileid` without keys throws at startup). **No Smile ID credentials yet?** Leave `FACE_VERIFIER` unset (stub default), restart, and record "identity stubbed" in the session log — the trust/money scenarios stay runnable; live KYC is not exercised. |
 | 8 | Paid-flow gate | `infra/.dev.vars` → `PAYMENTS_REQUIRED=true` | Edge requires a confirmed payment hold at checkout. **Only set this when testing the paid flow** — with it unset, checkout is the unpaid dev posture. |
@@ -180,8 +180,11 @@ accounts — the resolve step returns the canned name the bank "returns":
 - Bank: **044 — Access Bank**
 - Account numbers: **0690000031**, **0690000032**, **0690000033**
 
-(These are also the fallback recipients for the demo parties `seller:amina`,
-`runner:internal`, `platform`.)
+(These are also the fallback recipients for the demo seed's seller stores —
+`Amina's Fresh Store`, `Mama Ngozi Provisions`, `Emeka Phones & Accessories` —
+plus `runner:internal` and `platform`. Seller settlement legs carry the store
+display name at this stage, not the participant id; see the known Flutterwave
+reference-cap blocker in `infra/README.md` before relying on real payouts.)
 
 ### Buyer test cards
 

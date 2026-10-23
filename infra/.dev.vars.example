@@ -50,9 +50,13 @@
 # FLUTTERWAVE_TEST_MODE=1
 
 # Dev payout recipients (JSON, keyed by partyId). Without it, the demo
-# parties fall back to Flutterwave's documented TEST bank accounts
-# (Access Bank 044 / 0690000031-33 — test mode only, no real money moves):
-# DEV_PAYOUT_RECIPIENTS={"seller:amina":{"bank":"044","account":"0690000031","name":"Amina"},"runner:internal":{"bank":"044","account":"0690000032"},"platform":{"bank":"044","account":"0690000033"}}
+# seed's seller stores (the settlement leg's party id is the store display
+# name at this stage — e.g. "Amina's Fresh Store"), runner:internal, and
+# platform fall back to Flutterwave's documented TEST bank accounts
+# (Access Bank 044 / 0690000031-33 — test keys only, no real money moves).
+# The fallback is disabled for live keys; explicit entries still apply.
+# Example shape (seller key must match the store display name exactly):
+# DEV_PAYOUT_RECIPIENTS={"<store display name>":{"bank":"044","account":"0690000031","name":"Test Seller"},"runner:internal":{"bank":"044","account":"0690000032"},"platform":{"bank":"044","account":"0690000033"}}
 
 # Local Postgres (dev) — the payments/archive/identity workers read this:
 # DATABASE_URL=postgres://postgres:postgres@localhost:54322/market_runs
