@@ -67,8 +67,6 @@ export default {
       const app = createNotificationsApp(new DrizzleNotificationStore(db), createProviders({
         resendApiKey: env.RESEND_API_KEY,
         resendFromEmail: env.RESEND_FROM_EMAIL,
-        identityUrl: env.IDENTITY_URL,
-        identityInternalToken: env.IDENTITY_INTERNAL_TOKEN,
         edgeUrl: env.EDGE_URL,
         edgeInternalToken: env.NOTIFICATION_INTERNAL_TOKEN,
       }), { internalToken: env.NOTIFICATION_INTERNAL_TOKEN });

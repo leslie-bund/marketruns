@@ -3,8 +3,9 @@ import { verifySessionToken } from "@market-runs/domain";
 import { NotificationSchema } from "@market-runs/proto";
 import type { Env } from "../../config/env.js";
 import { participantObjectName } from "../../do/participant-do.js";
-import { errorResponse } from "../../do/runtime/index.js";
+import { errorResponse, isWebSocketUpgrade } from "../../do/runtime/index.js";
 import { internalPost } from "../../do/transport.js";
+import { coreRegistry, headerAuthAllowed } from "../../registry/index.js";
 import type { Participant } from "../middleware/participant.js";
 
 const DEV_SESSION_SECRET = "market-runs-dev-session-secret";
@@ -12,12 +13,14 @@ const DEFAULT_NOTIFICATIONS_URL = "http://localhost:8791";
 
 async function notificationParticipant(c: Context<{ Bindings: Env }>): Promise<Participant> {
   const resolved = c.get("participant");
-  if (resolved.source !== "anonymous") return resolved;
+  if (resolved.source !== "anonymous" && resolved.source !== "unauthenticated") return resolved;
   // Browser WebSockets cannot set Authorization. The same HMAC session is accepted
-  // as access_token over the TLS socket; no participant id is accepted from the query.
+  // as access_token only on a WebSocket upgrade; never on an ordinary HTTP request.
+  if (!isWebSocketUpgrade(c.req.raw)) return resolved;
   const token = c.req.query("access_token");
-  if (token) {
-    const result = await verifySessionToken(token, c.env.IDENTITY_SESSION_SECRET ?? DEV_SESSION_SECRET);
+  const secret = c.env.IDENTITY_SESSION_SECRET ?? (headerAuthAllowed(c.env) ? DEV_SESSION_SECRET : undefined);
+  if (token && secret) {
+    const result = await verifySessionToken(token, secret);
     if (result.ok && ["buyer", "seller", "runner"].includes(result.payload.role)) {
       return { id: result.payload.participantId, role: result.payload.role as Participant["role"], source: "session" };
     }
@@ -34,7 +37,9 @@ export function notificationsRoute(): Hono<{ Bindings: Env }> {
 
   app.get("/live", async (c) => {
     const who = await notificationParticipant(c);
-    if (who.source === "anonymous" || who.role === "ops") return errorResponse(401, "authentication-required", "a participant session is required for live notifications");
+    if (who.source === "anonymous" || who.source === "unauthenticated" || who.role === "ops") {
+      return errorResponse(401, "authentication-required", "a participant session is required for live notifications");
+    }
     const headers = new Headers(c.req.raw.headers);
     headers.set("x-participant-id", who.id);
     return participantStub(c.env, who.id).fetch(new Request("http://do/notifications/live", {
@@ -44,8 +49,10 @@ export function notificationsRoute(): Hono<{ Bindings: Env }> {
   });
 
   app.get("/", async (c) => {
-    const who = await notificationParticipant(c);
-    if (who.source === "anonymous" || who.role === "ops") return errorResponse(401, "authentication-required", "a participant identity is required");
+    const who = c.get("participant");
+    if (who.source === "anonymous" || who.source === "unauthenticated" || who.role === "ops") {
+      return errorResponse(401, "authentication-required", "a participant identity is required");
+    }
     const target = new URL("/notifications", c.env.NOTIFICATIONS_URL ?? DEFAULT_NOTIFICATIONS_URL);
     for (const key of ["limit", "offset", "unread"]) {
       const value = c.req.query(key);
@@ -61,7 +68,9 @@ export function notificationsRoute(): Hono<{ Bindings: Env }> {
 
   app.post("/read", async (c) => {
     const who = c.get("participant");
-    if (who.source === "anonymous" || who.role === "ops") return errorResponse(401, "authentication-required", "a participant identity is required");
+    if (who.source === "anonymous" || who.source === "unauthenticated" || who.role === "ops") {
+      return errorResponse(401, "authentication-required", "a participant identity is required");
+    }
     return fetch(`${c.env.NOTIFICATIONS_URL ?? DEFAULT_NOTIFICATIONS_URL}/notifications/read`, {
       method: "POST",
       headers: {
@@ -89,6 +98,21 @@ export function internalNotificationsRoute(): Hono<{ Bindings: Env }> {
     const parsed = NotificationSchema.safeParse(body);
     if (!parsed.success) return errorResponse(400, "invalid-body", "notification failed schema validation");
     return participantStub(c.env, parsed.data.recipientId).fetch(internalPost("/notify", parsed.data));
+  });
+  return app;
+}
+
+/** Minimal internal contact projection: email for receipts/security only, never the full participant profile. */
+export function notificationContactRoute(): Hono<{ Bindings: Env }> {
+  const app = new Hono<{ Bindings: Env }>();
+  app.get("/:participantId", async (c) => {
+    const configured = c.env.NOTIFICATION_INTERNAL_TOKEN;
+    if ((!configured && !headerAuthAllowed(c.env)) || (configured && c.req.header("x-notification-internal") !== configured)) {
+      return errorResponse(401, "unauthorized", "valid notification internal authentication is required");
+    }
+    const participant = await coreRegistry(c.env).participant(c.req.param("participantId"));
+    if (!participant?.email) return errorResponse(404, "contact-not-found", "participant has no notification email");
+    return c.json({ email: participant.email });
   });
   return app;
 }

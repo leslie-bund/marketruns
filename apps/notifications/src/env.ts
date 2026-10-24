@@ -4,9 +4,6 @@ export interface Env extends DatabaseEnv {
   NOTIFICATION_INTERNAL_TOKEN?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM_EMAIL?: string;
-  /** Identity-owned contact directory; never accepts an email address from a client. */
-  IDENTITY_URL?: string;
-  IDENTITY_INTERNAL_TOKEN?: string;
-  /** Edge internal realtime delivery endpoint. */
+  /** Edge internal contact lookup and realtime delivery endpoints. */
   EDGE_URL?: string;
 }
