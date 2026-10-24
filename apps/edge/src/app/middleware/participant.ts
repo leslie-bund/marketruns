@@ -82,16 +82,14 @@ export function participant(): MiddlewareHandler<{ Bindings: Env }> {
   };
 }
 
-/**
- * Guard for the ops console API. Deployed environments set OPS_TOKEN
- * (wrangler secret) and every adjustment request must carry it as
- * `x-ops-token`. Local dev leaves it unset: the guard admits a clearly
- * labelled local operator so the console keeps working out of the box.
- */
+// Ops authentication intentionally does not live in this participant seam.
+// See ops-console/auth.ts: Better Auth protects OPS ONLY.
+
+/** @deprecated Legacy development guard retained for old direct-route tests. */
 export function requireOps(): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
     const token = c.env.OPS_TOKEN;
-    if (token !== undefined && token !== "") {
+    if (token) {
       if (c.req.header("x-ops-token") !== token) {
         return c.json({ error: "forbidden", message: "a valid x-ops-token is required for ops adjustments" }, 403);
       }

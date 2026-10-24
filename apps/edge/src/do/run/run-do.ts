@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { TelemetryReporter } from "../telemetry.js";
 import { DISPUTE_WINDOW_MS, HANDOFF_AUTO_CONFIRM_MS, settle } from "@market-runs/domain";
 import type { SettlementInput } from "@market-runs/domain";
 import { buildSettlementInput } from "./settlement.js";
@@ -54,9 +55,11 @@ import {
  */
 export class RunDO extends DurableObject<Env> {
   private state: RunState = { legs: [], handoffs: [], settlementReleased: false, disputed: false };
+  private telemetry: TelemetryReporter;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.telemetry = new TelemetryReporter(ctx, "RunDO");
   }
 
   private now(): number {
@@ -70,7 +73,10 @@ export class RunDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const path = url.pathname.endsWith("/") && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
-    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx);
+    const objectName = this.ctx.id.name ?? "unknown";
+    this.telemetry.beat(this.env, objectName, this.state.run?.market);
+    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx, { authenticated: request.headers.get("x-ops-observer") === "1", role: request.headers.get("x-ops-role") ?? undefined });
+    if (request.method === "GET" && path === "/ops/telemetry") return this.telemetry.snapshot(this.env, objectName, this.state.run?.market);
 
     if (request.method === "POST" && path === "/seed") {
       const parsed = await parseInternal(request, SeedRunRequestSchema);
@@ -733,10 +739,12 @@ export class RunDO extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     handleWebSocketMessage(ws, message);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.run?.market, true);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     handleWebSocketClose(ws, code, reason);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.run?.market, true);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {

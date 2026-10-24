@@ -1,6 +1,7 @@
 name = "market-runs-edge"
 main = "../apps/edge/src/index.ts"
 compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
 
 [durable_objects]
 bindings = [

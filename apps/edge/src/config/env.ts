@@ -57,10 +57,16 @@ export interface Env {
    * deployment. Unset = routing disabled, static floor-rate estimates apply.
    */
   OSRM_BASE_URL?: string;
-  /**
-   * Shared secret guarding POST /ops/api/* adjustments. Unset in local dev
-   * (the console is open); set via `wrangler secret put OPS_TOKEN` in any
-   * deployed environment — see ADR-0015.
-   */
+  /** Postgres for the dedicated ops app (Hyperdrive in deployed Workers). */
+  DATABASE_URL?: string;
+  HYPERDRIVE?: { connectionString: string };
+  /** Better Auth secret, minimum 32 characters; OPS ONLY, never participant auth. */
+  OPS_AUTH_SECRET?: string;
+  /** Public edge origin used by Better Auth for cookies/origin checks. */
+  OPS_BASE_URL?: string;
+  /** Explicit local-only switches; both must be true for legacy test identity. */
+  OPS_LOCAL_DEV?: string;
+  OPS_LEGACY_DEV?: string;
+  /** Legacy local test token only; Better Auth is the deployed ops guard. */
   OPS_TOKEN?: string;
 }

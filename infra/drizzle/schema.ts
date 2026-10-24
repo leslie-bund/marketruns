@@ -140,6 +140,9 @@ export const markets = pgTable(
     /** Daily local opening/closing clock times; the close gate is enforced by MarketDO. */
     opensAt: time("opens_at").notNull(),
     closesAt: time("closes_at").notNull(),
+    /** Full MarketDO configuration; edge validates before every write. */
+    config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+    active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -159,6 +162,8 @@ export const stores = pgTable(
       .notNull()
       .references(() => markets.id),
     name: text("name").notNull(),
+    /** Fixed pickup location shown to the Runner. */
+    exchangePoint: text("exchange_point").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -805,3 +810,104 @@ export const faceAuthAttempts = pgTable(
     ),
   ],
 );
+
+
+/* ------------------------------------------------------------------------ */
+/* Production-pilot ops application (Better Auth is OPS ONLY).               */
+/* Participant face/device auth above is deliberately unrelated.            */
+/* ------------------------------------------------------------------------ */
+
+export const OPS_ROLES = ["viewer", "operator", "admin"] as const;
+
+export const opsUsers = pgTable("user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  image: text("image"),
+  role: text("role").notNull().default("viewer"),
+  mustChangePassword: boolean("must_change_password").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [check("ops_user_role_valid", sql`${table.role} IN ('viewer', 'operator', 'admin')`)]);
+
+export const opsSessions = pgTable("session", {
+  id: text("id").primaryKey(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  token: text("token").notNull().unique(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  userId: text("user_id").notNull().references(() => opsUsers.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const opsAccounts = pgTable("account", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull(),
+  providerId: text("provider_id").notNull(),
+  userId: text("user_id").notNull().references(() => opsUsers.id, { onDelete: "cascade" }),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  idToken: text("id_token"),
+  accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+  scope: text("scope"),
+  password: text("password"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const opsVerifications = pgTable("verification", {
+  id: text("id").primaryKey(),
+  identifier: text("identifier").notNull(),
+  value: text("value").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const runnerPools = pgTable("runner_pools", {
+  id: text("id").primaryKey(),
+  marketId: text("market_id").notNull().references(() => markets.id),
+  name: text("name").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("runner_pools_market_name_unique").on(table.marketId, table.name)]);
+
+export const runnerPoolMemberships = pgTable("runner_pool_memberships", {
+  poolId: text("pool_id").notNull().references(() => runnerPools.id, { onDelete: "cascade" }),
+  runnerId: text("runner_id").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("runner_pool_membership_unique").on(table.poolId, table.runnerId)]);
+
+/** Append-only audit; there is deliberately no update/delete API. */
+export const opsAudit = pgTable("ops_audit", {
+  id: text("id").primaryKey(),
+  operatorId: text("operator_id").notNull(),
+  operatorEmail: text("operator_email").notNull(),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  summary: text("summary").notNull(),
+  requestId: text("request_id"),
+  outcome: text("outcome").notNull(),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("ops_audit_created_at_idx").on(table.createdAt)]);
+
+/** One bounded upserted row per reported DO instance; never a namespace list. */
+export const doTelemetry = pgTable("do_telemetry", {
+  objectName: text("object_name").primaryKey(),
+  instanceId: text("instance_id").notNull(),
+  objectClass: text("object_class").notNull(),
+  market: text("market"),
+  connectionCount: integer("connection_count").notNull().default(0),
+  connections: jsonb("connections").notNull().default(sql`'[]'::jsonb`),
+  lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull(),
+  alarmAt: timestamp("alarm_at", { withTimezone: true }),
+  reportedAt: timestamp("reported_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("do_telemetry_reported_at_idx").on(table.reportedAt)]);

@@ -78,6 +78,9 @@ export function eventTopics(event: ServerEvent): string[] {
 
 interface WsAttachment {
   topics?: string[];
+  authenticated?: boolean;
+  role?: string;
+  connectedAt?: number;
 }
 
 /** The topics a hibernated socket recorded via `subscribe` ([] when none / unreadable). */
@@ -114,12 +117,18 @@ export function isWebSocketUpgrade(request: Request): boolean {
  * Accept a hibernatable WebSocket upgrade (AGENTS.md: WebSocket hibernation).
  * Returns the 101 response with the client end of the pair.
  */
-export function acceptHibernatedWebSocket(ctx: DurableObjectState): Response {
+export function acceptHibernatedWebSocket(
+  ctx: DurableObjectState,
+  identity: { authenticated?: boolean; role?: string | undefined } = {},
+): Response {
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
   ctx.acceptWebSocket(server);
-  server.serializeAttachment({ topics: [] as string[] });
+  server.serializeAttachment({
+    topics: [] as string[], authenticated: identity.authenticated === true,
+    ...(identity.role ? { role: identity.role } : {}), connectedAt: Date.now(),
+  });
   return new Response(null, { status: 101, webSocket: client });
 }
 
@@ -148,8 +157,11 @@ export function handleWebSocketMessage(socket: WebSocket, message: string | Arra
   }
   if (data.type === "subscribe") {
     if (Array.isArray(data.topics)) {
+      let current: WsAttachment = {};
+      try { current = (socket.deserializeAttachment() as WsAttachment | null) ?? {}; } catch { /* retain safe defaults */ }
       socket.serializeAttachment({
-        topics: data.topics.filter((topic): topic is string => typeof topic === "string"),
+        ...current,
+        topics: data.topics.filter((topic): topic is string => typeof topic === "string").slice(0, 100),
       });
     }
     safeSend(socket, JSON.stringify({ type: "subscribed" }));

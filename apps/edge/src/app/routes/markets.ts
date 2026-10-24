@@ -13,7 +13,9 @@ import { errorResponse } from "../../do/runtime/index.js";
 import { OfferProductRequestSchema } from "../../do/schemas.js";
 import { internalPost } from "../../do/transport.js";
 import { cartIdForBuyer } from "../../config/ids.js";
-import { requireOps } from "../middleware/participant.js";
+import { requireOpsRole, withOpsAuth } from "../../ops-console/auth.js";
+import { createOpsDatabase, databaseConfigured } from "../../ops-console/db.js";
+import { markets as marketRows } from "../../../../../infra/drizzle/schema.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 
 /**
@@ -49,8 +51,16 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
    * KV index heals itself on join).
    */
   app.get("/", async (c) => {
+    const filter = c.req.query("market")?.trim().toLowerCase();
+    if (databaseConfigured(c.env)) {
+      const { db, client } = createOpsDatabase(c.env);
+      try {
+        const rows = await db.select().from(marketRows);
+        return c.json({ markets: rows.filter((row) => row.active && (!filter || row.id.toLowerCase() === filter || row.name.toLowerCase() === filter)).map((row) => ({ id: row.id, name: row.name })) });
+      } finally { await client.end(); }
+    }
     const ids = await listMarketIds(c.env.MARKET_CONFIG);
-    return c.json({ markets: ids.map((id) => ({ id })) });
+    return c.json({ markets: ids.filter((id) => !filter || id.toLowerCase() === filter).map((id) => ({ id })) });
   });
 
   /** A seller offers a product in response to an intent. */
@@ -182,7 +192,7 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
    * forward them to the MarketDO unguarded. Client reads (GET /config) and
    * every other scope operation stay untouched.
    */
-  app.post("/:market/config", requireOps(), (c) =>
+  app.post("/:market/config", withOpsAuth(), requireOpsRole("admin"), (c) =>
     forwardTo(c, marketStub(c), "/config", { extraHeaders: { "x-market-id": decodeURIComponent(c.req.param("market") ?? "") } }),
   );
 

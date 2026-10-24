@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Hono } from "hono";
+import type { Context, Next } from "hono";
 import type { Env } from "../config/env.js";
 import { errorResponse, jsonResponse } from "../do/runtime/index.js";
 import { OpsSettleRequestSchema } from "../do/schemas.js";
@@ -9,7 +10,13 @@ import { correlationHeaders } from "../app/middleware/request-id.js";
 import { OPS_CONSOLE_HTML } from "./html.js";
 import { archiveAdminRoutes } from "./archive-proxy.js";
 import { identityAdminRoutes } from "./identity-admin.js";
+import { managementRoutes } from "./management.js";
+import { requireOpsRole } from "./auth.js";
+import { auditOps, listOpsAudit } from "./audit.js";
+import { OPS_LOGIN_HTML } from "./login.js";
+import { telemetryRoutes } from "./telemetry.js";
 import { marketsAdminRoutes } from "./markets-admin.js";
+import { databaseConfigured } from "./db.js";
 
 /**
  * Minimal ops console (ADR-0013), mounted at /ops. A single embedded HTML
@@ -27,19 +34,14 @@ import { marketsAdminRoutes } from "./markets-admin.js";
 export function opsConsole(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
+  app.get("/login", (c) => new Response(OPS_LOGIN_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }));
   app.get("/", (c) => {
-    const token = c.env.OPS_TOKEN;
-    if (token !== undefined && token !== "") {
-      const presented = c.req.header("x-ops-token") ?? c.req.query("token");
-      if (presented !== token) {
-        return new Response(OPS_FORBIDDEN_HTML, {
-          status: 403,
-          headers: { "content-type": "text/html; charset=utf-8" },
-        });
-      }
-    }
-    return new Response(OPS_CONSOLE_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
+    const identity = c.get("opsIdentity");
+    if (identity?.mustChangePassword) return c.redirect("/ops/login", 302);
+    return new Response(OPS_CONSOLE_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
   });
+  app.get("/api/session", (c) => c.json({ operator: c.get("opsIdentity") }));
+  app.get("/api/audit", listOpsAudit);
 
   app.get("/api/overview", async (c) => {
     const market = c.req.query("market") ?? "Balogun";
@@ -62,7 +64,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
   });
 
-  app.post("/api/runs/:runId/settle", async (c) => {
+  app.post("/api/runs/:runId/settle", requireOpsRole("admin"), async (c) => {
     const runId = decodeURIComponent(c.req.param("runId"));
     let raw: unknown;
     try {
@@ -82,6 +84,16 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
         body: JSON.stringify(parsed.data),
       }),
     );
+    if (response.ok) await auditOps(c, { action: "run.settle", entityType: "run", entityId: runId, summary: `Applied ${parsed.data.mode} settlement decision to ${runId}`, metadata: { mode: parsed.data.mode, reason: parsed.data.reason ?? null } });
+    return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
+  });
+
+  app.post("/api/admin/payments/:dispatchId/replay", requireOpsRole("admin"), async (c) => {
+    const id = decodeURIComponent(c.req.param("dispatchId"));
+    const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
+    const response = await fetch(new URL(`/dispatches/${encodeURIComponent(id)}/replay`, base), { method: "POST", headers: correlationHeaders(c) }).catch(() => null);
+    if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
+    if (response.ok) await auditOps(c, { action: "payment-dispatch.replay", entityType: "payment-dispatch", entityId: id, summary: `Replayed failed dispatch ${id} through the existing dispatcher` });
     return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
   });
 
@@ -107,7 +119,22 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
 
   app.route("/api", archiveAdminRoutes());
   app.route("/api", identityAdminRoutes());
-  app.route("/api", marketsAdminRoutes());
+
+  // Explicit no-database development keeps the original KV/DO market admin
+  // usable. Deployed Better Auth always has Postgres and takes the audited
+  // management routes below instead.
+  const legacyMarkets = marketsAdminRoutes();
+  const marketFallback = async (c: Context<{ Bindings: Env }>, next: Next) => {
+    if (databaseConfigured(c.env)) return next();
+    const url = new URL(c.req.url);
+    const api = url.pathname.indexOf("/api/");
+    const rebased = `${url.origin}${url.pathname.slice(api + 4)}${url.search}`;
+    return legacyMarkets.fetch(new Request(rebased, c.req.raw), c.env);
+  };
+  app.use("/api/markets", marketFallback);
+  app.use("/api/markets/*", marketFallback);
+  app.route("/api", managementRoutes());
+  app.route("/api", telemetryRoutes());
 
   // Trailing-slash grace: the console is mounted exactly at /ops, so /ops/
   // (and any other trailing-slash variant) used to fall through to the app
@@ -123,12 +150,6 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
   return app;
 }
 
-/** Minimal refusal page for the console HTML when OPS_TOKEN is set and missing/wrong. */
-const OPS_FORBIDDEN_HTML = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>403 — Ops Console</title></head>
-<body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;min-height:100vh">
-<div><h1>403</h1><p>A valid ops token is required. Reopen the console as <code>/ops/?token=&hellip;</code>.</p></div>
-</body></html>`;
 
 async function opsOverview(env: Env, market: string, buyerId?: string, requestId?: string): Promise<Response> {
   const correlation = requestId !== undefined ? { headers: { "x-request-id": requestId } } : {};
