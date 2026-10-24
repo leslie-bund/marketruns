@@ -13,6 +13,10 @@ max_retries = 5
 # stays 'failed' and is re-runnable via POST /dispatches/:id/replay.
 dead_letter_queue = "payment-dispatch-dlq"
 
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "notification-events"
+
 [vars]
 # "stub" keeps zero-secret dev working. The Flutterwave dispatcher is chosen
 # via infra/.dev.vars (PAYMENT_DISPATCHER = "flutterwave" + the vendor keys —

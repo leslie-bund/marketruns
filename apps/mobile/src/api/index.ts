@@ -10,3 +10,4 @@ export * from "./auth";
 export * from "./capture";
 export * from "./cart-state";
 export * from "./payments";
+export * from "./notifications";

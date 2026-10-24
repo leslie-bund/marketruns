@@ -204,7 +204,7 @@ export class MarketDO extends DurableObject<Env> {
     await this.scheduleAlarm();
 
     const event: ServerEvent = { type: "intent.recorded", intent };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -231,7 +231,7 @@ export class MarketDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, this.state);
 
     const event: ServerEvent = { type: "store.recorded", store };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -256,7 +256,7 @@ export class MarketDO extends DurableObject<Env> {
       role: command.role,
       joinedAt: now,
     };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -497,7 +497,12 @@ export class MarketDO extends DurableObject<Env> {
     const now = this.now();
     const expired = this.state.intents.filter((stored) => stored.expiresAt <= now);
     for (const stored of expired) {
-      broadcast(this.ctx, { type: "intent.expired", intentId: stored.intent.id, expiredAt: now });
+      broadcast(this.ctx, this.env, {
+        type: "intent.expired",
+        intentId: stored.intent.id,
+        expiredAt: now,
+        ...(stored.intent.buyerId ? { buyerId: stored.intent.buyerId } : {}),
+      });
     }
     this.state.intents = this.state.intents.filter((stored) => stored.expiresAt > now);
     // The discovery index dies with its intent: drop intentProducts entries

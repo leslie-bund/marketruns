@@ -70,6 +70,8 @@ export const RunStartedSchema = z.object({
    * references, not registry ids. Powers seller run discovery.
    */
   storeIds: z.array(z.string().min(1)),
+  /** Participant ids resolved from accepted products when available; storeIds are never treated as participants. */
+  sellerParticipantIds: z.array(z.string().min(1)).optional(),
   /** Correlation id of the checkout request that started the run. Append-only. */
   requestId: RequestIdSchema.optional(),
 });

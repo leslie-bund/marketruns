@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Participant, ParticipantOnboarded, ServerEvent } from "@market-runs/proto";
+import { NotificationSchema, type NotificationCreated } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
 import {
   acceptHibernatedWebSocket,
@@ -13,6 +14,7 @@ import {
   jsonResponse,
   notFound,
   parseClientCommand,
+  safeSend,
 } from "./runtime/index.js";
 import { STATE_KEY } from "./state.js";
 import { devIdentityVerifier, hashIdDocument } from "../kyc/verifier.js";
@@ -94,6 +96,20 @@ export class ParticipantDO extends DurableObject<Env> {
       if (command instanceof Response) return command;
       return internalErrorGuard(() => this.join(command.market, command.participantId));
     }
+    if (request.method === "POST" && path === "/notify") {
+      let body: unknown;
+      try { body = await request.json(); } catch { return jsonResponse({ delivered: 0 }); }
+      const parsed = NotificationSchema.safeParse(body);
+      if (!parsed.success) return notFound("notification failed validation");
+      const frame: NotificationCreated = { type: "notification.created", notification: parsed.data };
+      const payload = JSON.stringify(frame);
+      let delivered = 0;
+      for (const socket of this.ctx.getWebSockets()) {
+        safeSend(socket, payload);
+        delivered += 1;
+      }
+      return jsonResponse({ delivered });
+    }
     if (request.method === "GET" && path.startsWith("/participant/")) {
       const id = decodeURIComponent(path.slice("/participant/".length));
       const participant =
@@ -150,7 +166,7 @@ export class ParticipantDO extends DurableObject<Env> {
     this.participant = participant;
 
     const event: ServerEvent = { type: "participant.recorded", participant };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -164,7 +180,7 @@ export class ParticipantDO extends DurableObject<Env> {
       await this.ctx.storage.put(STATE_KEY, this.participant);
     }
     const event: ServerEvent = { type: "participant.recorded", participant: this.participant };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 

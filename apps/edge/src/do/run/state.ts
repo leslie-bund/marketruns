@@ -35,6 +35,8 @@ export interface RunState {
   runnerId?: string | null;
   startedAt?: number;
   storeIds?: string[];
+  /** Seller participants resolved from accepted products; legacy store-only runs omit it. */
+  sellerParticipantIds?: string[];
   handoffs: InternalHandoff[];
   finalDeliveryAt?: number;
   settlementReleased: boolean;

@@ -35,6 +35,38 @@ CREATE TABLE "internal_runner_pools" (
 	"joined_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "notification_outbox" (
+	"id" text PRIMARY KEY NOT NULL,
+	"notification_id" text NOT NULL,
+	"channel" text NOT NULL,
+	"status" text DEFAULT 'pending' NOT NULL,
+	"attempts" integer DEFAULT 0 NOT NULL,
+	"available_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"last_error" text,
+	"provider_ref" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "notification_outbox_channel_valid" CHECK ("notification_outbox"."channel" IN ('websocket', 'email')),
+	CONSTRAINT "notification_outbox_status_valid" CHECK ("notification_outbox"."status" IN ('pending', 'delivered', 'failed', 'skipped')),
+	CONSTRAINT "notification_outbox_attempts_nonnegative" CHECK ("notification_outbox"."attempts" >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "notifications" (
+	"id" text PRIMARY KEY NOT NULL,
+	"recipient_id" text NOT NULL,
+	"source_event_id" text NOT NULL,
+	"source_event_type" text NOT NULL,
+	"dedupe_key" text NOT NULL,
+	"category" text NOT NULL,
+	"title" text NOT NULL,
+	"body" text NOT NULL,
+	"deep_link" text,
+	"data" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"read_at" timestamp with time zone,
+	CONSTRAINT "notifications_category_valid" CHECK ("notifications"."category" IN ('marketplace', 'payment', 'security', 'system'))
+);
+--> statement-breakpoint
 CREATE TABLE "participant_profiles" (
 	"participant_id" text PRIMARY KEY NOT NULL,
 	"role" text NOT NULL,
@@ -75,6 +107,7 @@ ALTER TABLE "stores" ADD COLUMN "exchange_point" text DEFAULT '' NOT NULL;--> st
 ALTER TABLE "stores" ADD COLUMN "shop_items" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "stores" ADD COLUMN "joined_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
 ALTER TABLE "internal_runner_pools" ADD CONSTRAINT "internal_runner_pools_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "notification_outbox" ADD CONSTRAINT "notification_outbox_notification_id_notifications_id_fk" FOREIGN KEY ("notification_id") REFERENCES "public"."notifications"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seller_presence" ADD CONSTRAINT "seller_presence_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seller_presence" ADD CONSTRAINT "seller_presence_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "biometric_consent_participant_idx" ON "biometric_consent_receipts" USING btree ("participant_id");--> statement-breakpoint
@@ -82,6 +115,12 @@ CREATE UNIQUE INDEX "identity_access_proofs_hash_unique" ON "identity_access_pro
 CREATE INDEX "identity_access_proofs_participant_idx" ON "identity_access_proofs" USING btree ("participant_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "internal_runner_pools_membership_unique" ON "internal_runner_pools" USING btree ("market_id","participant_id");--> statement-breakpoint
 CREATE INDEX "internal_runner_pools_participant_idx" ON "internal_runner_pools" USING btree ("participant_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "notification_outbox_notification_channel_unique" ON "notification_outbox" USING btree ("notification_id","channel");--> statement-breakpoint
+CREATE INDEX "notification_outbox_delivery_idx" ON "notification_outbox" USING btree ("status","available_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "notifications_recipient_dedupe_unique" ON "notifications" USING btree ("recipient_id","dedupe_key");--> statement-breakpoint
+CREATE INDEX "notifications_recipient_created_idx" ON "notifications" USING btree ("recipient_id","created_at");--> statement-breakpoint
+CREATE INDEX "notifications_recipient_read_idx" ON "notifications" USING btree ("recipient_id","read_at");--> statement-breakpoint
+CREATE INDEX "notifications_source_event_idx" ON "notifications" USING btree ("source_event_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "participant_profiles_email_unique" ON "participant_profiles" USING btree ("email");--> statement-breakpoint
 CREATE INDEX "participant_profiles_kyc_status_idx" ON "participant_profiles" USING btree ("kyc_status");--> statement-breakpoint
 CREATE UNIQUE INDEX "seller_presence_participant_market_unique" ON "seller_presence" USING btree ("market_id","participant_id");--> statement-breakpoint

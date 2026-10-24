@@ -47,6 +47,8 @@ export type Product = z.infer<typeof ProductSchema>;
 export const ProductOfferedSchema = z.object({
   type: z.literal("product.offered"),
   product: ProductSchema,
+  /** Buyer resolved from the ProductDO's stored intent, never supplied as a notification target by clients. */
+  buyerId: z.string().min(1).optional(),
   /**
    * The negotiation thread so far (initial offer plus every adjustment).
    * Carried on the ProductDO read response so clients can render history;
@@ -74,5 +76,7 @@ export const NegotiationPriceAdjustedSchema = z.object({
   by: z.enum(["buyer", "seller"]),
   priceKobo: KoboSchema,
   at: TimestampSchema,
+  buyerId: z.string().min(1).optional(),
+  sellerParticipantId: z.string().min(1).optional(),
 });
 export type NegotiationPriceAdjusted = z.infer<typeof NegotiationPriceAdjustedSchema>;

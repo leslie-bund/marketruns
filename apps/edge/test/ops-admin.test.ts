@@ -183,7 +183,7 @@ describe("ops zone admin", () => {
   it("creates a zone, lists it with its config, and rejects duplicates with 409", async () => {
     const config = defaultMarketConfig(Date.now());
     const created = await postJson("/ops/api/markets", { name: "Mz Zone", ...config });
-    expect(created.status).toBe(201);
+    expect(created.status, await created.clone().text()).toBe(201);
     const createdBody = await readJson(created);
     expect((createdBody.market as { id: string }).id).toBe("Mz Zone");
     expect(createdBody.indexed).toBe(true);

@@ -1,0 +1,20 @@
+name = "market-runs-notifications"
+main = "../apps/notifications/src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[queues.consumers]]
+queue = "notification-events"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "notification-events-dlq"
+
+[vars]
+EDGE_URL = "http://localhost:8787"
+IDENTITY_URL = "http://localhost:8789"
+
+# DATABASE_URL (dev) or Hyperdrive (prod) is supplied at runtime.
+# wrangler secret put RESEND_API_KEY
+# RESEND_FROM_EMAIL is a verified non-secret sender identity.
+# NOTIFICATION_INTERNAL_TOKEN and IDENTITY_INTERNAL_TOKEN are shared secrets.

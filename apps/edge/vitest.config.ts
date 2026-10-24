@@ -13,7 +13,7 @@ export default defineWorkersConfig({
         miniflare: {
           // Tests never touch the network: an empty OSRM base URL disables
           // routing, so checkout uses the market's static floor-rate inputs.
-          bindings: { OSRM_BASE_URL: "", ALLOW_HEADER_AUTH: "true", ID_DOCUMENT_HMAC_SECRET: "test-document-hmac-key" },
+          bindings: { OSRM_BASE_URL: "", DATABASE_URL: "", ALLOW_HEADER_AUTH: "true", ID_DOCUMENT_HMAC_SECRET: "test-document-hmac-key" },
         },
         // Pending DO alarms left over from timer tests trip the pool's
         // per-file storage-isolation bookkeeping ("Isolated storage failed"),

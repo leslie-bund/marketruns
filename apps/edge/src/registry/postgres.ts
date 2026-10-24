@@ -86,6 +86,7 @@ export class PostgresCoreRegistry implements CoreRegistry {
   }
 
   async saveStore(store: Store) {
+    if (!store.sellerParticipantId) throw new Error("store sellerParticipantId is required");
     await this.sql`
       INSERT INTO stores (id, seller_id, market_id, name, exchange_point, shop_items, joined_at)
       VALUES (${store.id}, ${store.sellerParticipantId}, ${store.market}, ${store.name}, ${store.exchangePoint},

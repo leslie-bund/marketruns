@@ -47,5 +47,7 @@ export const IntentExpiredSchema = z.object({
   type: z.literal("intent.expired"),
   intentId: z.string().min(1),
   expiredAt: TimestampSchema,
+  /** Trusted server-side attribution for notification delivery; absent on legacy anonymous intents. */
+  buyerId: z.string().min(1).optional(),
 });
 export type IntentExpired = z.infer<typeof IntentExpiredSchema>;

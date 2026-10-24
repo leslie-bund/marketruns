@@ -28,6 +28,10 @@ queue = "archive-snapshots"
 binding = "PAYMENT_QUEUE"
 queue = "payment-dispatch"
 
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "notification-events"
+
 [[r2_buckets]]
 binding = "ARCHIVE_BUCKET"
 bucket_name = "market-runs-archive"

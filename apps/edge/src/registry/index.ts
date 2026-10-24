@@ -12,7 +12,7 @@ const clients = new Map<string, CoreRegistry>();
 
 /** Production requires Postgres; the in-memory adapter exists only in explicit dev/test posture. */
 export function coreRegistry(env: Env): CoreRegistry {
-  const connectionString = env.DATABASE_URL ?? env.HYPERDRIVE?.connectionString;
+  const connectionString = env.DATABASE_URL || env.HYPERDRIVE?.connectionString;
   if (!connectionString) {
     if (headerAuthAllowed(env)) return new MemoryCoreRegistry();
     throw new Error("DATABASE_URL or HYPERDRIVE is required for the durable core registry");

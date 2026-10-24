@@ -215,6 +215,31 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  apps/notifications:
+    dependencies:
+      '@market-runs/proto':
+        specifier: workspace:*
+        version: link:../../packages/proto
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@cloudflare/workers-types@4.20260702.1)(postgres@3.4.9)
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20250109.0
+        version: 4.20260702.1
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@26.6.5)(lightningcss@1.33.0)(terser@5.51.2)
+
   apps/payments:
     dependencies:
       '@market-runs/domain':
