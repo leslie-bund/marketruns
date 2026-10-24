@@ -37,31 +37,30 @@ export const ParticipantSchema = z.object({
 export type Participant = z.infer<typeof ParticipantSchema>;
 
 /**
- * Client → edge: onboard a participant. The raw document number is in transit
- * only — the edge verifies it through the identity-verifier seam and stores
- * its hash. `participantId` is the client idempotency key.
+ * Client → edge: onboard a new participant. The raw document number is in
+ * transit only — the edge verifies it through the identity-verifier seam and
+ * stores its keyed hash. Biometric frames never ride this command or R2.
  */
 export const ParticipantOnboardedSchema = z.object({
   type: z.literal("participant.onboarded"),
-  participantId: z.string().min(1),
+  participantId: z.string().min(1).max(128),
   role: ParticipantRoleSchema,
-  displayName: z.string().min(1),
-  email: z.string().email().optional(),
-  verifiedLegalName: z.string().min(1).optional(),
-  consentAt: TimestampSchema.optional(),
-  consentVersion: z.string().min(1).optional(),
+  displayName: z.string().trim().min(1).max(120),
+  email: z.string().trim().email(),
+  consentAt: TimestampSchema,
+  consentVersion: z.string().min(1),
   idDocumentType: IdDocumentTypeSchema,
-  idDocument: z.string().min(1),
-  facialCaptureRef: z.string().min(1),
+  idDocument: z.string().regex(/^\d{11}$/),
   /** The market the participant joins at onboarding. */
-  market: z.string().min(1),
+  market: z.string().trim().min(1).max(120),
 });
 export type ParticipantOnboarded = z.infer<typeof ParticipantOnboardedSchema>;
 
-/** Edge → participants: onboarding outcome (KYC verified or failed). */
+/** Edge → participant: durable outcome plus an optional short-lived enrollment proof. */
 export const ParticipantRecordedSchema = z.object({
   type: z.literal("participant.recorded"),
   participant: ParticipantSchema,
+  enrollmentProof: z.string().min(32).max(256).optional(),
 });
 export type ParticipantRecorded = z.infer<typeof ParticipantRecordedSchema>;
 

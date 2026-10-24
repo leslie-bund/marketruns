@@ -2,28 +2,25 @@ import type { IdDocumentType, KycVerificationStatus } from "@market-runs/proto";
 
 /**
  * The identity-verifier seam (ADR-0009): the domain speaks in verifications,
- * never in vendor shapes — Smile/Dojah/VerifyMe integrate here, and no vendor
- * name crosses this boundary. The dev implementation checks document shape
- * and the presence of a facial capture; a real vendor replaces one function.
+ * never in vendor shapes. Raw biometrics use the direct identity capture flow,
+ * never this document-only onboarding seam or a public capture reference.
  */
 export interface IdentityVerificationInput {
   participantId: string;
   idDocumentType: IdDocumentType;
   /** Raw BVN/NIN — verified and discarded, never stored. */
   idDocument: string;
-  facialCaptureRef: string;
 }
 
 export interface IdentityVerifier {
-  verify(input: IdentityVerificationInput): Promise<KycVerificationStatus>;
+  verify(input: IdentityVerificationInput, explicitStaging: boolean): Promise<KycVerificationStatus>;
 }
 
-/** Dev verifier: BVN/NIN are 11 digits; a facial capture must be attached. */
+/** Dev shape checks never constitute verified KYC. Real KYC remains asynchronous and pending. */
 export const devIdentityVerifier: IdentityVerifier = {
-  async verify(input) {
-    const digitsOk = /^\d{11}$/.test(input.idDocument);
-    const captureOk = input.facialCaptureRef.startsWith("r2://archive/captures/");
-    return digitsOk && captureOk ? "verified" : "failed";
+  async verify(input, explicitStaging) {
+    if (!/^\d{11}$/.test(input.idDocument)) return "failed";
+    return explicitStaging ? "preverified" : "pending";
   },
 };
 

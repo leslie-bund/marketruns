@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import type { MarketJoined, ParticipantOnboarded, ParticipantRecorded } from "@market-runs/proto";
+import { EnrollmentProofResponseSchema, ParticipantRecordedSchema, type MarketJoined, type ParticipantOnboarded, type ParticipantRecorded } from "@market-runs/proto";
 import type { Env } from "../../config/env.js";
 import { errorResponse, internalErrorGuard, jsonResponse, parseClientCommand } from "../../do/runtime/index.js";
 import { participantObjectName } from "../../do/participant-do.js";
 import { internalPost } from "../../do/transport.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 import { requireTransactionRole } from "../middleware/participant.js";
-import { canTransact, coreRegistry } from "../../registry/index.js";
+import { canTransact, coreRegistry, headerAuthAllowed } from "../../registry/index.js";
 
 function identityHeaders(c: Context<{ Bindings: Env }>): Record<string, string> {
   const who = c.get("participant");
@@ -19,9 +19,38 @@ function identityHeaders(c: Context<{ Bindings: Env }>): Record<string, string> 
 }
 
 async function knownMarket(c: Context<{ Bindings: Env }>, market: string): Promise<boolean> {
-  if (c.get("participant").source !== "session") return true; // legacy dev fixtures create ad-hoc zones
+  const source = c.get("participant").source;
+  if (source === "header" || source === "anonymous") return true; // legacy dev fixtures create ad-hoc zones
   const markets = await coreRegistry(c.env).listMarkets();
   return markets.some((entry) => entry.id.toLowerCase() === market.toLowerCase());
+}
+
+async function enrollmentProof(env: Env, recorded: ParticipantRecorded): Promise<string | Response> {
+  const { participant } = recorded;
+  if (participant.kycStatus !== "verified" && participant.kycStatus !== "preverified") return "";
+  try {
+    const response = await fetch(`${env.IDENTITY_URL ?? "http://localhost:8789"}/auth/enrollment-proof`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(env.IDENTITY_INTERNAL_TOKEN ? { "x-identity-internal": env.IDENTITY_INTERNAL_TOKEN } : {}),
+      },
+      body: JSON.stringify({
+        participantId: participant.id,
+        role: participant.role,
+        displayName: participant.displayName,
+        kycStatus: participant.kycStatus,
+      }),
+    });
+    if (!response.ok) return errorResponse(502, "identity-unavailable", "identity enrollment proof could not be issued");
+    const parsed = EnrollmentProofResponseSchema.safeParse(await response.json());
+    if (!parsed.success || parsed.data.participantId !== participant.id) {
+      return errorResponse(502, "bad-identity-response", "identity enrollment proof response was invalid");
+    }
+    return parsed.data.enrollmentProof;
+  } catch {
+    return errorResponse(502, "identity-unavailable", "identity enrollment proof could not be issued");
+  }
 }
 
 /** POST /command: client wire validation, resolved-identity attribution, then DO routing. */
@@ -30,32 +59,28 @@ export function commandRoute(): Hono<{ Bindings: Env }> {
 
   const onboard = async (c: Context<{ Bindings: Env }>, command: ParticipantOnboarded): Promise<Response> => {
     const who = c.get("participant");
-    if (who.source === "unauthenticated") return errorResponse(401, "unauthorized", "a Bearer session is required");
-    if (who.source === "session") {
-      if (command.participantId !== who.id || command.role !== who.role) {
-        return errorResponse(403, "forbidden", "onboarding identity and role must match the Bearer session");
-      }
-      if (!command.email || !command.consentAt || !command.consentVersion) {
-        return errorResponse(400, "invalid-body", "authenticated onboarding requires email, consentAt, and consentVersion");
-      }
+    if ((who.source === "session" || who.source === "header") && (command.participantId !== who.id || command.role !== who.role)) {
+      return errorResponse(403, "forbidden", "onboarding identity and role must match the resolved caller");
     }
     if (!(await knownMarket(c, command.market))) return errorResponse(404, "unknown-market", `market ${command.market} is not registered`);
     const registry = await c.env.PARTICIPANT_DO.get(
       c.env.PARTICIPANT_DO.idFromName(participantObjectName(command.participantId)),
     ).fetch(internalPost("/onboard", command, correlationHeaders(c)));
     if (!registry.ok) return registry;
-    const recorded = (await registry.json()) as ParticipantRecorded;
+    const recorded = ParticipantRecordedSchema.parse(await registry.json()) as ParticipantRecorded;
     await coreRegistry(c.env).saveParticipant(recorded.participant);
-    if (canTransact(recorded.participant.kycStatus)) {
+    if (canTransact(recorded.participant.kycStatus, headerAuthAllowed(c.env))) {
       const joined = await joinMarket(c, {
         type: "market.joined",
         market: command.market,
         participantId: command.participantId,
-        role: command.role,
+        role: recorded.participant.role,
       });
       if (!joined.ok) return joined;
     }
-    return jsonResponse(recorded);
+    const proof = await enrollmentProof(c.env, recorded);
+    if (proof instanceof Response) return proof;
+    return jsonResponse({ ...recorded, ...(proof ? { enrollmentProof: proof } : {}) });
   };
 
   const joinMarket = async (c: Context<{ Bindings: Env }>, command: MarketJoined): Promise<Response> => {

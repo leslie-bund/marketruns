@@ -147,6 +147,7 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
     if (!parsed.success) return error(c, 400, "invalid-request", "invalid proof request");
     if (isProduction(c.env) && parsed.data.kycStatus !== "verified") return error(c, 403, "kyc-required", "production enrollment requires verified KYC");
     const at = now(); const existing = await store.getIdentityParticipant(parsed.data.participantId);
+    if (existing && existing.role !== parsed.data.role) return error(c, 409, "invalid-request", "participant role is already registered");
     const kycStatus = existing?.kycStatus === "verified" ? "verified" : parsed.data.kycStatus;
     await store.putIdentityParticipant({ participantId: parsed.data.participantId, role: parsed.data.role,
       displayName: parsed.data.displayName, verifiedLegalName: existing?.verifiedLegalName ?? null,

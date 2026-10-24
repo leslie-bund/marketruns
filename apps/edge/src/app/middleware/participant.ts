@@ -73,7 +73,7 @@ export async function requireTransactionRole(
   }
   const profile = await coreRegistry(c.env).participant(who.id);
   if (!profile || profile.role !== role) return errorResponse(403, "forbidden", "the session does not match the durable participant profile");
-  if (!canTransact(profile.kycStatus)) {
+  if (!canTransact(profile.kycStatus, headerAuthAllowed(c.env))) {
     return errorResponse(403, "kyc-required", "verified KYC is required before transacting");
   }
   return null;
