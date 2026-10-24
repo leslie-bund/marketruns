@@ -7,3 +7,6 @@ dist
 .DS_Store
 .dev-logs
 kimi-export-session*.md
+.worktrees/
+*-test.log
+ops-test*.log

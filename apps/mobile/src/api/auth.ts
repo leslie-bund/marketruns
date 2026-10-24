@@ -218,10 +218,10 @@ async function readDeviceSecret(): Promise<string | null> {
 /* for session headers, so going through client.ts would be a cycle)   */
 /* ------------------------------------------------------------------ */
 
-async function authRequest<T>(path: string, body: unknown): Promise<T> {
+async function authRequest<T>(path: string, body: unknown, method = "POST"): Promise<T> {
   const response = await fetch(`${EDGE_URL}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
+    method,
+    headers: { "content-type": "application/json", ...sessionHeaders() },
     body: JSON.stringify(body),
   });
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -245,6 +245,7 @@ export interface FaceEnrollResponse {
   enrolled: boolean;
   modelVersion: string;
   enrolledAt: number;
+  session?: AuthSession;
 }
 
 /**
@@ -276,8 +277,18 @@ export function isFaceJobPending(body: unknown): body is FaceJobPending {
  * async mode this resolves to the 202 job handle; the caller polls
  * awaitFaceJob for the verdict.
  */
-export async function enrollFace(input: { participantId: string; role: string; image: string }): Promise<FaceEnrollResponse | FaceJobPending> {
-  return authRequest<FaceEnrollResponse | FaceJobPending>("/auth/face/enroll", input);
+export const BIOMETRIC_CONSENT_VERSION = "biometric-capture-v1";
+export function freshBiometricConsent() {
+  return { version: BIOMETRIC_CONSENT_VERSION, granted: true as const, grantedAt: Date.now() };
+}
+export interface FaceCaptureInput { image: string; livenessImages: string[] }
+export async function enrollFace(input: FaceCaptureInput & {
+  participantId: string; enrollmentProof: string;
+  identityDocument?: { country: string; idType: "BVN" | "NIN"; idNumber: string };
+}): Promise<FaceEnrollResponse | FaceJobPending> {
+  const body = await authRequest<FaceEnrollResponse | FaceJobPending>("/auth/face/enroll", { ...input, consent: freshBiometricConsent() });
+  if (!isFaceJobPending(body) && body.session) await setSessionCache(body.session);
+  return body;
 }
 
 export interface FaceVerifyResponse {
@@ -287,8 +298,8 @@ export interface FaceVerifyResponse {
 }
 
 /** Face sign-in: verify against the enrolled template and adopt the session. */
-export async function verifyFace(input: { participantId: string; image: string }): Promise<FaceVerifyResponse | FaceJobPending> {
-  const body = await authRequest<FaceVerifyResponse | FaceJobPending>("/auth/face/verify", input);
+export async function verifyFace(input: FaceCaptureInput & { participantId: string }): Promise<FaceVerifyResponse | FaceJobPending> {
+  const body = await authRequest<FaceVerifyResponse | FaceJobPending>("/auth/face/verify", { ...input, consent: freshBiometricConsent() });
   // Sync mode (stub verifier): the session rides the 200. Async mode: the
   // session is issued at job collection — awaitFaceJob caches it.
   if (!isFaceJobPending(body)) await setSessionCache(body.session);
@@ -310,8 +321,10 @@ export interface FaceJobComplete {
   kind: "enrollment" | "authentication";
   status: "complete";
   completedAt: number | null;
-  /** Present for authentication jobs — issued at collection. */
+  /** Issued at collection so the participant can confirm the prefilled display name. */
   session?: AuthSession;
+  suggestedDisplayName?: string;
+  verifiedLegalName?: string;
 }
 
 export async function pollFaceJob(jobId: string): Promise<FaceJobPollPending | FaceJobComplete> {
@@ -355,12 +368,13 @@ export interface DeviceKeyRegisterResponse {
  * credential already exists; the caller surfaces that honestly and offers the
  * device-reset path.
  */
-export async function registerDeviceKey(input: { participantId: string; deviceLabel?: string }): Promise<DeviceKeyRegisterResponse> {
+export async function registerDeviceKey(input: { participantId: string; deviceLabel?: string; enrollmentProof?: string }): Promise<DeviceKeyRegisterResponse> {
   const secret = await getOrCreateDeviceSecret();
   const body = await authRequest<DeviceKeyRegisterResponse>("/auth/device-key/register", {
     participantId: input.participantId,
     credentialType: "device-key",
     secret,
+    ...(input.enrollmentProof ? { enrollmentProof: input.enrollmentProof } : {}),
     ...(input.deviceLabel ? { deviceLabel: input.deviceLabel } : {}),
   });
   await setCredentialCache({ participantId: input.participantId, credentialId: body.credentialId });
@@ -394,14 +408,19 @@ export async function authenticateDeviceKey(participantId: string): Promise<Devi
   return body;
 }
 
-export interface DeviceResetResponse {
-  id: string;
-  status: string;
+export interface DeviceRecoveryResponse { participantId: string; recovered: true; credentialId: string; session: AuthSession }
+/** Lost-device recovery requires fresh liveness and a participant-specific 1:1 match. */
+export async function recoverDevice(input: FaceCaptureInput & { participantId: string; deviceLabel?: string }): Promise<DeviceRecoveryResponse> {
+  const secret = await getOrCreateDeviceSecret();
+  const body = await authRequest<DeviceRecoveryResponse>("/auth/recovery", {
+    ...input, consent: freshBiometricConsent(), credentialType: "device-key", secret,
+  });
+  await setCredentialCache({ participantId: input.participantId, credentialId: body.credentialId });
+  await setSessionCache(body.session);
+  return body;
 }
-
-/** Lost-device path: file a reset request; ops approves server-side. */
-export async function requestDeviceReset(input: { participantId: string; reason: string }): Promise<DeviceResetResponse> {
-  return authRequest<DeviceResetResponse>("/auth/device-reset", input);
+export async function confirmDisplayName(participantId: string, displayName: string): Promise<void> {
+  await authRequest(`/auth/identity/${encodeURIComponent(participantId)}/display-name`, { displayName }, "PATCH");
 }
 
 /**

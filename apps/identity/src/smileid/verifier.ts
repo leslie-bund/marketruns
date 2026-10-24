@@ -1,74 +1,37 @@
 import type { AsyncFaceVerifier, FaceCallbackVerdict, FaceJobSubmissionInput, FaceJobVerdict } from "../face-verifier.js";
 import type { SmileIdClient, SmileIdJobStatus } from "./client.js";
 
-/**
- * The Smile ID implementation of the async face-verifier seam. The biometric
- * reference is VENDOR-HELD (ADR-0022 records the tradeoff): no vendor returns
- * raw embeddings, so enrollment registers a provider-side reference keyed by
- * participantId (user_id) and verification delegates to SmartSelfie™
- * Authentication. Our face_enrollments row records providerRef +
- * modelVersion="smileid-smartselfie-v3" and its embedding columns stay NULL.
- *
- * Fallbacks, honestly labelled: when the wire carries no liveness frames the
- * client repeats the selfie (sandbox-adequate, production-liveness fails);
- * when no userDetails arrive the caller substitutes a placeholder — production
- * rollout requires the edge to forward real consent + PII at enrollment.
- */
+/** Smile ID is quarantined to KYC + providerRef. Login always uses our local 1:1 verifier. */
 export class SmileIdFaceVerifier implements AsyncFaceVerifier {
-  readonly modelVersion = "smileid-smartselfie-v3";
+  readonly modelVersion = "smileid-biometric-kyc-v3";
   readonly asyncJobs = true as const;
   readonly callbackProvider = "smileid";
-
   constructor(private readonly client: SmileIdClient) {}
-
   async submitEnrollment(input: FaceJobSubmissionInput): Promise<{ providerJobId: string }> {
-    const accepted = await this.client.submitRegistration(toVendorInput(input));
+    if (!input.identityDocument) throw new Error("Biometric KYC requires BVN/NIN details");
+    const accepted = await this.client.verifyIdDocument({
+      userId: input.participantId, selfie: input.selfie, livenessImages: input.livenessImages,
+      userDetails: input.userDetails ?? splitName("Market Runs"), country: input.identityDocument.country,
+      idType: input.identityDocument.idType, idNumber: input.identityDocument.idNumber,
+      consent: input.consent,
+    });
     return { providerJobId: accepted.jobId };
   }
-
-  async submitAuthentication(input: FaceJobSubmissionInput): Promise<{ providerJobId: string }> {
-    const accepted = await this.client.submitAuthentication(toVendorInput(input));
-    return { providerJobId: accepted.jobId };
+  async pollJob(id: string): Promise<FaceJobVerdict> {
+    const result = await this.client.getJobStatus(id);
+    return verdictFromStatus(result.status, result.message, result.verifiedLegalName, result.providerImage);
   }
-
-  async pollJob(providerJobId: string): Promise<FaceJobVerdict> {
-    const { status, message } = await this.client.getJobStatus(providerJobId);
-    return verdictFromStatus(status, message);
-  }
-
   async handleCallback(request: Request): Promise<FaceCallbackVerdict | null> {
-    const payload = await this.client.parseCallback(request);
-    if (!payload) return null;
-    const verdict = verdictFromStatus(payload.status, payload.message);
-    return {
-      providerJobId: payload.providerJobId,
-      userRef: payload.userId,
-      passed: verdict.outcome === "passed",
+    const payload = await this.client.parseCallback(request); if (!payload) return null;
+    const verdict = verdictFromStatus(payload.status, payload.message, payload.verifiedLegalName, payload.providerImage);
+    return { providerJobId: payload.providerJobId, userRef: payload.userId, passed: verdict.outcome === "passed",
       reason: verdict.outcome === "failed" ? (payload.reason ?? verdict.reason) : null,
-    };
+      verifiedLegalName: payload.verifiedLegalName, providerImage: payload.providerImage };
   }
 }
-
-/** Vendor statuses → our verdict: only "clear" passes; every other terminal state fails. */
-function verdictFromStatus(status: SmileIdJobStatus, message: string): FaceJobVerdict {
-  if (status === "clear") return { outcome: "passed" };
+function splitName(name: string) { const [givenNames, ...rest] = name.split(" "); return { givenNames: givenNames ?? "Market", lastName: rest.join(" ") || "Participant" }; }
+function verdictFromStatus(status: SmileIdJobStatus, message: string, verifiedLegalName: string | null = null, providerImage: Uint8Array | null = null): FaceJobVerdict {
+  if (status === "clear") return { outcome: "passed", verifiedLegalName, providerImage };
   if (status === "processing" || status === "not_found") return { outcome: "pending" };
   return { outcome: "failed", reason: message || status };
-}
-
-function toVendorInput(input: FaceJobSubmissionInput) {
-  return {
-    userId: input.participantId,
-    selfie: input.selfie,
-    livenessImages: input.livenessImages,
-    allowNewEnroll: input.allowNewEnroll,
-    // Placeholder PII when the edge didn't forward any (dev-stage; the vendor
-    // requires consumer-stated details on every job). Production rollout must
-    // pass real userDetails through the internal enroll seam.
-    userDetails: input.userDetails ?? {
-      givenNames: "MarketRuns",
-      lastName: `Participant ${input.participantId}`,
-      email: `participant-${input.participantId}@placeholder.market-runs.invalid`,
-    },
-  };
 }

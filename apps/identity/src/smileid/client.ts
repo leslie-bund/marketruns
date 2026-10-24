@@ -52,10 +52,11 @@ export interface SmileIdFaceJobInput {
   /** Our participantId — becomes the provider-side user_id the enrollment is keyed by. */
   userId: string;
   selfie: Uint8Array;
-  /** 6–8 liveness frames. The caller's documented fallback applies when empty. */
+  /** Fresh 6–8 frame sequence; never padded or repeated by the client. */
   livenessImages: Uint8Array[];
   userDetails: SmileIdUserDetails;
-  /** enrollment only: allow replacing an existing provider-side enrollment. */
+  consent: { version: string; grantedAt: number };
+  /** Legacy registration seam only; hybrid enrollment uses Biometric KYC. */
   allowNewEnroll?: boolean | undefined;
 }
 
@@ -74,6 +75,9 @@ export interface SmileIdCallbackPayload {
   reason: string | null;
   providerJobId: string;
   userId: string;
+  verifiedLegalName: string | null;
+  /** Optional callback selfie; used only if no authorized pending capture exists. */
+  providerImage: Uint8Array | null;
 }
 
 const TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -153,25 +157,17 @@ export class SmileIdClient {
     const form = new FormData();
     form.append("user_id", input.userId);
     form.append("selfie_image", new Blob([input.selfie as BlobPart], { type: "image/jpeg" }), "selfie.jpg");
-    // The vendor requires 6–8 liveness frames; our wire captures one image,
-    // so when no frames were supplied we repeat the selfie. HONEST NOTE: this
-    // passes entry validation and works in sandbox (sandbox_result forcing),
-    // but real production liveness will reject repeated identical frames —
-    // capturing a liveness sequence on the client is the launch-blocker fix.
-    const frames = input.livenessImages.length > 0 ? input.livenessImages : [input.selfie];
-    for (let i = 0; i < Math.max(6, frames.length); i += 1) {
-      const frame = frames[i % frames.length];
-      form.append("liveness_images", new Blob([frame as BlobPart], { type: "image/jpeg" }), `liveness_${i}.jpg`);
+    if (input.livenessImages.length < 6 || input.livenessImages.length > 8) throw new SmileIdApiError(400, "6-8 fresh liveness frames required");
+    for (let i = 0; i < input.livenessImages.length; i += 1) {
+      form.append("liveness_images", new Blob([input.livenessImages[i] as BlobPart], { type: "image/jpeg" }), `liveness_${i}.jpg`);
     }
-    form.append(
-      "consent",
-      JSON.stringify({
-        granted: true,
-        granted_at: new Date().toISOString(),
-        notice_language: "EN",
-        notice_privacy_policy_url: this.config.privacyNoticeUrl,
-      }),
-    );
+    form.append("consent", JSON.stringify({
+      granted: true,
+      granted_at: new Date(input.consent.grantedAt).toISOString(),
+      consent_version: input.consent.version,
+      notice_language: "EN",
+      notice_privacy_policy_url: this.config.privacyNoticeUrl,
+    }));
     form.append(
       "user_details",
       JSON.stringify({
@@ -217,16 +213,15 @@ export class SmileIdClient {
    * 202 = processing, 404 = not_found (treated as still-pending upstream:
    * a just-submitted job may not be visible to the status endpoint yet).
    */
-  async getJobStatus(jobId: string): Promise<{ status: SmileIdJobStatus; message: string }> {
+  async getJobStatus(jobId: string): Promise<{ status: SmileIdJobStatus; message: string; verifiedLegalName: string | null; providerImage: Uint8Array | null }> {
     const res = await this.fetchImpl(`${this.config.baseUrl}/v3/status/${encodeURIComponent(jobId)}`, {
-      method: "GET",
-      headers: await this.authedHeaders(),
+      method: "GET", headers: await this.authedHeaders(),
     });
-    if (!res.ok && res.status !== 202 && res.status !== 404) {
-      throw new SmileIdApiError(res.status, await res.text());
-    }
-    const body = (await res.json()) as { status?: SmileIdJobStatus; message?: string };
-    return { status: body.status ?? (res.status === 202 ? "processing" : "not_found"), message: body.message ?? "" };
+    if (!res.ok && res.status !== 202 && res.status !== 404) throw new SmileIdApiError(res.status, await res.text());
+    const body = (await res.json()) as Record<string, unknown>;
+    return { status: (body.status as SmileIdJobStatus | undefined) ?? (res.status === 202 ? "processing" : "not_found"),
+      message: typeof body.message === "string" ? body.message : "", verifiedLegalName: callbackLegalName(body),
+      providerImage: callbackImage(body) };
   }
 
   /* ------------------------------------------------------------------ */
@@ -293,8 +288,27 @@ export class SmileIdClient {
       reason: typeof body?.reason === "string" ? body.reason : null,
       providerJobId: jobId,
       userId,
+      verifiedLegalName: callbackLegalName(body ?? {}),
+      providerImage: callbackImage(body ?? {}),
     };
   }
+}
+
+function callbackLegalName(body: Record<string, unknown>): string | null {
+  const personal = (body.personal_info ?? body.PersonalInfo ?? body.user_details ?? {}) as Record<string, unknown>;
+  const value = (...keys: string[]) => keys.map((key) => body[key] ?? personal[key]).find((v) => typeof v === "string" && v.trim()) as string | undefined;
+  const full = value("full_name", "FullName", "fullName", "name");
+  if (full) return full.trim();
+  const first = value("first_name", "FirstName", "given_names"); const last = value("last_name", "LastName", "surname");
+  return [first, last].filter(Boolean).join(" ").trim() || null;
+}
+function callbackImage(body: Record<string, unknown>): Uint8Array | null {
+  const value = [body.selfie_image, body.image, body.Image, body.selfie].find((v) => typeof v === "string");
+  if (typeof value !== "string") return null;
+  try { const bytes = base64ToBytes(value); return bytes.length ? bytes : null; } catch { return null; }
+}
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value.replace(/^data:image\/[a-z]+;base64,/, "")); return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

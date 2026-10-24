@@ -1,3 +1,34 @@
+CREATE TABLE "biometric_consent_receipts" (
+	"id" text PRIMARY KEY NOT NULL,
+	"participant_id" text NOT NULL,
+	"purpose" text NOT NULL,
+	"version" text NOT NULL,
+	"granted_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "identity_access_proofs" (
+	"id" text PRIMARY KEY NOT NULL,
+	"proof_hash" text NOT NULL,
+	"participant_id" text NOT NULL,
+	"purpose" text NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"consumed_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "identity_access_proofs_purpose_valid" CHECK ("identity_access_proofs"."purpose" IN ('enrollment', 'recovery'))
+);
+--> statement-breakpoint
+CREATE TABLE "identity_participants" (
+	"participant_id" text PRIMARY KEY NOT NULL,
+	"role" text NOT NULL,
+	"kyc_status" text NOT NULL,
+	"display_name" text NOT NULL,
+	"verified_legal_name" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "identity_participants_kyc_status_valid" CHECK ("identity_participants"."kyc_status" IN ('preverified', 'verified'))
+);
+--> statement-breakpoint
 CREATE TABLE "internal_runner_pools" (
 	"market_id" text NOT NULL,
 	"participant_id" text NOT NULL,
@@ -35,12 +66,20 @@ ALTER TABLE "kyc_records" DROP CONSTRAINT "kyc_records_status_valid";--> stateme
 ALTER TABLE "live_runs" DROP CONSTRAINT "live_runs_status_valid";--> statement-breakpoint
 ALTER TABLE "runs_archive" DROP CONSTRAINT "runs_archive_status_valid";--> statement-breakpoint
 DROP INDEX "stores_seller_id_idx";--> statement-breakpoint
+ALTER TABLE "face_auth_jobs" ADD COLUMN "pending_embedding_encrypted" "bytea";--> statement-breakpoint
+ALTER TABLE "face_auth_jobs" ADD COLUMN "pending_embedding_iv" "bytea";--> statement-breakpoint
+ALTER TABLE "face_auth_jobs" ADD COLUMN "pending_embedding_auth_tag" "bytea";--> statement-breakpoint
+ALTER TABLE "face_auth_jobs" ADD COLUMN "pending_model_version" text;--> statement-breakpoint
+ALTER TABLE "face_auth_jobs" ADD COLUMN "expires_at" timestamp with time zone NOT NULL;--> statement-breakpoint
 ALTER TABLE "stores" ADD COLUMN "exchange_point" text DEFAULT '' NOT NULL;--> statement-breakpoint
 ALTER TABLE "stores" ADD COLUMN "shop_items" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "stores" ADD COLUMN "joined_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
 ALTER TABLE "internal_runner_pools" ADD CONSTRAINT "internal_runner_pools_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seller_presence" ADD CONSTRAINT "seller_presence_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "seller_presence" ADD CONSTRAINT "seller_presence_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "biometric_consent_participant_idx" ON "biometric_consent_receipts" USING btree ("participant_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "identity_access_proofs_hash_unique" ON "identity_access_proofs" USING btree ("proof_hash");--> statement-breakpoint
+CREATE INDEX "identity_access_proofs_participant_idx" ON "identity_access_proofs" USING btree ("participant_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "internal_runner_pools_membership_unique" ON "internal_runner_pools" USING btree ("market_id","participant_id");--> statement-breakpoint
 CREATE INDEX "internal_runner_pools_participant_idx" ON "internal_runner_pools" USING btree ("participant_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "participant_profiles_email_unique" ON "participant_profiles" USING btree ("email");--> statement-breakpoint

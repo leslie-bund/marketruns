@@ -21,6 +21,9 @@ _Avoid_: delivery agent, rider, runs person
 **Internal Runner**:
 A runner engaged by the company itself, guaranteeing that every cart has at least one delivery option at the floor rate. At launch, internal runners are contracted rider associations rather than employees.
 
+**Internal Runner Pool**:
+The company's launch delivery supply. Its runners claim available runs atomically, so exactly one runner acquires each run and retries cannot create a second assignment.
+
 ### The marketplace
 
 **Market**:
@@ -93,3 +96,12 @@ The formulaic delivery price offered by internal runners, ensuring every cart al
 **Reputation**:
 A participant's standing, computed by the platform from completed trips, abort rates, and dispute outcomes. Reputation is never based on user-entered ratings.
 _Avoid_: star ratings, reviews
+
+**Presence**:
+A seller's time-bounded availability signal, derived from deduplicated heartbeats and expired when they stop. Presence is not a guarantee that the seller or device is reachable.
+_Avoid_: online status (as a guarantee)
+
+### Communication
+
+**Notification**:
+A durable in-app record of a marketplace, payment, security, or service event, optionally delivered in real time while connected or by transactional email. A delivery attempt does not replace the durable record or guarantee receipt.

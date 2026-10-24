@@ -5,7 +5,7 @@ An on-demand errand marketplace for Nigeria: buyers post intents, sellers respon
 ## Read these first — they are the source of truth
 
 - `GLOSSARY.md` — the domain language. Use these exact terms in code (types, tables, events). If a concept isn't in the glossary, it isn't in the system.
-- `docs/adr/0001`–`0026` — every significant decision and *why*. Do not "fix" anything an ADR records as deliberate without flagging it to the human.
+- `docs/adr/0001`–`0027` — every significant decision and *why*. Do not "fix" anything an ADR records as deliberate without flagging it to the human.
 - `docs/runbooks/` — operational runbooks (e.g. `first-live-test.md` for real-human test sessions). Keep them accurate against the code; they are followable-cold documents.
 
 If you change anything these documents describe, update them in the same change.
@@ -27,7 +27,8 @@ packages/domain/   # settlement function, matching, floor rate, timer rules, rep
 packages/proto/    # zod schemas for every WS/HTTP message, incl. archive events and admin oversight schemas
 apps/edge/         # Hono app (app/ routes + auth middleware), ops oversight dashboard (ops-console/: html, archive-proxy, identity-admin device-reset queue, markets-admin + vocabulary moderation; config/markets.ts), the five DOs (do/), each folder a barrel
 apps/archive/      # Queue consumer: retirement snapshots → Postgres/R2 + reputation read path + /admin/* oversight read endpoints
-apps/identity/     # passwordless auth worker (port 8789): face enroll/verify, HMAC sessions, device keys + ops-approved reset — FaceVerifier/PasskeyVerifier seams, encrypted embeddings at rest; Smile ID vendor mode (vendor-held biometric, async 202 → poll/callback) behind FACE_VERIFIER=smileid (ADR-0022)
+apps/identity/     # passwordless auth worker (port 8789): proof-bound hybrid face enrollment, local 1:1 login/recovery, HMAC sessions, device keys, encrypted embeddings + Smile ID providerRef (ADR-0022, 0027)
+apps/biometrics/   # private Dockerized Node ONNX service (port 8791): ArcFace embeddings + MiniFASNet liveness; identity-only bearer access, no mobile route or capture persistence (ADR-0027)
 apps/payments/     # payment worker (port 8790): consumes payment.dispatch-requested, executes settlement legs via PaymentDispatcher with per-leg idempotency + DLQ, /ops Payments tab (ADR-0023); FlutterwaveDispatcher in src/flutterwave/ behind PAYMENT_DISPATCHER (ADR-0024); buyer collection — /payments/charges/confirm server-side verify, payment_holds, the refund rail (payment.refund-requested; card via provider, non-card → refund-manual), seller payout accounts (resolve-then-save, DB-first recipients) (ADR-0025)
 apps/mobile/       # Expo app — src/api (wire client barrel + cart-state store for edge-issued ids), src/features/{buyer,seller,runner,run} (role hooks + the shared run/trip surface, barrels), src/ui (theme/styles/layout/controls/format barrel)
 infra/             # wrangler configs, Drizzle migrations, dev-all.sh one-command demo stack + seed-demo.mjs (dev-servers.sh underneath), OSRM deploy
