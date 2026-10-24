@@ -1,33 +1,40 @@
 import { useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import type { ServerEvent } from "@market-runs/proto";
 import { EDGE_URL } from "./config";
+import { sessionHeaders } from "./auth";
+import { participantHeaders } from "./participant";
+
+export interface LiveEventOptions {
+  /** Session-authenticated sellers attach their owned store to the market socket. */
+  storeId?: string;
+  /** Send explicit foreground presence heartbeats (seller market sockets only). */
+  heartbeat?: boolean;
+}
+
+type ReactNativeWebSocket = new (
+  url: string,
+  protocols?: string | string[],
+  options?: { headers?: Record<string, string> },
+) => WebSocket;
+
+/** React Native supports auth headers on WebSocket; browser dev simply ignores the extra option. */
+function openSocket(url: string): WebSocket {
+  const Socket = WebSocket as ReactNativeWebSocket;
+  return new Socket(url, undefined, { headers: { ...sessionHeaders(), ...participantHeaders() } });
+}
 
 /**
- * Subscribe to a scope's live events over WebSocket. Every Durable Object
- * broadcasts its events to attached sockets (hibernation keeps them cheap),
- * but polling clients never see them — this hook is the fast path: each event
- * triggers `onEvent` (typically the poll's refresh), while slow polling stays
- * as the fallback. Reconnects with backoff while mounted.
- *
- * `onReconnect` fires on every successful open AFTER the first: events that
- * aired while the socket was down are lost, so the subscriber refetches
- * immediately instead of sitting stale until the next poll. Refetches dedupe
- * against an in-flight poll via `usePoll`'s busy guard.
- *
- * `path` is a scope path like `/products/<id>`, `/carts/<id>`, `/runs/<id>` —
- * the edge forwards the upgrade straight to the owning DO.
- *
- * `topics` (optional) declares the event classes this socket wants (the
- * taxonomy lives with the server's topic-filtered broadcast): the socket then
- * receives only matching events, re-declared on every (re)connect and
- * whenever the topics change while mounted. Omitting topics keeps the legacy
- * full-subscribe — every event on the scope arrives.
+ * Subscribe to a scope's live events over WebSocket. Slow polling remains the
+ * fallback. Reconnects and foreground returns reconcile immediately because
+ * events aired while disconnected are not replayed.
  */
 export function useLiveEvents(
   path: string | null,
   onEvent: (event: ServerEvent) => void,
   onReconnect?: () => void,
   topics?: string[],
+  options: LiveEventOptions = {},
 ): boolean {
   const [connected, setConnected] = useState(false);
   const handlerRef = useRef(onEvent);
@@ -37,8 +44,9 @@ export function useLiveEvents(
   const topicsRef = useRef(topics);
   topicsRef.current = topics;
   const socketRef = useRef<WebSocket | null>(null);
-  // Topic arrays are rebuilt every render; the joined key is the real identity.
   const topicsKey = (topics ?? []).join(" ");
+  const storeId = options.storeId;
+  const heartbeat = options.heartbeat ?? false;
 
   useEffect(() => {
     if (!path) return undefined;
@@ -46,20 +54,27 @@ export function useLiveEvents(
     let closed = false;
     let attempt = 0;
     let everConnected = false;
+    let foreground = AppState.currentState === "active";
     let timer: ReturnType<typeof setTimeout> | undefined;
 
+    const sendHeartbeat = () => {
+      if (heartbeat && foreground && socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "heartbeat", foreground: true }));
+      }
+    };
     const connect = () => {
       if (closed) return;
-      socket = new WebSocket(`${EDGE_URL.replace(/^http/, "ws")}${path}`);
+      const query = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
+      socket = openSocket(`${EDGE_URL.replace(/^http/, "ws")}${path}${query}`);
       socketRef.current = socket;
       socket.onopen = () => {
         attempt = 0;
         setConnected(true);
-        const topics = topicsRef.current;
-        if (topics && topics.length > 0 && socket) {
-          socket.send(JSON.stringify({ type: "subscribe", topics }));
+        const currentTopics = topicsRef.current;
+        if (currentTopics && currentTopics.length > 0 && socket) {
+          socket.send(JSON.stringify({ type: "subscribe", topics: currentTopics }));
         }
-        // A reconnect means a gap in the event stream: refetch now.
+        sendHeartbeat();
         if (everConnected) reconnectRef.current?.();
         everConnected = true;
       };
@@ -67,7 +82,7 @@ export function useLiveEvents(
         try {
           handlerRef.current(JSON.parse(String(message.data)) as ServerEvent);
         } catch {
-          // Malformed frame — ignore; polling keeps the screen honest.
+          // Presence acknowledgements and malformed frames need no event handling.
         }
       };
       socket.onclose = () => {
@@ -80,22 +95,38 @@ export function useLiveEvents(
     };
     connect();
 
+    const heartbeatTimer = heartbeat ? setInterval(sendHeartbeat, 30_000) : undefined;
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        foreground = false;
+        return;
+      }
+      if (foreground) return;
+      foreground = true;
+      reconnectRef.current?.();
+      if (socket?.readyState === WebSocket.OPEN) sendHeartbeat();
+      else if (!socket || socket.readyState === WebSocket.CLOSED) {
+        clearTimeout(timer);
+        connect();
+      }
+    });
+
     return () => {
       closed = true;
       clearTimeout(timer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      appState.remove();
       setConnected(false);
       socketRef.current = null;
       socket?.close();
     };
-  }, [path]);
+  }, [path, storeId, heartbeat]);
 
-  // Topics changed while the socket was up (e.g. the buyer posted another
-  // intent): re-declare them on the live socket without reconnecting.
   useEffect(() => {
     const socket = socketRef.current;
-    const topics = topicsRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN && topics && topics.length > 0) {
-      socket.send(JSON.stringify({ type: "subscribe", topics }));
+    const currentTopics = topicsRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN && currentTopics && currentTopics.length > 0) {
+      socket.send(JSON.stringify({ type: "subscribe", topics: currentTopics }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topicsKey, connected]);

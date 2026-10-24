@@ -10,7 +10,7 @@ export default function NotificationsScreen() {
   const [state, setState] = useState<NotificationListResponse>({ items: [], total: 0, unread: 0, limit: 50, offset: 0 });
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
-    void listNotifications().then(setState).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
+    void listNotifications().then((next) => { setState(next); setError(null); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
   }, []);
   useEffect(refresh, [refresh]);
   useNotificationLive(refresh);

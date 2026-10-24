@@ -8,7 +8,7 @@ export default function SellerHome() {
   const { store, loading } = useActiveStore();
   const { participant } = useActiveParticipant();
   const market = useActiveMarket();
-  const intents = useOpenIntents(store?.shopItems ?? null);
+  const intents = useOpenIntents(store?.shopItems ?? null, store?.id);
   const mine = useSellerProducts(store?.name);
   const badges = useSellerBadges(store);
   const open = intents.data?.filter((intent) => intent.status === "open") ?? [];

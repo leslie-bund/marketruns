@@ -1,7 +1,8 @@
-import { useEffect } from "react";
-import type { Run, Store } from "@market-runs/proto";
+import { useEffect, useState } from "react";
+import type { ActiveRun, Run, Store } from "@market-runs/proto";
 import { getRun, identities, listActiveRuns, useActiveCartIds } from "../../api";
 import { useLiveEvents, usePoll } from "../../api";
+import { partitionRunnerRuns, preferredRunnerRunId } from "./runner-state";
 
 export interface RunFollow {
   run: Run | null;
@@ -11,7 +12,7 @@ export interface RunFollow {
 }
 
 /** Follow one edge-issued run id: WebSocket fast path, slow polling as the fallback. */
-function useRunById(runId: string | null, intervalMs: number): RunFollow {
+export function useRunById(runId: string | null, intervalMs: number): RunFollow {
   const { data, error, refresh } = usePoll(() => (runId ? getRun(runId) : Promise.resolve(null)), intervalMs);
   const live = useLiveEvents(runId ? `/runs/${encodeURIComponent(runId)}` : null, () => refresh(), () => refresh());
   // A freshly learned run id (checkout just landed, or discovery found one) fetches immediately.
@@ -35,43 +36,59 @@ export function useRun(intervalMs = 15000): RunFollow {
   return useRunById(runId, intervalMs);
 }
 
-/**
- * The runner's live run. The device's own stored run id always wins; when it
- * has none (a runner device that never performed the checkout), discovery
- * polls the live_runs index via the edge (`GET /markets/:market/runs/active`)
- * and follows the most recent live run assigned to this runner. At MVP every
- * run is assigned to runner:internal (ADR-0013), so an internal-runner device
- * sees every live run in the market. An empty discovery result is the
- * existing empty state — the index degrades, it never breaks the screen.
- */
-export function useRunnerRun(intervalMs = 15000): RunFollow {
-  const { runId: storedRunId } = useActiveCartIds();
-  const discovery = usePoll(
-    () => (storedRunId ? Promise.resolve(null) : listActiveRuns()),
-    intervalMs,
-  );
-  const discoveredRunId = storedRunId ? null : (discovery.data?.runs[0]?.runId ?? null);
-  return useRunById(storedRunId ?? discoveredRunId, intervalMs);
+export interface RunnerPoolFollow extends RunFollow {
+  available: ActiveRun[];
+  claimed: ActiveRun[];
+  warning: string | null;
+  discoveryError: string | null;
+  refreshDiscovery: () => void;
+  selectRun: (runId: string) => void;
 }
 
-/**
- * The seller's live run: the trip carrying this store's products. Same shape
- * as the runner's — the device's own stored run id wins; when it has none (a
- * seller device never performs the checkout), discovery polls the live_runs
- * index via the edge (`GET /markets/:market/runs/active?storeId=…`) and
- * follows the most recent live run containing this store. The store's wire
- * identity is its trading name (products carry sellerName; the demo identity
- * is the fallback before this device joins the market). An empty discovery
- * result is the existing empty state — the index degrades, it never breaks
- * the screen.
- */
-export function useSellerRun(store: Store | null, intervalMs = 15000): RunFollow {
+/** Internal-pool queue plus the runner's claimed work; unassigned runs never auto-open. */
+export function useRunnerPool(intervalMs = 8000): RunnerPoolFollow {
+  const discovery = usePoll(listActiveRuns, intervalMs);
+  const [chosenRunId, setChosenRunId] = useState<string | null>(null);
+  const runs = discovery.data?.runs ?? [];
+  const { available, claimed } = partitionRunnerRuns(runs);
+  const selectedRunId = chosenRunId ?? preferredRunnerRunId(runs);
+  const follow = useRunById(selectedRunId, intervalMs);
+
+  useEffect(() => {
+    if (chosenRunId && discovery.data && !runs.some((run) => run.runId === chosenRunId)) {
+      setChosenRunId(null);
+    }
+  }, [discovery.data, chosenRunId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return {
+    ...follow,
+    available,
+    claimed,
+    warning: discovery.data?.warning ?? null,
+    discoveryError: discovery.error,
+    refreshDiscovery: discovery.refresh,
+    selectRun: setChosenRunId,
+  };
+}
+
+/** Follow a claimed run on detail screens; an explicit route id wins over rediscovery. */
+export function useRunnerRun(intervalMs = 15000, routeRunId?: string): RunFollow {
   const { runId: storedRunId } = useActiveCartIds();
-  const storeName = store?.name ?? identities.seller.name;
   const discovery = usePoll(
-    () => (storedRunId ? Promise.resolve(null) : listActiveRuns({ storeId: storeName })),
+    () => (routeRunId || storedRunId ? Promise.resolve(null) : listActiveRuns()),
     intervalMs,
   );
-  const discoveredRunId = storedRunId ? null : (discovery.data?.runs[0]?.runId ?? null);
-  return useRunById(storedRunId ?? discoveredRunId, intervalMs);
+  const discoveredRunId = preferredRunnerRunId(discovery.data?.runs ?? []);
+  return useRunById(routeRunId ?? storedRunId ?? discoveredRunId, intervalMs);
+}
+
+/** Follow the newest live trip containing this owned store (demo name fallback only). */
+export function useSellerRun(store: Store | null, intervalMs = 15000): RunFollow {
+  const storeId = store?.id ?? identities.seller.name;
+  const discovery = usePoll(
+    () => listActiveRuns({ storeId }).catch(() => ({ runs: [], warning: "Live run discovery is unavailable." })),
+    intervalMs,
+  );
+  const discoveredRunId = discovery.data?.runs[0]?.runId ?? null;
+  return useRunById(discoveredRunId, intervalMs);
 }

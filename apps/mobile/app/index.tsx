@@ -12,6 +12,7 @@ import {
   useActiveParticipant,
   useAuthSession,
   useDeviceCredential,
+  useNotificationSummary,
 } from "../src/api";
 import { usePoll } from "../src/api";
 import { Button, Card, Page, Pill, Section, colors, s } from "../src/ui";
@@ -26,6 +27,7 @@ export default function Launch() {
   const { participant, loading } = useActiveParticipant();
   const { session, loading: sessionLoading } = useAuthSession();
   const { credential } = useDeviceCredential();
+  const notifications = useNotificationSummary();
   const [signingIn, setSigningIn] = useState(false);
   const market = useActiveMarket();
   const health = usePoll(async () => {
@@ -109,10 +111,25 @@ export default function Launch() {
 
       {participant && session ? <Pill active>✓ SIGNED IN</Pill> : null}
 
+      {participant && session ? (
+        <Pressable onPress={() => router.push("/notifications")}>
+          <Card>
+            <View style={s.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Notifications</Text>
+                <Text style={s.muted}>{notifications.error ? "Reconnect to refresh activity" : notifications.unread > 0 ? `${notifications.unread} unread update${notifications.unread === 1 ? "" : "s"}` : "You're all caught up"}</Text>
+              </View>
+              {notifications.unread > 0 ? <Pill active>{notifications.unread}</Pill> : null}
+              <Text style={{ color: colors.green }}>→</Text>
+            </View>
+          </Card>
+        </Pressable>
+      ) : null}
+
       <Section title={participant ? "Continue as" : "Explore as (demo)"}>
         <View style={{ gap: 12 }}>
           {roles.map((role) => (
-            <Pressable key={role.name} onPress={() => router.push(role.href)}>
+            <Pressable key={role.name} onPress={() => router.push({ pathname: "/markets", params: { role: role.role } })}>
                 <Card style={participant?.role === role.role ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
                   <View style={s.row}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>

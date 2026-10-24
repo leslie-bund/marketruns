@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import {
   NotificationCreatedSchema,
   NotificationListResponseSchema,
@@ -72,11 +73,45 @@ export function useNotificationLive(onChange: () => void): boolean {
       socket.onerror = () => socket?.close();
     };
     connect();
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      // Reconcile immediately on foreground return, even before a socket retry fires.
+      handler.current();
+      if (!socket || socket.readyState === WebSocket.CLOSED) {
+        clearTimeout(timer);
+        connect();
+      }
+    });
     return () => {
       closed = true;
       clearTimeout(timer);
+      appState.remove();
       socket?.close();
     };
   }, [token]);
   return Boolean(token);
+}
+
+/** Navigation badge backed by the same durable centre and reconnecting live socket. */
+export function useNotificationSummary(): { unread: number; error: string | null; refresh: () => void } {
+  const [unread, setUnread] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const session = getSession();
+  const token = session?.token;
+  const load = useCallback(async () => {
+    if (!token) {
+      setUnread(0);
+      return;
+    }
+    try {
+      const result = await listNotifications({ limit: 1, unreadOnly: true });
+      setUnread(result.unread);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [token]);
+  useEffect(() => { void load(); }, [load]);
+  useNotificationLive(() => { void load(); });
+  return { unread, error, refresh: () => { void load(); } };
 }

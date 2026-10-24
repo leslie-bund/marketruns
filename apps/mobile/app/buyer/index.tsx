@@ -1,6 +1,6 @@
 import { Link, router } from "expo-router";
 import { Text, View, Pressable} from "react-native";
-import { getCart, useActiveMarket } from "../../src/api";
+import { getCart, listMarkets, useActiveMarket } from "../../src/api";
 import { useBuyerBadges, useBuyerProducts, useMyIntents } from "../../src/features/buyer";
 import { usePoll } from "../../src/api";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
@@ -11,6 +11,8 @@ export default function BuyerHome() {
   const cart = usePoll(getCart, 4000);
   const badges = useBuyerBadges();
   const market = useActiveMarket();
+  const registry = usePoll(listMarkets, 15000);
+  const registryEntry = registry.data?.find((entry) => entry.id === market);
   const open = intents.data?.filter((intent) => intent.status === "open") ?? [];
 
   return (
@@ -18,7 +20,9 @@ export default function BuyerHome() {
       <Card style={{ backgroundColor: colors.green, borderColor: colors.green }}>
         <Text style={{ color: "#DAF26B", fontWeight: "800", fontSize: 11, letterSpacing: 1.2 }}>YOUR MARKET IS OPEN</Text>
         <Text style={{ color: "white", fontSize: 22, fontWeight: "800" }}>Fresh finds, one Run.</Text>
-        <Text style={{ color: "#DCEAE1", fontSize: 13 }}>{intents.error ? `Edge: ${intents.error}` : "Live against the dev edge worker."}</Text>
+        <Text style={{ color: "#DCEAE1", fontSize: 13 }}>
+          {intents.error ? `Edge: ${intents.error}` : registryEntry ? `${registryEntry.onlineSellers} seller${registryEntry.onlineSellers === 1 ? "" : "s"} online · live market` : "Checking live seller presence…"}
+        </Text>
         <Link href="/buyer/post" asChild><Button title="＋  Post an Intent" /></Link>
       </Card>
 

@@ -3,8 +3,8 @@ import { Alert, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { HANDOFF_AUTO_CONFIRM_MS } from "@market-runs/domain";
 import { useLocalSearchParams } from "expo-router";
-import { ApiError, attachPhoto, scanChallenge, newId, uploadCapture } from "../../src/api";
-import { HandoffPhoto } from "../../src/features/run";
+import { ApiError, attachPhoto, identities, scanChallenge, newId, uploadCapture, useActiveParticipant } from "../../src/api";
+import { canRunnerMutate, HandoffPhoto } from "../../src/features/run";
 import { useRunnerRun } from "../../src/features/runner";
 import { Button, Card, Page, Pill, Section, colors, s } from "../../src/ui";
 
@@ -17,9 +17,10 @@ import { Button, Card, Page, Pill, Section, colors, s } from "../../src/ui";
  * on its next poll.
  */
 export default function HandoffScreen() {
-  const { handoffId } = useLocalSearchParams<{ handoffId: string }>();
-  // Same run source as the runner home: stored id, else live_runs discovery.
-  const run = useRunnerRun(2000);
+  const { handoffId, runId } = useLocalSearchParams<{ handoffId: string; runId?: string }>();
+  const run = useRunnerRun(2000, runId);
+  const { participant } = useActiveParticipant();
+  const runnerId = participant?.id ?? identities.runner.id;
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [photo, setPhoto] = useState(false);
@@ -101,6 +102,14 @@ export default function HandoffScreen() {
         }
       });
   };
+
+  if (run.run && !canRunnerMutate(run.run, runnerId)) {
+    return (
+      <Page eyebrow="HANDOFF" title="Claim required">
+        <Card><Text style={s.body}>Return to the runner pool and claim this Run before scanning, capturing evidence, or sharing location.</Text></Card>
+      </Page>
+    );
+  }
 
   if (handoff === null && run.run !== null) {
     return (
