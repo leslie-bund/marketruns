@@ -83,7 +83,7 @@ async function driveToRun(market: string, buyerId: string): Promise<{ runId: str
     type: "checkout.requested", cartId, buyerId,
     delivery: { kind: "plus-code", plusCode: "6FR5+8X Lagos" },
   });
-  expect(checkoutResponse.status).toBe(200);
+  expect(checkoutResponse.status, await checkoutResponse.clone().text()).toBe(200);
   const checkoutEvent = await readJson(checkoutResponse);
   expect(checkoutEvent.type).toBe("checkout.accepted");
   expect(checkoutEvent.floorRateKobo).toBe(170_000);

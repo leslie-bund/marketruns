@@ -22,7 +22,7 @@ export function buildSettlementInput(
       sellerId: leg.sellerId,
       amountKobo: leg.amountKobo,
       stopCompleted:
-        run.stops.find((stop) => stop.sellerName === leg.sellerId)?.status === "completed",
+        run.stops.find((stop) => (stop.sellerParticipantId ?? stop.sellerName) === leg.sellerId)?.status === "completed",
     })),
     deliveryPriceKobo: run.floorRateKobo,
     deliveryMarginKobo: config.deliveryMarginKobo,

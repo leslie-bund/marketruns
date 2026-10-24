@@ -34,7 +34,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
 
   /** Every known zone with its live config merged in (null when the DO cannot be read). */
   app.get("/markets", async (c) => {
-    const ids = await listMarketIds(c.env.MARKET_CONFIG);
+    const ids = await listMarketIds(c.env);
     const markets = await Promise.all(ids.map((id) => readMarketConfig(c, id)));
     return jsonResponse({ markets });
   });
@@ -53,7 +53,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
     }
     const { name, ...config } = parsed.data;
 
-    const ids = await listMarketIds(c.env.MARKET_CONFIG);
+    const ids = await listMarketIds(c.env);
     if (isKnownMarket(ids, name)) {
       return errorResponse(409, "market-exists", `market ${name} already exists`);
     }
@@ -62,7 +62,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
     if (written instanceof Response) return written;
 
     // The index heals on next join even when this put fails — report, don't 500.
-    const indexed = await addMarketToIndex(c.env.MARKET_CONFIG, name);
+    const indexed = await addMarketToIndex(c.env, name);
     return jsonResponse({ market: { id: name }, config: written, indexed }, 201);
   });
 
@@ -79,7 +79,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
     if (!parsed.success) {
       return errorResponse(400, "invalid-body", "request body failed config validation", { issues: parsed.error.issues });
     }
-    const ids = await listMarketIds(c.env.MARKET_CONFIG);
+    const ids = await listMarketIds(c.env);
     if (!isKnownMarket(ids, market)) {
       return errorResponse(404, "unknown-market", `market ${market} is not a known zone`);
     }
@@ -96,7 +96,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
    */
   app.get("/markets/:market/vocabulary", async (c) => {
     const market = decodeURIComponent(c.req.param("market"));
-    const ids = await listMarketIds(c.env.MARKET_CONFIG);
+    const ids = await listMarketIds(c.env);
     if (!isKnownMarket(ids, market)) {
       return errorResponse(404, "unknown-market", `market ${market} is not a known zone`);
     }
@@ -130,7 +130,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
         issues: parsed.error.issues,
       });
     }
-    const ids = await listMarketIds(c.env.MARKET_CONFIG);
+    const ids = await listMarketIds(c.env);
     if (!isKnownMarket(ids, market)) {
       return errorResponse(404, "unknown-market", `market ${market} is not a known zone`);
     }

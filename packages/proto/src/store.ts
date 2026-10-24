@@ -11,6 +11,8 @@ export const StoreSchema = z.object({
   id: z.string().min(1),
   market: z.string().min(1),
   name: z.string().min(1),
+  /** Authoritative payout/authorization owner; never a client-asserted display name. */
+  sellerParticipantId: z.string().min(1),
   exchangePoint: z.string().min(1),
   /** The store's persistent catalog: what this store can supply. */
   shopItems: z.array(z.string().min(1)).min(1),
@@ -24,6 +26,8 @@ export const StoreRegisteredSchema = z.object({
   storeId: z.string().min(1),
   market: z.string().min(1),
   name: z.string().min(1),
+  /** Edge-owned on authenticated writes; optional only for legacy direct-DO dev fixtures. */
+  sellerParticipantId: z.string().min(1).optional(),
   exchangePoint: z.string().min(1),
   shopItems: z.array(z.string().min(1)).min(1),
 });

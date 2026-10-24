@@ -12,6 +12,8 @@ import {
 import { internalPost } from "../../do/transport.js";
 import { forwardTo } from "./markets.js";
 import { correlationHeaders } from "../middleware/request-id.js";
+import { coreRegistry } from "../../registry/index.js";
+import { requireTransactionRole } from "../middleware/participant.js";
 
 /**
  * The per-object scopes: /products/:productId, /carts/:cartId, /runs/:runId.
@@ -58,13 +60,15 @@ export function participantsRoute(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
   app.all("/:participantId", async (c) => {
     const participantId = decodeURIComponent(c.req.param("participantId") ?? "");
+    const who = c.get("participant");
+    if (who.source === "session" && who.id !== participantId) {
+      return errorResponse(403, "forbidden", "participants may read only their own durable profile");
+    }
+    const durable = await coreRegistry(c.env).participant(participantId);
+    if (durable) return c.json({ participant: durable });
     const target = `http://do/participant/${encodeURIComponent(participantId)}`;
     const stub = c.env.PARTICIPANT_DO.get(c.env.PARTICIPANT_DO.idFromName(participantObjectName(participantId)));
     const response = await stub.fetch(new Request(target, { headers: correlationHeaders(c) }));
-    // Dev-state legacy fallback (ADR-0016 records the clean break): participants
-    // onboarded before per-participant keying live in the single "participants"
-    // object; a miss on the caller's own object falls back to one legacy read.
-    // No migration script — new writes never touch the legacy object.
     if (response.status !== 404) return response;
     const legacy = c.env.PARTICIPANT_DO.get(c.env.PARTICIPANT_DO.idFromName(LEGACY_REGISTRY_NAME));
     return legacy.fetch(new Request(target, { headers: correlationHeaders(c) }));
@@ -82,34 +86,56 @@ export function cartsRoute(): Hono<{ Bindings: Env }> {
 export function runsRoute(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
-  app.post("/:runId/handoffs", async (c) => forwardValidated(c, "/handoff/initiate", InitiateHandoffRequestSchema));
+  app.post("/:runId/claim", async (c) => {
+    const denied = await requireTransactionRole(c, "runner");
+    if (denied) return denied;
+    const runId = decodeURIComponent(c.req.param("runId"));
+    const runResponse = await runStub(c).fetch(new Request("http://do/", { headers: correlationHeaders(c) }));
+    if (!runResponse.ok) return runResponse;
+    const current = (await runResponse.json()) as { run?: { market?: string } };
+    const market = current.run?.market;
+    if (!market) return errorResponse(404, "not-found", "run is unknown or retired");
+    if (!(await coreRegistry(c.env).isInternalRunner(market, c.get("participant").id))) {
+      return errorResponse(403, "forbidden", "runner is not in this market's internal pool");
+    }
+    return runStub(c).fetch(internalPost("/claim", { participantId: c.get("participant").id }, correlationHeaders(c, resolvedHeaders(c))));
+  });
+
+  app.post("/:runId/handoffs", async (c) => {
+    const denied = await requireRunnerForSession(c);
+    return denied ?? forwardValidated(c, "/handoff/initiate", InitiateHandoffRequestSchema);
+  });
   app.post("/:runId/handoffs/:handoffId/confirm", async (c) => {
+    const denied = await requireRunnerForSession(c);
+    if (denied) return denied;
     const body = { handoffId: decodeURIComponent(c.req.param("handoffId")) };
     const check = HandoffRefRequestSchema.safeParse(body);
     if (!check.success) return errorResponse(400, "invalid-body", "bad handoff id", { issues: check.error.issues });
-    return runStub(c).fetch(internalPost("/handoff/confirm", check.data, correlationHeaders(c)));
+    return runStub(c).fetch(internalPost("/handoff/confirm", check.data, correlationHeaders(c, resolvedHeaders(c))));
   });
-  app.post("/:runId/handoffs/:handoffId/photo", async (c) => forwardPhoto(c, decodeURIComponent(c.req.param("handoffId"))));
-  app.post("/:runId/delivery/final", async (c) =>
-    runStub(c).fetch(internalPost("/delivery/final", {}, correlationHeaders(c))),
-  );
-  // A dispute records who raised it: the header-resolved caller is adopted
-  // when present (ADR-0015 dev seam); anonymous callers still dispute.
+  app.post("/:runId/handoffs/:handoffId/photo", async (c) => {
+    const denied = await requireRunnerForSession(c);
+    return denied ?? forwardPhoto(c, decodeURIComponent(c.req.param("handoffId")));
+  });
+  app.post("/:runId/delivery/final", async (c) => {
+    const denied = await requireRunnerForSession(c);
+    if (denied) return denied;
+    return runStub(c).fetch(internalPost("/delivery/final", {}, correlationHeaders(c, resolvedHeaders(c))));
+  });
   app.post("/:runId/dispute", async (c) => {
-    let raw: unknown;
-    try {
-      raw = await c.req.json();
-    } catch {
-      return errorResponse(400, "invalid-body", "request body is not valid JSON");
-    }
-    const parsed = DisputeRunRequestSchema.safeParse(raw);
-    if (!parsed.success) {
-      return errorResponse(400, "invalid-body", "request body failed schema validation", { issues: parsed.error.issues });
-    }
     const who = c.get("participant");
-    const body =
-      who.source === "header" ? { ...parsed.data, raisedByParticipantId: who.id } : parsed.data;
-    return runStub(c).fetch(internalPost("/dispute", body, correlationHeaders(c)));
+    if (who.source === "unauthenticated") return errorResponse(401, "unauthorized", "a Bearer session is required");
+    if (who.source === "session") {
+      if (who.role !== "buyer" && who.role !== "seller" && who.role !== "runner") return errorResponse(403, "forbidden", "invalid participant role");
+      const denied = await requireTransactionRole(c, who.role);
+      if (denied) return denied;
+    }
+    let raw: unknown;
+    try { raw = await c.req.json(); } catch { return errorResponse(400, "invalid-body", "request body is not valid JSON"); }
+    const parsed = DisputeRunRequestSchema.safeParse(raw);
+    if (!parsed.success) return errorResponse(400, "invalid-body", "request body failed schema validation", { issues: parsed.error.issues });
+    const body = who.source === "header" || who.source === "session" ? { ...parsed.data, raisedByParticipantId: who.id } : parsed.data;
+    return runStub(c).fetch(internalPost("/dispute", body, correlationHeaders(c, resolvedHeaders(c))));
   });
 
   /**
@@ -129,6 +155,20 @@ export function runsRoute(): Hono<{ Bindings: Env }> {
   return app;
 }
 
+function resolvedHeaders(c: Context<{ Bindings: Env }>): Record<string, string> {
+  const who = c.get("participant");
+  return {
+    "x-resolved-participant-id": who.id,
+    "x-resolved-participant-role": who.role,
+    "x-resolved-participant-source": who.source,
+  };
+}
+
+async function requireRunnerForSession(c: Context<{ Bindings: Env }>): Promise<Response | null> {
+  const source = c.get("participant").source;
+  return source === "session" || source === "unauthenticated" ? requireTransactionRole(c, "runner") : null;
+}
+
 /** Validate an internal body in the worker, then forward to the DO route. */
 async function forwardValidated<S extends z.ZodTypeAny>(
   c: Context<{ Bindings: Env }>,
@@ -145,7 +185,7 @@ async function forwardValidated<S extends z.ZodTypeAny>(
   if (!parsed.success) {
     return errorResponse(400, "invalid-body", "request body failed schema validation", { issues: parsed.error.issues });
   }
-  return runStub(c).fetch(internalPost(path, parsed.data, correlationHeaders(c)));
+  return runStub(c).fetch(internalPost(path, parsed.data, correlationHeaders(c, resolvedHeaders(c))));
 }
 
 /**
@@ -164,5 +204,5 @@ async function forwardPhoto(
   if (command.handoffId !== handoffId) {
     return errorResponse(400, "invalid-body", `photo addresses handoff ${command.handoffId}, not ${handoffId}`);
   }
-  return runStub(c).fetch(internalPost("/handoff/photo", command, correlationHeaders(c)));
+  return runStub(c).fetch(internalPost("/handoff/photo", command, correlationHeaders(c, resolvedHeaders(c))));
 }

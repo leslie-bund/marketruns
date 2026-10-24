@@ -7,6 +7,7 @@ import { DeliverySchema, GeoLocationSchema, KoboSchema, TimestampSchema } from "
  * (ADR-0013) without shipping auction logic.
  */
 export const RunStatusSchema = z.enum([
+  "unassigned",
   "assigned",
   "collecting",
   "delivering",
@@ -28,6 +29,8 @@ export type GeoPointValue = z.infer<typeof GeoPointValueSchema>;
 
 export const RunStopSchema = z.object({
   sellerName: z.string().min(1),
+  storeId: z.string().min(1).optional(),
+  sellerParticipantId: z.string().min(1).optional(),
   exchangePoint: z.string().min(1),
   shopItems: z.array(z.string().min(1)),
   status: StopStatusSchema,

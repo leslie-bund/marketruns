@@ -202,7 +202,7 @@ export class CartDO extends DurableObject<Env> {
     }
     if (state.status !== "open") return conflict(`cart is ${state.status}; checkout is refused`);
     // One buyer per cart: an identified caller may only check out their own cart.
-    if (state.buyerId !== undefined && command.buyerId !== undefined && command.buyerId !== state.buyerId) {
+    if (state.buyerId !== undefined && state.buyerId !== "buyer:anonymous" && command.buyerId !== undefined && command.buyerId !== state.buyerId) {
       return conflict(`cart ${state.cartId} belongs to ${state.buyerId}; ${command.buyerId} cannot check it out`);
     }
     const now = this.now();
@@ -235,11 +235,16 @@ export class CartDO extends DurableObject<Env> {
     if (config instanceof Response) return config;
 
     // Seed stops grouped by seller exchange point, preserving acceptance order.
-    const stopOrder: Array<{ sellerName: string; exchangePoint: string }> = [];
+    const stopOrder: Array<{ sellerName: string; exchangePoint: string; storeId?: string; sellerParticipantId?: string }> = [];
     for (const entry of state.entries) {
       const product = entry.product;
       if (!stopOrder.some((stop) => stop.sellerName === product.sellerName && stop.exchangePoint === product.exchangePoint)) {
-        stopOrder.push({ sellerName: product.sellerName, exchangePoint: product.exchangePoint });
+        stopOrder.push({
+          sellerName: product.sellerName,
+          exchangePoint: product.exchangePoint,
+          ...(product.storeId ? { storeId: product.storeId } : {}),
+          ...(product.sellerParticipantId ? { sellerParticipantId: product.sellerParticipantId } : {}),
+        });
       }
     }
 
@@ -259,6 +264,8 @@ export class CartDO extends DurableObject<Env> {
 
     const stops = stopOrder.map((stop, index) => ({
       sellerName: stop.sellerName,
+      ...(stop.storeId ? { storeId: stop.storeId } : {}),
+      ...(stop.sellerParticipantId ? { sellerParticipantId: stop.sellerParticipantId } : {}),
       exchangePoint: stop.exchangePoint,
       shopItems: state.entries
         .filter((entry) => entry.product.sellerName === stop.sellerName && entry.product.exchangePoint === stop.exchangePoint)
@@ -270,12 +277,13 @@ export class CartDO extends DurableObject<Env> {
       ...(geography ? { location: geography.stopLocations[index]! } : {}),
     }));
 
-    // Settlement legs: per-seller goods totals, in kobo, integers only.
+    // Seller participant ids resolve payout accounts; display names remain legacy dev fallbacks.
     const legs: Array<{ sellerId: string; amountKobo: number }> = [];
     for (const entry of state.entries) {
-      const leg = legs.find((candidate) => candidate.sellerId === entry.product.sellerName);
+      const sellerId = entry.product.sellerParticipantId ?? entry.product.sellerName;
+      const leg = legs.find((candidate) => candidate.sellerId === sellerId);
       if (leg) leg.amountKobo += entry.product.priceKobo;
-      else legs.push({ sellerId: entry.product.sellerName, amountKobo: entry.product.priceKobo });
+      else legs.push({ sellerId, amountKobo: entry.product.priceKobo });
     }
 
     // The buyer is the checkout caller, falling back to the cart's recorded owner.
@@ -307,7 +315,7 @@ export class CartDO extends DurableObject<Env> {
     const run = {
       id: runId,
       market: state.market,
-      status: "assigned" as const,
+      status: (this.env.ALLOW_HEADER_AUTH === "true" ? "assigned" : "unassigned") as "assigned" | "unassigned",
       floorRateKobo,
       delivery: command.delivery,
       stops,
@@ -324,10 +332,10 @@ export class CartDO extends DurableObject<Env> {
         : {}),
     };
 
-    // Create the Run by idFromName on RUN_DO and seed it. MVP: the internal
-    // floor-rate runner is assigned at creation (ADR-0013); the v2 auction
-    // would seed with runnerId null until a bid wins.
-    const runnerId = "runner:internal";
+    // Production runs wait for an atomic pool claim. The explicit header-auth
+    // demo posture retains its seeded internal runner so existing rehearsals
+    // can drive the complete trip without casting a separate pool member.
+    const runnerId = this.env.ALLOW_HEADER_AUTH === "true" ? "runner:internal" : null;
     const runStub = this.env.RUN_DO.get(this.env.RUN_DO.idFromName(runId));
     const seeded = await runStub.fetch(
       internalPost(
@@ -359,7 +367,7 @@ export class CartDO extends DurableObject<Env> {
     // storeIds: the cart's distinct store references (Products carry the
     // store's trading identity as sellerName — stops are per-store) so a
     // seller can discover runs containing their products.
-    const storeIds = [...new Set(state.entries.map((entry) => entry.product.sellerName))];
+    const storeIds = [...new Set(state.entries.map((entry) => entry.product.storeId ?? entry.product.sellerName))];
     const runStarted: ServerEvent = {
       type: "run.started",
       runId,

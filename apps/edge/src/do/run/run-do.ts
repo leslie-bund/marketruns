@@ -33,6 +33,7 @@ import {
 } from "../runtime/index.js";
 import { STATE_KEY } from "../state.js";
 import type {
+  ClaimRunRequest,
   DisputeRunRequest,
   HandoffRefRequest,
   InitiateHandoffRequest,
@@ -40,6 +41,7 @@ import type {
   SeedRunRequest,
 } from "../schemas.js";
 import {
+  ClaimRunRequestSchema,
   DisputeRunRequestSchema,
   HandoffRefRequestSchema,
   InitiateHandoffRequestSchema,
@@ -76,6 +78,17 @@ export class RunDO extends DurableObject<Env> {
       const parsed = await parseInternal(request, SeedRunRequestSchema);
       if (!parsed.ok) return parsed.response;
       return internalErrorGuard(() => this.seed(parsed.data, request.headers.get("x-request-id") ?? undefined));
+    }
+    if (request.method === "POST" && path === "/claim") {
+      const parsed = await parseInternal(request, ClaimRunRequestSchema);
+      if (!parsed.ok) return parsed.response;
+      return internalErrorGuard(() => this.claim(parsed.data));
+    }
+    if (request.method === "POST" && request.headers.get("x-resolved-participant-source") === "session" &&
+        (path.startsWith("/handoff/") || path === "/location" || path === "/delivery/final")) {
+      if (this.state.runnerId !== request.headers.get("x-resolved-participant-id")) {
+        return conflict("only the runner who claimed this run may mutate it");
+      }
     }
     if (request.method === "POST" && path === "/handoff/initiate") {
       const parsed = await parseInternal(request, InitiateHandoffRequestSchema);
@@ -194,11 +207,40 @@ export class RunDO extends DurableObject<Env> {
     this.state.settlementConfig = data.settlement;
     this.state.buyerId = data.buyerId;
     this.state.runnerId = data.runnerId;
+    this.state.startedAt = this.now();
+    this.state.storeIds = [...new Set(run.stops.map((stop) => stop.storeId ?? stop.sellerName))];
     if (requestId !== undefined) this.state.requestId = requestId;
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
     broadcast(this.ctx, event);
     return jsonResponse(event);
+  }
+
+  /** Single-threaded DO transition: exactly one pool runner can claim an unassigned run. */
+  private async claim(data: ClaimRunRequest): Promise<Response> {
+    const run = this.requireRun();
+    if (run instanceof Response) return run;
+    if (this.state.runnerId && this.state.runnerId !== data.participantId) return conflict("run was already claimed by another runner");
+    if (!this.state.runnerId && run.status !== "unassigned") return conflict(`run is ${run.status} and cannot be claimed`);
+    this.state.runnerId = data.participantId;
+    run.status = "assigned";
+    await this.ctx.storage.put(STATE_KEY, this.state);
+    const started: ServerEvent = {
+      type: "run.started",
+      runId: run.id,
+      market: run.market,
+      status: run.status,
+      runnerId: data.participantId,
+      buyerId: this.state.buyerId ?? "buyer:anonymous",
+      startedAt: this.state.startedAt ?? this.now(),
+      stopCount: run.stops.length,
+      storeIds: this.state.storeIds ?? [],
+      ...(this.state.requestId ? { requestId: this.state.requestId } : {}),
+    };
+    await this.env.ARCHIVE_QUEUE.send(serializeEvent(started));
+    const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
+    broadcast(this.ctx, event);
+    return jsonResponse({ ...event, runnerId: data.participantId });
   }
 
   /**

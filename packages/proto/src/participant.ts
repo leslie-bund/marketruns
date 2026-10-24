@@ -19,10 +19,15 @@ export const ParticipantSchema = z.object({
   id: z.string().min(1),
   role: ParticipantRoleSchema,
   displayName: z.string().min(1),
+  /** Receipts/security only; never an account-recovery channel. */
+  email: z.string().email().optional(),
+  verifiedLegalName: z.string().min(1).optional(),
   kycStatus: KycVerificationStatusSchema,
   idDocumentType: IdDocumentTypeSchema,
-  /** SHA-256 of the document number — the raw BVN/NIN is never stored. */
+  /** Keyed HMAC-SHA256 of the document number — the raw BVN/NIN is never stored. */
   idDocumentHash: z.string().min(1),
+  consentAt: TimestampSchema.optional(),
+  consentVersion: z.string().min(1).optional(),
   /** Signed R2 reference of the onboarding facial capture. */
   facialCaptureRef: z.string().min(1).optional(),
   /** Markets this participant has joined. */
@@ -41,6 +46,10 @@ export const ParticipantOnboardedSchema = z.object({
   participantId: z.string().min(1),
   role: ParticipantRoleSchema,
   displayName: z.string().min(1),
+  email: z.string().email().optional(),
+  verifiedLegalName: z.string().min(1).optional(),
+  consentAt: TimestampSchema.optional(),
+  consentVersion: z.string().min(1).optional(),
   idDocumentType: IdDocumentTypeSchema,
   idDocument: z.string().min(1),
   facialCaptureRef: z.string().min(1),

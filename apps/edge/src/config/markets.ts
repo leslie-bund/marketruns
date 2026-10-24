@@ -1,39 +1,22 @@
-/**
- * The zone registry (GLOSSARY: Market). Seed zones are always joinable; the
- * KV index (`markets:index` in MARKET_CONFIG) adds every zone a participant
- * has joined or ops has created. Dev-stage home — ADR-0016.
- */
+import type { Env } from "./env.js";
+import { coreRegistry } from "../registry/index.js";
 
-/** Launch seed zones (ADR-0013): always listed, always joinable. */
+/** Durable market registry. Runtime configuration remains in MarketDO/KV, never in this list cache. */
 export const SEED_MARKETS: ReadonlyArray<{ id: string }> = [{ id: "Balogun" }, { id: "Computer Village" }];
 
-/** Every known zone id: seeds first, then the KV index (heals itself on join). */
-export async function listMarketIds(kv: KVNamespace): Promise<string[]> {
-  const seeds = SEED_MARKETS.map((market) => market.id);
-  try {
-    const index = (await kv.get("markets:index", "json")) as Array<{ id: string }> | null;
-    const extra = (index ?? []).map((entry) => entry.id).filter((id) => !seeds.includes(id));
-    return [...seeds, ...extra];
-  } catch {
-    return seeds;
-  }
+export async function listMarketIds(env: Env): Promise<string[]> {
+  return (await coreRegistry(env).listMarkets()).map((market) => market.id);
 }
 
-/** Case-insensitive membership check — zone names are display names, not slugs. */
 export function isKnownMarket(ids: string[], name: string): boolean {
   const wanted = name.toLowerCase();
   return ids.some((id) => id.toLowerCase() === wanted);
 }
 
-/** Add a zone to the KV index (idempotent). Returns false when KV is unavailable. */
-export async function addMarketToIndex(kv: KVNamespace, name: string): Promise<boolean> {
+/** CRUD-ready create compatibility for the existing ops route. */
+export async function addMarketToIndex(env: Env, name: string): Promise<boolean> {
   try {
-    const current = (await kv.get("markets:index", "json")) as Array<{ id: string }> | null;
-    const index = current ?? [];
-    if (!index.some((entry) => entry.id === name)) {
-      index.push({ id: name });
-      await kv.put("markets:index", JSON.stringify(index));
-    }
+    await coreRegistry(env).upsertMarket({ id: name, name, opensAt: "08:00", closesAt: "18:00" });
     return true;
   } catch {
     return false;

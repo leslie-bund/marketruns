@@ -36,7 +36,8 @@ export const PaymentFundsReleasedSchema = z.object({
 });
 export type PaymentFundsReleased = z.infer<typeof PaymentFundsReleasedSchema>;
 
-export const KycVerificationStatusSchema = z.enum(["pending", "verified", "failed"]);
+/** `preverified` is a staging-only trusted fixture, never production verification. */
+export const KycVerificationStatusSchema = z.enum(["pending", "preverified", "verified", "failed"]);
 export type KycVerificationStatus = z.infer<typeof KycVerificationStatusSchema>;
 
 /** Edge → participant: identity verification outcome. */

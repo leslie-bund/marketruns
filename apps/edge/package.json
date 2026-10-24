@@ -7,6 +7,7 @@
     "@market-runs/domain": "workspace:*",
     "@market-runs/proto": "workspace:*",
     "hono": "^4.13.13",
+    "postgres": "^3.4.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
