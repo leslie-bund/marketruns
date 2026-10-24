@@ -4,7 +4,7 @@
 #   1. Postgres in docker (starts or reuses the market-runs-postgres container)
 #   2. Drizzle migrations against it
 #   3. Edge (:8787) + archive (:8788) + identity (:8789) + payments (:8790)
-#      via infra/dev-servers.sh
+#      + notifications (:8791) via infra/dev-servers.sh
 #   4. Demo seed (2 Balogun stores + 1 Computer Village store) — idempotent
 #   5. Optional Cloudflare quick tunnel so friends' phones can reach the edge
 #
@@ -69,7 +69,7 @@ cleanup() {
   fi
   if [ "$SERVERS_STARTED" = 1 ]; then
     infra/dev-servers.sh --stop >/dev/null 2>&1 || true
-    echo "✓ dev servers stopped (edge + archive + identity + payments)"
+    echo "✓ dev servers stopped (edge + archive + identity + payments + notifications)"
   fi
   if [ "$PG_STARTED" = 1 ]; then
     docker stop "$CONTAINER" >/dev/null 2>&1 || true
@@ -146,9 +146,9 @@ if [ "$TUNNEL" = 1 ]; then
 fi
 
 # --------------------------------------------------------------------------
-# 4. Edge + archive + identity + payments (dev-servers.sh owns the wrangler
-#    processes, health checks, and the pidfile; it reads OPS_TOKEN from the
-#    environment when set and passes DATABASE_URL through to the three
+# 4. Edge + archive + identity + payments + notifications (dev-servers.sh owns
+#    the wrangler processes, health checks, and the pidfile; it reads OPS_TOKEN
+#    from the environment when set and passes DATABASE_URL through to all four
 #    Postgres-backed workers).
 # --------------------------------------------------------------------------
 SERVERS_STARTED=1
@@ -207,6 +207,7 @@ echo "  edge (local)                   http://localhost:8787"
 echo "  archive (local)                http://localhost:8788"
 echo "  identity (local)               http://localhost:8789"
 echo "  payments (local)               http://localhost:8790"
+echo "  notifications (local)          http://localhost:8791"
 echo "  ops console                    $OPS_URL"
 if [ "$TOKEN_GENERATED" = 1 ]; then
   echo "  OPS_TOKEN (generated)          $OPS_TOKEN"

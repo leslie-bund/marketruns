@@ -55,6 +55,12 @@ IDENTITY_URL = "http://localhost:8789"
 # proxy (/ops/api/admin/payments → GET /dispatches). Service binding in prod.
 PAYMENTS_URL = "http://localhost:8790"
 
+# Dev-only: durable notification reads and participant realtime callbacks.
+# TODO(production): override NOTIFICATIONS_URL for the deployed hostname, or
+# replace URL fetches with a NOTIFICATIONS Service binding (requires an edge
+# code change); keep NOTIFICATION_INTERNAL_TOKEN in wrangler secrets.
+NOTIFICATIONS_URL = "http://localhost:8791"
+
 # Secrets stay out of this file — set them with wrangler:
 #   wrangler secret put IDENTITY_SESSION_SECRET   # on BOTH edge and identity
 #   wrangler secret put IDENTITY_INTERNAL_TOKEN   # on BOTH edge and identity — the edge
