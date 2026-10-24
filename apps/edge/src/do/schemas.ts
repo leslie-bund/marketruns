@@ -173,6 +173,8 @@ export const OfferProductRequestSchema = ProductSchema.pick({
   unit: true,
   priceKobo: true,
   sellerName: true,
+  storeId: true,
+  sellerParticipantId: true,
   exchangePoint: true,
   photoCaptureRef: true,
 }).extend({
@@ -215,7 +217,7 @@ export const SeedRunRequestSchema = z.object({
   run: z.object({
     id: z.string().min(1),
     market: z.string().min(1),
-    status: z.enum(["assigned", "collecting", "delivering", "delivered", "closed", "aborted"]),
+    status: z.enum(["unassigned", "assigned", "collecting", "delivering", "delivered", "closed", "aborted"]),
     floorRateKobo: KoboSchema,
     delivery: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("plus-code"), plusCode: z.string().min(1) }),
@@ -223,6 +225,8 @@ export const SeedRunRequestSchema = z.object({
     ]),
     stops: z.array(z.object({
       sellerName: z.string().min(1),
+      storeId: z.string().min(1).optional(),
+      sellerParticipantId: z.string().min(1).optional(),
       exchangePoint: z.string().min(1),
       shopItems: z.array(z.string().min(1)),
       status: z.enum(["next", "upcoming", "completed"]),
@@ -240,9 +244,12 @@ export const SeedRunRequestSchema = z.object({
   }),
   /** Durable identities carried from checkout through to the archive records. */
   buyerId: z.string().min(1),
-  runnerId: z.string().min(1),
+  runnerId: z.string().min(1).nullable(),
 });
 export type SeedRunRequest = z.infer<typeof SeedRunRequestSchema>;
+
+export const ClaimRunRequestSchema = z.object({ participantId: z.string().min(1) });
+export type ClaimRunRequest = z.infer<typeof ClaimRunRequestSchema>;
 
 export const DisputeRunRequestSchema = z.object({
   reason: z.string().min(1),

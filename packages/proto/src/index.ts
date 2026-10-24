@@ -50,6 +50,7 @@ export * from "./archive.js";
 export * from "./payments.js";
 export * from "./admin.js";
 export * from "./auth.js";
+export * from "./registry.js";
 
 /**
  * Everything a client (buyer / seller / runner app) may send to the edge,

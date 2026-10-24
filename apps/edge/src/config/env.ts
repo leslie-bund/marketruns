@@ -41,6 +41,13 @@ export interface Env {
    * deployed environment.
    */
   IDENTITY_SESSION_SECRET?: string;
+  /** Explicit local dev/test only. Deployed default is Bearer-only. */
+  ALLOW_HEADER_AUTH?: string;
+  /** Neon direct connection for CLI/dev; deployed Workers use Hyperdrive. */
+  DATABASE_URL?: string;
+  HYPERDRIVE?: { connectionString: string };
+  /** Key for HMAC-SHA256 BVN/NIN digests; raw identity numbers are never persisted. */
+  ID_DOCUMENT_HMAC_SECRET?: string;
   /**
    * Shared secret for the identity worker's internal routes (face enrollment,
    * the device-reset queue read, device-reset decisions — requireInternal,

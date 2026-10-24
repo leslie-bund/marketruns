@@ -32,7 +32,9 @@ export interface RunState {
   settlementConfig?: SettlementConfig;
   /** Durable identities carried to settlement.released and run.retired. */
   buyerId?: string;
-  runnerId?: string;
+  runnerId?: string | null;
+  startedAt?: number;
+  storeIds?: string[];
   handoffs: InternalHandoff[];
   finalDeliveryAt?: number;
   settlementReleased: boolean;

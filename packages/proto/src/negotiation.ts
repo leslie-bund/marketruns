@@ -32,6 +32,9 @@ export const ProductSchema = z.object({
   unit: z.string().min(1),
   priceKobo: KoboSchema,
   sellerName: z.string().min(1),
+  /** Registry ids are required for authenticated offers; optional for legacy dev fixtures. */
+  storeId: z.string().min(1).optional(),
+  sellerParticipantId: z.string().min(1).optional(),
   exchangePoint: z.string().min(1),
   expiresAt: TimestampSchema,
   status: ProductStatusSchema,

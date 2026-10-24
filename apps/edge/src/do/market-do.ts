@@ -19,6 +19,7 @@ import {
 } from "./runtime/index.js";
 import { fetchInternal } from "./transport.js";
 import { STATE_KEY } from "./state.js";
+import { coreRegistry } from "../registry/index.js";
 import {
   IntentProductRequestSchema,
   MARKET_OPEN_WINDOW_MS,
@@ -92,7 +93,7 @@ export class MarketDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const path = url.pathname.endsWith("/") && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
-    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx);
+    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx, request, { marketId: this.state.marketId });
 
     if (request.method === "POST" && path === "/intent") {
       const parsed = await parseClientCommand(request);
@@ -221,6 +222,7 @@ export class MarketDO extends DurableObject<Env> {
       id: command.storeId,
       market: command.market,
       name: command.name,
+      sellerParticipantId: command.sellerParticipantId ?? "seller:legacy",
       exchangePoint: command.exchangePoint,
       shopItems: command.shopItems,
       joinedAt: this.now(),
@@ -258,14 +260,11 @@ export class MarketDO extends DurableObject<Env> {
     return jsonResponse(event);
   }
 
-  /** The global markets index lives in MARKET_CONFIG KV (dev home of the zone registry). */
+  /** Join heals a missing registry row without overwriting an existing market's schedule. */
   private async upsertMarketsIndex(market: string): Promise<void> {
-    const current = (await this.env.MARKET_CONFIG.get("markets:index", "json")) as Array<{ id: string }> | null;
-    const index = current ?? [];
-    if (!index.some((entry) => entry.id === market)) {
-      index.push({ id: market });
-      await this.env.MARKET_CONFIG.put("markets:index", JSON.stringify(index));
-    }
+    const registry = coreRegistry(this.env);
+    const exists = (await registry.listMarkets()).some((entry) => entry.id.toLowerCase() === market.toLowerCase());
+    if (!exists) await registry.upsertMarket({ id: market, name: market, opensAt: "08:00", closesAt: "18:00" });
   }
 
   /** The market's item vocabulary: the union of every store's shop items (ADR-0006 — grown, not governed). */
@@ -514,7 +513,12 @@ export class MarketDO extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    handleWebSocketMessage(ws, message);
+    await handleWebSocketMessage(ws, message, async (heartbeat) => {
+      const store = await coreRegistry(this.env).store(heartbeat.storeId);
+      if (store?.sellerParticipantId === heartbeat.participantId && store.market === heartbeat.marketId) {
+        await coreRegistry(this.env).heartbeat(heartbeat);
+      }
+    });
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {

@@ -148,6 +148,8 @@ export class ProductDO extends DurableObject<Env> {
       unit: data.unit,
       priceKobo: data.priceKobo,
       sellerName: data.sellerName,
+      ...(data.storeId !== undefined ? { storeId: data.storeId } : {}),
+      ...(data.sellerParticipantId !== undefined ? { sellerParticipantId: data.sellerParticipantId } : {}),
       exchangePoint: data.exchangePoint,
       expiresAt,
       status: "available",

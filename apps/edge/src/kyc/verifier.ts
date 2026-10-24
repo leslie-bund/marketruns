@@ -27,8 +27,15 @@ export const devIdentityVerifier: IdentityVerifier = {
   },
 };
 
-/** SHA-256 of a raw document number; the edge stores only the hash. */
-export async function hashIdDocument(raw: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+/** Keyed HMAC-SHA256; raw BVN/NIN and unkeyed, enumerable digests are never stored. */
+export async function hashIdDocument(raw: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

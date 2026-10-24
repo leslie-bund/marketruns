@@ -57,7 +57,7 @@ describe("requireOps guard", () => {
     let setValue: unknown;
     return {
       c: {
-        env: { OPS_TOKEN: opts.token },
+        env: { OPS_TOKEN: opts.token, ALLOW_HEADER_AUTH: "true" },
         req: { header: (name: string) => (name === "x-ops-token" ? opts.header : undefined) },
         set: (_key: string, value: unknown) => {
           setValue = value;

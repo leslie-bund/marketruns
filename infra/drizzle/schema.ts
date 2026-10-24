@@ -91,13 +91,13 @@ export type DeliverySnapshot =
   | { kind: "muster-point"; name: string };
 
 /** Mirror of RunStatus in packages/proto/src/run.ts. */
-export const RUN_STATUSES = ["assigned", "collecting", "delivering", "delivered", "closed", "aborted"] as const;
+export const RUN_STATUSES = ["unassigned", "assigned", "collecting", "delivering", "delivered", "closed", "aborted"] as const;
 
 /** Mirror of Role in packages/proto/src/primitives.ts. */
 export const PARTICIPANT_ROLES = ["Buyer", "Seller", "Runner"] as const;
 
 /** Mirror of KycVerificationStatus in packages/proto/src/payments.ts. */
-export const KYC_STATUSES = ["pending", "verified", "failed"] as const;
+export const KYC_STATUSES = ["pending", "preverified", "verified", "failed"] as const;
 
 /** Settlement modes — mirror of SettlementMode in packages/domain/src/settlement.ts. */
 export const SETTLEMENT_MODES = ["completed", "aborted", "disputed"] as const;
@@ -128,43 +128,97 @@ export const LEDGER_ACCOUNTS = [
 export type LedgerAccount = (typeof LEDGER_ACCOUNTS)[number];
 
 /* ------------------------------------------------------------------------ */
-/* Markets, stores, shop items                                              */
+/* Participant anchors, markets, stores, runner pools, presence             */
 /* ------------------------------------------------------------------------ */
+
+/** Durable profile anchor. Email is receipts/security only, never recovery. */
+export const participantProfiles = pgTable(
+  "participant_profiles",
+  {
+    participantId: text("participant_id").primaryKey(),
+    role: text("role").notNull(),
+    email: text("email"),
+    displayName: text("display_name").notNull(),
+    verifiedLegalName: text("verified_legal_name"),
+    kycStatus: text("kyc_status").notNull(),
+    idDocumentType: text("id_document_type").notNull(),
+    /** Keyed HMAC-SHA256; raw BVN/NIN and unkeyed hashes are never stored. */
+    idDocumentHash: text("id_document_hash").notNull(),
+    facialCaptureRef: text("facial_capture_ref"),
+    consentAt: timestamp("consent_at", { withTimezone: true }),
+    consentVersion: text("consent_version"),
+    markets: jsonb("markets").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("participant_profiles_email_unique").on(table.email),
+    index("participant_profiles_kyc_status_idx").on(table.kycStatus),
+    check("participant_profiles_role_valid", sql`${table.role} IN ('buyer', 'seller', 'runner')`),
+    check("participant_profiles_kyc_valid", sql`${table.kycStatus} IN ('pending', 'preverified', 'verified', 'failed')`),
+    check("participant_profiles_document_valid", sql`${table.idDocumentType} IN ('bvn', 'nin')`),
+  ],
+);
 
 export const markets = pgTable(
   "markets",
   {
     id: text("id").primaryKey(),
-    /** Named geographic zone locals already recognize (GLOSSARY.md); unique. */
     name: text("name").notNull().unique(),
-    /** Daily local opening/closing clock times; the close gate is enforced by MarketDO. */
     opensAt: time("opens_at").notNull(),
     closesAt: time("closes_at").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [
-    check("markets_opens_before_closes", sql`${table.opensAt} < ${table.closesAt}`),
-  ],
+  (table) => [check("markets_opens_before_closes", sql`${table.opensAt} < ${table.closesAt}`)],
 );
 
 export const stores = pgTable(
   "stores",
   {
     id: text("id").primaryKey(),
-    /** Seller (participant id) operating this storefront. */
-    sellerId: text("seller_id").notNull(),
-    /** The market this store is registered to; fixes which market it trades in. */
-    marketId: text("market_id")
-      .notNull()
-      .references(() => markets.id),
+    /** Authoritative owner used for authorization and seller payout resolution. */
+    sellerParticipantId: text("seller_id").notNull(),
+    marketId: text("market_id").notNull().references(() => markets.id),
     name: text("name").notNull(),
+    exchangePoint: text("exchange_point").notNull().default(""),
+    shopItems: jsonb("shop_items").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index("stores_market_id_idx").on(table.marketId),
-    index("stores_seller_id_idx").on(table.sellerId),
+    index("stores_seller_participant_id_idx").on(table.sellerParticipantId),
+  ],
+);
+
+/** Per-market membership; there is no global internal-runner identity. */
+export const internalRunnerPools = pgTable(
+  "internal_runner_pools",
+  {
+    marketId: text("market_id").notNull().references(() => markets.id),
+    participantId: text("participant_id").notNull(),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("internal_runner_pools_membership_unique").on(table.marketId, table.participantId),
+    index("internal_runner_pools_participant_idx").on(table.participantId),
+  ],
+);
+
+/** Expiring presence read model; one row per seller per market dedupes sockets/devices. */
+export const sellerPresence = pgTable(
+  "seller_presence",
+  {
+    marketId: text("market_id").notNull().references(() => markets.id),
+    participantId: text("participant_id").notNull(),
+    storeId: text("store_id").notNull().references(() => stores.id),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("seller_presence_participant_market_unique").on(table.marketId, table.participantId),
+    index("seller_presence_last_seen_idx").on(table.lastSeenAt),
   ],
 );
 
@@ -209,7 +263,7 @@ export const kycRecords = pgTable(
     index("kyc_records_participant_id_idx").on(table.participantId),
     index("kyc_records_status_idx").on(table.status),
     check("kyc_records_role_valid", sql`${table.role} IN ('Buyer', 'Seller', 'Runner')`),
-    check("kyc_records_status_valid", sql`${table.status} IN ('pending', 'verified', 'failed')`),
+    check("kyc_records_status_valid", sql`${table.status} IN ('pending', 'preverified', 'verified', 'failed')`),
   ],
 );
 
@@ -299,7 +353,7 @@ export const liveRuns = pgTable(
     index("live_runs_market_idx").on(table.market),
     index("live_runs_status_idx").on(table.status),
     index("live_runs_retired_at_idx").on(table.retiredAt),
-    check("live_runs_status_valid", sql`${table.status} IN ('assigned', 'collecting', 'delivering', 'delivered', 'closed', 'aborted')`),
+    check("live_runs_status_valid", sql`${table.status} IN ('unassigned', 'assigned', 'collecting', 'delivering', 'delivered', 'closed', 'aborted')`),
     check("live_runs_stop_count_nonnegative", sql`${table.stopCount} >= 0`),
   ],
 );
@@ -329,7 +383,7 @@ export const runsArchive = pgTable(
     index("runs_archive_runner_id_idx").on(table.runnerId),
     index("runs_archive_status_idx").on(table.status),
     index("runs_archive_closed_at_idx").on(table.closedAt),
-    check("runs_archive_status_valid", sql`${table.status} IN ('assigned', 'collecting', 'delivering', 'delivered', 'closed', 'aborted')`),
+    check("runs_archive_status_valid", sql`${table.status} IN ('unassigned', 'assigned', 'collecting', 'delivering', 'delivered', 'closed', 'aborted')`),
     check("runs_archive_floor_rate_nonnegative", sql`${table.floorRateKobo} >= 0`),
   ],
 );
