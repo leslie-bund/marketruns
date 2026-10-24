@@ -40,6 +40,8 @@ export interface WsAttachment {
   marketId?: string;
   storeId?: string;
   lastForegroundAt?: number;
+  authenticated?: boolean;
+  connectedAt?: number;
 }
 
 function attachment(socket: WebSocket): WsAttachment | null {
@@ -95,8 +97,10 @@ export function acceptHibernatedWebSocket(
   const attachment: WsAttachment = {
     topics: [],
     participantId: request?.headers.get("x-resolved-participant-id") ?? request?.headers.get("x-participant-id") ?? "internal",
-    role: request?.headers.get("x-resolved-participant-role") ?? request?.headers.get("x-participant-role") ?? "internal",
+    role: request?.headers.get("x-resolved-participant-role") ?? request?.headers.get("x-participant-role") ?? request?.headers.get("x-ops-role") ?? "internal",
     source: request?.headers.get("x-resolved-participant-source") ?? "internal",
+    authenticated: request?.headers.get("x-ops-observer") === "1" || Boolean(request?.headers.get("x-resolved-participant-id")),
+    connectedAt: Date.now(),
     ...(marketId ? { marketId } : {}),
     ...(request?.headers.get("x-store-id") ? { storeId: request.headers.get("x-store-id")! } : {}),
   };
@@ -132,7 +136,10 @@ export async function handleWebSocketMessage(
   if (!current) return;
   if (data.type === "subscribe") {
     if (Array.isArray(data.topics)) {
-      socket.serializeAttachment({ ...current, topics: data.topics.filter((topic): topic is string => typeof topic === "string") });
+      socket.serializeAttachment({
+        ...current,
+        topics: data.topics.filter((topic): topic is string => typeof topic === "string").slice(0, 100),
+      });
     }
     safeSend(socket, JSON.stringify({ type: "subscribed" }));
     return;

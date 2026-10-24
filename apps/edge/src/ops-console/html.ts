@@ -206,18 +206,10 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
     <span id="gatePill" class="pill">gate —</span>
     <span class="bar-spacer"></span>
     <select id="marketSel" aria-label="Market"></select>
-    <span id="tokenPill" class="pill">local-ops</span>
-    <button type="button" class="secondary compact" id="marketsOpen">Markets</button>
+    <span id="operatorPill" class="pill active">operator</span>
+    <button type="button" class="secondary compact" id="marketsOpen">Manage</button>
+    <button type="button" class="secondary compact" id="signOut">Sign out</button>
   </header>
-
-  <div id="tokenGate" class="card" hidden>
-    <div class="eyebrow">Access</div>
-    <div><b>Ops token required.</b> <span class="helper">The edge worker rejected the stored token (403). Reopen this page as /ops?token=…, or paste the token here.</span></div>
-    <div class="form-actions">
-      <input id="tokenInput" type="password" placeholder="ops token" style="flex:1;min-width:220px">
-      <button id="tokenSave" type="button">Use token</button>
-    </div>
-  </div>
 
   <section class="hero-strip">
     <div class="hero-grid" id="heroGrid"></div>
@@ -342,6 +334,26 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
     </div>
   </dialog>
 
+  <details class="card" id="pilotPanel">
+    <summary><span class="eyebrow">Production pilot</span><span class="summary-title">Live instances & management</span><span class="helper">Explicit heartbeats only — no Durable Object namespace listing</span></summary>
+    <div class="details-body">
+      <div class="dialog-head"><span class="eyebrow">Live DO instances</span><button class="secondary compact" id="telemetryRefresh" type="button">Refresh</button></div>
+      <div id="telemetryBody" class="empty">Open to load explicit instance heartbeats.</div>
+      <hr>
+      <div class="eyebrow">Stores & shop items</div>
+      <div class="form-grid"><input id="storeMarket" placeholder="market"><input id="storeSeller" placeholder="seller participant id"><input id="storeName" placeholder="store name"><input id="storePoint" placeholder="exchange point"><button id="storeCreate" type="button">Create store</button></div>
+      <div id="storesBody" class="empty">—</div>
+      <hr>
+      <div class="eyebrow">Runner pools</div>
+      <div class="form-grid"><input id="poolMarket" placeholder="market"><input id="poolName" placeholder="pool name"><button id="poolCreate" type="button">Create pool</button><input id="memberRunner" placeholder="runner participant id"></div>
+      <div id="poolsBody" class="empty">—</div>
+      <hr>
+      <div class="eyebrow">Participant involvements — read only</div>
+      <div class="form-actions"><input id="participantLookup" placeholder="participant id"><button id="participantGo" type="button" class="secondary">Look up</button></div>
+      <pre id="participantBody">—</pre>
+    </div>
+  </details>
+
 </div>
 <script>
 "use strict";
@@ -354,7 +366,6 @@ var SEL = {
   tab: "disputes", tabData: {}, pages: { disputes: 0, settlements: 0, ledger: 0, payments: 0 }
 };
 var PAGE_SIZE = 20;
-var TOKEN_KEY = "market-runs.ops-token";
 var MARKET_EDIT = null; /* { id: string|null, config: object|null } while the inline form is open */
 /* Monotonic request stamps: a slow response from before a user action
    (market switch, run pick, tab switch) must never overwrite newer state. */
@@ -362,46 +373,20 @@ var REQ = { overview: 0, hero: 0, runs: 0, runDetail: 0, tab: 0 };
 
 function $(id) { return document.getElementById(id); }
 
-/* ---------- auth ---------- */
-function getToken() { try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
-(function initToken() {
-  try {
-    var params = new URLSearchParams(location.search);
-    var t = params.get("token");
-    if (t) {
-      sessionStorage.setItem(TOKEN_KEY, t);
-      params.delete("token");
-      var q = params.toString();
-      history.replaceState(null, "", location.pathname + (q ? "?" + q : "") + location.hash);
-    }
-  } catch (e) { /* sessionStorage/history unavailable — dev mode tolerates this */ }
-})();
-function renderTokenPill() {
-  var pill = $("tokenPill");
-  var t = getToken();
-  pill.textContent = t ? "ops" : "local-ops";
-  pill.className = "pill " + (t ? "active" : "");
-}
-function showTokenGate() { $("tokenGate").hidden = false; renderTokenPill(); }
-
-/* One helper for every /ops/api/* call: injects the token header, parses errors. */
+/* Same-origin Better Auth session cookies; no credentials in URLs or storage. */
+api("/ops/api/session").then(function (data) {
+  if (data && data.operator) $("operatorPill").textContent = data.operator.name + " · " + data.operator.role;
+}).catch(function () { location = "/ops/login"; });
 function api(path, options) {
   options = options || {};
   var headers = { "accept": "application/json" };
-  var token = getToken();
-  if (token) headers["x-ops-token"] = token;
   if (options.body !== undefined) headers["content-type"] = "application/json";
   return fetch(path, {
     method: options.method || "GET",
     headers: headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined
   }).then(function (r) {
-    if (r.status === 403) {
-      showTokenGate();
-      var forbidden = new Error("the ops token was rejected (403)");
-      forbidden.status = 403;
-      throw forbidden;
-    }
+    if (r.status === 401) { location = "/ops/login"; throw new Error("session expired"); }
     return r.text().then(function (text) {
       var data = null;
       try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
@@ -1151,6 +1136,8 @@ var TABS = [
   { id: "ledger", label: "Ledger" },
   { id: "reputation", label: "Reputation" },
   { id: "payments", label: "Payments" },
+  { id: "holds", label: "Holds" },
+  { id: "refunds", label: "Refunds" },
   { id: "resets", label: "Resets" }
 ];
 function renderTabs() {
@@ -1262,7 +1249,12 @@ function renderTabBody(id, d) {
         (x.providerRef ? '<span class="chip">ref <code>' + esc(x.providerRef) + "</code></span>" : "") +
         "</div>" +
         (x.failureReason ? '<div class="row-sub" style="padding-top:5px">' + esc(x.failureReason) + "</div>" : "") +
+        (x.status === "failed" || x.status === "pending" ? '<button type="button" class="secondary compact" data-action="dispatch-replay" data-id="' + esc(x.id) + '">Replay through dispatcher</button>' : "") +
         "</div>";
+    }).join("");
+  } else if (id === "holds" || id === "refunds") {
+    html = items.map(function (x) {
+      return '<div class="row-line"><div class="row-main">' + statusPill(x.status) + '<span class="title-id">' + esc(x.id) + '</span><span class="row-sub">' + esc(x.buyerId || x.holdId || "") + '</span></div><span class="money">' + esc(money(x.amountKobo)) + '</span></div>';
     }).join("");
   }
   body.innerHTML = html + (items.length || d.total ? pagerHtml(id, d) : "");
@@ -1499,6 +1491,36 @@ function finalDelivery() {
     });
 }
 
+/* ---------- production pilot: bounded telemetry + manageable entities ---------- */
+var observerSocket = null;
+function loadTelemetry() {
+  return api("/ops/api/telemetry" + (S.market ? "?market=" + encodeURIComponent(S.market) : "")).then(function (data) {
+    var items = data.items || [];
+    $("telemetryBody").innerHTML = items.length ? '<div class="hero-grid">' + items.map(function (r) {
+      return '<div class="metric"><span class="pill ' + (r.live ? "active" : "warn") + '">' + (r.live ? "live" : "stale") + '</span><b>' + esc(r.objectClass) + '</b><div class="title-id">' + esc(r.instanceId) + '</div><div class="row-sub">' + esc(r.objectName) + ' · ' + esc(r.market || "no market") + '</div><div class="kv"><span class="k">Connections</span><span class="v">' + r.connectionCount + '</span></div><div class="row-sub">last ' + new Date(r.lastActivityAt).toLocaleString() + '<br>alarm ' + (r.alarmAt ? new Date(r.alarmAt).toLocaleString() : "none") + '</div><button type="button" class="secondary compact" data-action="observe" data-class="' + esc(r.objectClass) + '" data-name="' + esc(r.objectName) + '">Attach observer</button></div>';
+    }).join("") + "</div>" : emptyState("No heartbeats", "Instances appear after explicit DO activity; namespaces are never enumerated.");
+  }).catch(function (err) { $("telemetryBody").innerHTML = emptyState("Telemetry unavailable", err.message); });
+}
+function observeInstance(className, objectName) {
+  if (observerSocket) observerSocket.close();
+  var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  observerSocket = new WebSocket(protocol + "//" + location.host + "/ops/api/telemetry/" + encodeURIComponent(className) + "/" + encodeURIComponent(objectName) + "/ws");
+  observerSocket.onopen = function () { feed("authenticated observer attached to " + objectName); observerSocket.send(JSON.stringify({ type: "ping" })); };
+  observerSocket.onmessage = function (ev) { if (String(ev.data).indexOf("pong") >= 0) feed("heartbeat pong · " + objectName); };
+  observerSocket.onerror = function () { feed("observer connection failed"); };
+}
+function loadStores() {
+  return api("/ops/api/stores" + (S.market ? "?market=" + encodeURIComponent(S.market) : "")).then(function (data) {
+    $("storesBody").innerHTML = (data.items || []).map(function (s) { return '<div class="row-line"><div class="row-main"><b>' + esc(s.name) + '</b><div class="row-sub">' + esc(s.id) + ' · ' + esc(s.sellerId) + ' · ' + esc(s.exchangePoint) + '</div><div>' + (s.shopItems || []).map(function (i) { return '<span class="pill">' + esc(i.name) + '</span> <button class="compact secondary" data-action="item-delete" data-store="' + esc(s.id) + '" data-item="' + esc(i.id) + '">remove</button>'; }).join(" ") + '</div></div><button class="compact secondary" data-action="item-add" data-store="' + esc(s.id) + '">Add item</button><button class="compact secondary" data-action="store-delete" data-store="' + esc(s.id) + '">Delete</button></div>'; }).join("") || "—";
+  });
+}
+function loadPools() {
+  return api("/ops/api/runner-pools").then(function (data) {
+    $("poolsBody").innerHTML = (data.items || []).map(function (p) { return '<div class="row-line"><div class="row-main"><b>' + esc(p.name) + '</b><div class="row-sub">' + esc(p.id) + ' · ' + esc(p.marketId) + '</div>' + (p.members || []).map(function (m) { return '<span class="pill">' + esc(m.runnerId) + '</span> <button class="compact secondary" data-action="member-remove" data-pool="' + esc(p.id) + '" data-runner="' + esc(m.runnerId) + '">remove</button>'; }).join(" ") + '</div><button class="compact secondary" data-action="member-add" data-pool="' + esc(p.id) + '">Add runner</button><button class="compact secondary" data-action="pool-delete" data-pool="' + esc(p.id) + '">Delete</button></div>'; }).join("") || "—";
+  });
+}
+function loadPilot() { loadTelemetry(); loadStores(); loadPools(); }
+
 /* ---------- refresh loop ---------- */
 function refreshLive() {
   renderSettleTarget();
@@ -1515,7 +1537,6 @@ function tick() {
 
 /* ---------- wiring ---------- */
 function init() {
-  renderTokenPill();
   renderTabs();
   $("marketSel").addEventListener("change", function () {
     S.market = $("marketSel").value;
@@ -1531,13 +1552,8 @@ function init() {
     refreshLive();
     openTab(SEL.tab);
   });
-  $("tokenSave").addEventListener("click", function () {
-    var t = $("tokenInput").value.trim();
-    if (!t) return;
-    try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {}
-    $("tokenGate").hidden = true;
-    renderTokenPill();
-    loadMarkets().then(function () { refreshLive(); openTab(SEL.tab); });
+  $("signOut").addEventListener("click", function () {
+    fetch("/ops/auth/sign-out", { method: "POST" }).finally(function () { location = "/ops/login"; });
   });
   $("marketsOpen").addEventListener("click", function () { $("marketsDialog").showModal(); });
   $("marketsClose").addEventListener("click", function () { $("marketsDialog").close(); });
@@ -1561,6 +1577,17 @@ function init() {
   $("settleAmbiguous").addEventListener("change", function () {
     $("settleLossField").hidden = !$("settleAmbiguous").checked;
   });
+  $("pilotPanel").addEventListener("toggle", function () { if ($("pilotPanel").open) loadPilot(); });
+  $("telemetryRefresh").addEventListener("click", loadTelemetry);
+  $("storeCreate").addEventListener("click", function () {
+    api("/ops/api/stores", { method: "POST", body: { marketId: $("storeMarket").value.trim(), sellerId: $("storeSeller").value.trim(), name: $("storeName").value.trim(), exchangePoint: $("storePoint").value.trim() } }).then(loadStores).catch(function (e) { feed(e.message); });
+  });
+  $("poolCreate").addEventListener("click", function () {
+    api("/ops/api/runner-pools", { method: "POST", body: { marketId: $("poolMarket").value.trim(), name: $("poolName").value.trim(), active: true } }).then(loadPools).catch(function (e) { feed(e.message); });
+  });
+  $("participantGo").addEventListener("click", function () {
+    api("/ops/api/participants/" + encodeURIComponent($("participantLookup").value.trim())).then(function (data) { $("participantBody").textContent = JSON.stringify(data, null, 2); }).catch(function (e) { $("participantBody").textContent = e.message; });
+  });
   document.addEventListener("click", function (ev) {
     var t = ev.target && ev.target.closest ? ev.target.closest("[data-action]") : null;
     if (!t) return;
@@ -1575,6 +1602,14 @@ function init() {
     else if (action === "vocab-cancel") { VOCAB.editing = null; renderVocabulary(); }
     else if (action === "tab") openTab(t.getAttribute("data-tab"));
     else if (action === "page") changePage(t.getAttribute("data-tab"), Number(t.getAttribute("data-dir")));
+    else if (action === "observe") observeInstance(t.getAttribute("data-class"), t.getAttribute("data-name"));
+    else if (action === "item-add") { var itemName = prompt("Shop item name"); if (itemName) api("/ops/api/stores/" + encodeURIComponent(t.getAttribute("data-store")) + "/items", { method: "POST", body: { name: itemName, attributes: {}, active: true } }).then(loadStores); }
+    else if (action === "item-delete") api("/ops/api/stores/" + encodeURIComponent(t.getAttribute("data-store")) + "/items/" + encodeURIComponent(t.getAttribute("data-item")), { method: "DELETE" }).then(loadStores);
+    else if (action === "store-delete" && confirm("Delete this manageable store?")) api("/ops/api/stores/" + encodeURIComponent(t.getAttribute("data-store")), { method: "DELETE" }).then(loadStores);
+    else if (action === "member-add") { var runner = $("memberRunner").value.trim(); if (runner) api("/ops/api/runner-pools/" + encodeURIComponent(t.getAttribute("data-pool")) + "/members/" + encodeURIComponent(runner), { method: "PUT" }).then(loadPools); }
+    else if (action === "member-remove") api("/ops/api/runner-pools/" + encodeURIComponent(t.getAttribute("data-pool")) + "/members/" + encodeURIComponent(t.getAttribute("data-runner")), { method: "DELETE" }).then(loadPools);
+    else if (action === "pool-delete" && confirm("Delete this runner pool?")) api("/ops/api/runner-pools/" + encodeURIComponent(t.getAttribute("data-pool")), { method: "DELETE" }).then(loadPools);
+    else if (action === "dispatch-replay") api("/ops/api/admin/payments/" + encodeURIComponent(t.getAttribute("data-id")) + "/replay", { method: "POST" }).then(function () { feed("dispatch replay applied"); openTab("payments"); });
     else if (action === "reset-decision") decideReset(t.getAttribute("data-id"), t.getAttribute("data-decision"), t.getAttribute("data-participant"));
   });
   $("drvIntent").addEventListener("click", postIntent);

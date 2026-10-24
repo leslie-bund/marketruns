@@ -3,9 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "ops:bootstrap-admin": "tsx src/ops-console/cli.ts bootstrap-admin",
+    "ops:seed-markets": "tsx src/ops-console/cli.ts seed-markets",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@market-runs/domain": "workspace:*",
     "@market-runs/proto": "workspace:*",
+    "better-auth": "^1.7.12",
+    "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "postgres": "^3.4.5",
     "zod": "^3.25.76"
@@ -13,6 +20,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.8.23",
     "@cloudflare/workers-types": "^4.20250109.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8",
     "wrangler": "^4.14.0"

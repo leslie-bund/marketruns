@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { TelemetryReporter } from "./telemetry.js";
 import { cartDeadline, floorRate, plusCodeToLocation } from "@market-runs/domain";
 import type { Cart, CheckoutRequested, GeoPointValue, Product, ServerEvent } from "@market-runs/proto";
 import { PaymentHoldViewSchema } from "@market-runs/proto";
@@ -89,9 +90,11 @@ export class CartDO extends DurableObject<Env> {
   private state: CartState = { entries: [], acceptanceCount: 0, status: "open" };
   /** The checkout tombstone, when this DO's previous cart was checked out (null otherwise). */
   private tombstone: CartTombstone | null = null;
+  private telemetry: TelemetryReporter;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.telemetry = new TelemetryReporter(ctx, "CartDO");
   }
 
   private now(): number {
@@ -106,7 +109,10 @@ export class CartDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const path = url.pathname.endsWith("/") && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
-    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx);
+    const objectName = this.ctx.id.name ?? "unknown";
+    this.telemetry.beat(this.env, objectName, this.state.market);
+    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx, request);
+    if (request.method === "GET" && path === "/ops/telemetry") return this.telemetry.snapshot(this.env, objectName, this.state.market);
 
     if (request.method === "POST" && path === "/accept") {
       const parsed = await parseInternal(request, CartAppendRequestSchema);
@@ -631,10 +637,12 @@ export class CartDO extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     handleWebSocketMessage(ws, message);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.market, true);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     handleWebSocketClose(ws, code, reason);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.market, true);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {

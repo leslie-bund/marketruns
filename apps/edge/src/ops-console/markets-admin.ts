@@ -97,9 +97,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
   app.get("/markets/:market/vocabulary", async (c) => {
     const market = decodeURIComponent(c.req.param("market"));
     const ids = await listMarketIds(c.env);
-    if (!isKnownMarket(ids, market)) {
-      return errorResponse(404, "unknown-market", `market ${market} is not a known zone`);
-    }
+    const known = isKnownMarket(ids, market);
     const stub = c.env.MARKET_DO.get(c.env.MARKET_DO.idFromName(market));
     const response = await stub.fetch(new Request("http://do/stores", { headers: correlationHeaders(c) }));
     if (!response.ok) {
@@ -110,6 +108,9 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
       return errorResponse(502, "bad-internal-response", "MarketDO stores read returned an unexpected shape", {
         issues: parsed.error.issues,
       });
+    }
+    if (!known && parsed.data.stores.length === 0) {
+      return errorResponse(404, "unknown-market", `market ${market} is not a known zone`);
     }
     const stores = parsed.data.stores.map((store) => ({ id: store.id, name: store.name, shopItems: store.shopItems }));
     const vocabulary = [...new Set(stores.flatMap((store) => store.shopItems))].sort((a, b) => a.localeCompare(b));

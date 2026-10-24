@@ -4,6 +4,8 @@ import { DeviceResetDecisionRequestSchema, DeviceResetListResponseSchema } from 
 import type { Env } from "../config/env.js";
 import { errorResponse } from "../do/runtime/index.js";
 import { correlationHeaders } from "../app/middleware/request-id.js";
+import { requireOpsRole } from "./auth.js";
+import { auditOps } from "./audit.js";
 
 /** Dev default for the identity worker (wrangler dev of apps/identity); override with IDENTITY_URL. */
 const IDENTITY_URL_DEFAULT = "http://localhost:8789";
@@ -55,7 +57,7 @@ export function identityAdminRoutes(): Hono<{ Bindings: Env }> {
     return new Response(JSON.stringify(parsed.data), { headers: proxiedHeaders(c, upstream) });
   });
 
-  app.post("/device-resets/:id/decision", async (c) => {
+  app.post("/device-resets/:id/decision", requireOpsRole("operator"), async (c) => {
     let raw: unknown;
     try {
       raw = await c.req.json();
@@ -79,6 +81,7 @@ export function identityAdminRoutes(): Hono<{ Bindings: Env }> {
     } catch {
       return errorResponse(503, "identity-unavailable", `identity service at ${base(c)} did not respond`);
     }
+    if (upstream.ok) await auditOps(c, { action: `device-reset.${parsed.data.decision}`, entityType: "device-reset", entityId: c.req.param("id"), summary: `${parsed.data.decision} device reset ${c.req.param("id")}` });
     return new Response(upstream.body, { status: upstream.status, headers: proxiedHeaders(c, upstream) });
   });
 

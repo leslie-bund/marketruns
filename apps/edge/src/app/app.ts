@@ -2,9 +2,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "../config/env.js";
 import { errorResponse } from "../do/runtime/index.js";
-import { participant, requireOps } from "./middleware/participant.js";
+import { participant } from "./middleware/participant.js";
 import { requestId } from "./middleware/request-id.js";
 import { opsConsole } from "../ops-console/index.js";
+import { handleOpsAuth, withOpsAuth } from "../ops-console/auth.js";
 import { commandRoute } from "./routes/command.js";
 import { authRoute, callbacksRoute } from "./routes/auth.js";
 import { paymentsRoute, webhooksRoute } from "./routes/payments.js";
@@ -59,7 +60,9 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/runs", runsRoute());
 
   const ops = new Hono<{ Bindings: Env }>();
-  ops.use("/api/*", requireOps());
+  ops.all("/auth/*", handleOpsAuth);
+  ops.use("/api/*", withOpsAuth());
+  ops.use("/", withOpsAuth());
   ops.route("/", opsConsole());
   app.route("/ops", ops);
 

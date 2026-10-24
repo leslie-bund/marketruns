@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { TelemetryReporter } from "./telemetry.js";
 import type { Participant, ParticipantOnboarded, ServerEvent } from "@market-runs/proto";
 import { NotificationSchema, type NotificationCreated } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
@@ -69,9 +70,11 @@ function asLegacyRegistry(stored: unknown): LegacyRegistryState | null {
 export class ParticipantDO extends DurableObject<Env> {
   private participant: Participant | null = null;
   private legacy: LegacyRegistryState | null = null;
+  private telemetry: TelemetryReporter;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.telemetry = new TelemetryReporter(ctx, "ParticipantDO");
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -82,7 +85,10 @@ export class ParticipantDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const path = url.pathname.endsWith("/") && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
-    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx);
+    const objectName = this.ctx.id.name ?? "unknown";
+    this.telemetry.beat(this.env, objectName);
+    if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx, request);
+    if (request.method === "GET" && path === "/ops/telemetry") return this.telemetry.snapshot(this.env, objectName);
 
     if (request.method === "POST" && path === "/onboard") {
       const parsed = await parseClientCommand(request);
@@ -186,10 +192,12 @@ export class ParticipantDO extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     handleWebSocketMessage(ws, message);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", undefined, true);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     handleWebSocketClose(ws, code, reason);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", undefined, true);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {

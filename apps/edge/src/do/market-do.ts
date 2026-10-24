@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
+import { TelemetryReporter } from "./telemetry.js";
 import { INTENT_TTL_MS, marketCloseGateOk } from "@market-runs/domain";
 import type { DiscoveryResponse, Intent, IntentPosted, MarketJoined, Product, ServerEvent, Store, StoreRegistered } from "@market-runs/proto";
 import { ProductOfferedSchema } from "@market-runs/proto";
@@ -75,9 +77,11 @@ interface MarketMember {
  */
 export class MarketDO extends DurableObject<Env> {
   private state: MarketState = { intents: [], intentProducts: {}, stores: [], members: [] };
+  private telemetry: TelemetryReporter;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.telemetry = new TelemetryReporter(ctx, "MarketDO");
   }
 
   private now(): number {
@@ -93,7 +97,27 @@ export class MarketDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const path = url.pathname.endsWith("/") && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
 
+    const objectName = this.ctx.id.name ?? "unknown";
+    this.telemetry.beat(this.env, objectName, this.state.marketId ?? objectName);
     if (isWebSocketUpgrade(request)) return acceptHibernatedWebSocket(this.ctx, request, { marketId: this.state.marketId });
+    if (request.method === "GET" && path === "/ops/telemetry") return this.telemetry.snapshot(this.env, objectName, this.state.marketId ?? objectName);
+
+    if (request.method === "POST" && path === "/ops/store") {
+      const schema = z.object({ store: z.object({ id: z.string(), market: z.string(), name: z.string(), sellerParticipantId: z.string(), exchangePoint: z.string(), shopItems: z.array(z.string()).max(500) }) });
+      const parsed = await parseInternal(request, schema); if (!parsed.ok) return parsed.response;
+      const value = parsed.data.store;
+      const existing = this.state.stores.find((store) => store.id === value.id);
+      if (existing) Object.assign(existing, value);
+      else this.state.stores.push({ ...value, joinedAt: this.now() });
+      await this.ctx.storage.put(STATE_KEY, this.state);
+      return jsonResponse({ store: existing ?? value });
+    }
+    if (request.method === "POST" && path === "/ops/store-delete") {
+      const parsed = await parseInternal(request, z.object({ storeId: z.string() })); if (!parsed.ok) return parsed.response;
+      this.state.stores = this.state.stores.filter((store) => store.id !== parsed.data.storeId);
+      await this.ctx.storage.put(STATE_KEY, this.state);
+      return jsonResponse({ deleted: true });
+    }
 
     if (request.method === "POST" && path === "/intent") {
       const parsed = await parseClientCommand(request);
@@ -524,10 +548,12 @@ export class MarketDO extends DurableObject<Env> {
         await coreRegistry(this.env).heartbeat(heartbeat);
       }
     });
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.marketId, true);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     handleWebSocketClose(ws, code, reason);
+    this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.marketId, true);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {

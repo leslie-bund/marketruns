@@ -97,12 +97,23 @@ export class PostgresCoreRegistry implements CoreRegistry {
   }
 
   async isInternalRunner(marketId: string, participantId: string) {
-    const rows = await this.sql`SELECT 1 FROM internal_runner_pools WHERE market_id = ${marketId} AND participant_id = ${participantId}`;
+    const rows = await this.sql`
+      SELECT 1 FROM runner_pool_memberships membership
+      JOIN runner_pools pool ON pool.id = membership.pool_id
+      WHERE pool.market_id = ${marketId} AND membership.runner_id = ${participantId}
+        AND pool.active = true AND membership.active = true
+      LIMIT 1`;
     return rows.length > 0;
   }
 
   async joinInternalRunner(marketId: string, participantId: string) {
-    await this.sql`INSERT INTO internal_runner_pools (market_id, participant_id) VALUES (${marketId}, ${participantId}) ON CONFLICT DO NOTHING`;
+    const poolId = `pool:${marketId}`;
+    await this.sql`
+      INSERT INTO runner_pools (id, market_id, name) VALUES (${poolId}, ${marketId}, ${`${marketId} Internal Runners`})
+      ON CONFLICT (id) DO NOTHING`;
+    await this.sql`
+      INSERT INTO runner_pool_memberships (pool_id, runner_id) VALUES (${poolId}, ${participantId})
+      ON CONFLICT (pool_id, runner_id) DO UPDATE SET active = true, updated_at = now()`;
   }
 
   async heartbeat(presence: PresenceRecord) {

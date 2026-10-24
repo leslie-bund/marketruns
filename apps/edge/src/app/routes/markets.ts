@@ -13,7 +13,8 @@ import { errorResponse, isWebSocketUpgrade } from "../../do/runtime/index.js";
 import { OfferProductRequestSchema } from "../../do/schemas.js";
 import { internalPost } from "../../do/transport.js";
 import { cartIdForBuyer } from "../../config/ids.js";
-import { requireOps, requireTransactionRole } from "../middleware/participant.js";
+import { requireTransactionRole } from "../middleware/participant.js";
+import { requireOpsRole, withOpsAuth } from "../../ops-console/auth.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 import { coreRegistry } from "../../registry/index.js";
 
@@ -49,8 +50,9 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
   app.get("/", async (c) => {
+    const filter = c.req.query("market")?.trim().toLowerCase();
     const markets = await coreRegistry(c.env).listMarkets();
-    return c.json(MarketRegistryResponseSchema.parse({ markets }));
+    return c.json(MarketRegistryResponseSchema.parse({ markets: markets.filter((market) => !filter || market.id.toLowerCase() === filter || market.name.toLowerCase() === filter) }));
   });
 
   app.post("/:market/offers", async (c) => {
@@ -126,7 +128,10 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     return c.json(ActiveRunsResponseSchema.parse({ runs }));
   });
 
-  app.post("/:market/config", requireOps(), (c) => forwardTo(c, marketStub(c), "/config", { extraHeaders: { "x-market-id": decodeURIComponent(c.req.param("market") ?? "") } }));
+  /** Market config writes are ops-only; Better Auth is the deployed guard. */
+  app.post("/:market/config", withOpsAuth(), requireOpsRole("admin"), (c) =>
+    forwardTo(c, marketStub(c), "/config", { extraHeaders: { "x-market-id": decodeURIComponent(c.req.param("market") ?? "") } }),
+  );
 
   app.get("/:market/discovery", async (c) => {
     const who = c.get("participant");

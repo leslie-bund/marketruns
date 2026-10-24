@@ -79,11 +79,11 @@ export async function requireTransactionRole(
   return null;
 }
 
-/** Ops console token guard; participant identity is still set through the same shape. */
+/** @deprecated Legacy development guard; deployed ops uses Better Auth. */
 export function requireOps(): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
     const token = c.env.OPS_TOKEN;
-    if (token !== undefined && token !== "") {
+    if (token) {
       if (c.req.header("x-ops-token") !== token) {
         return c.json({ error: "forbidden", message: "a valid x-ops-token is required for ops adjustments" }, 403);
       }
