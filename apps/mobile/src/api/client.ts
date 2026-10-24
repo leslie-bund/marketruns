@@ -1,4 +1,4 @@
-import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, MarketRegistryEntry, Participant, PriceMove, Product, Run, Store } from "@market-runs/proto";
+import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
 import { identities, EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
 import { getActiveParticipant, participantHeaders } from "./participant";
@@ -87,21 +87,23 @@ function demoSellerHeaders(): Record<string, string> {
 /* Participants & markets                                              */
 /* ------------------------------------------------------------------ */
 
-/** Onboard with KYC (ADR-0004): BVN/NIN + facial capture through the verifier seam. */
+/** Document-only onboarding; the edge returns the participant-bound identity proof when eligible. */
 export async function onboardParticipant(input: {
   role: "buyer" | "seller" | "runner";
   displayName: string;
+  email: string;
+  consentAt: number;
+  consentVersion: string;
   idDocumentType: "bvn" | "nin";
   idDocument: string;
-  facialCaptureRef: string;
   market: string;
-}): Promise<Participant> {
-  const body = await command<{ participant: Participant }>({
+}): Promise<ParticipantRecorded> {
+  const body = await command<ParticipantRecorded>({
     type: "participant.onboarded",
     participantId: newId("participant"),
     ...input,
   });
-  return body.participant;
+  return body;
 }
 
 /** Join another market (idempotent). */

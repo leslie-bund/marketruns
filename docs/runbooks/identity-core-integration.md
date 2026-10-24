@@ -1,8 +1,8 @@
 # Core integration for hybrid identity
 
-1. After the existing edge KYC decision, call identity `POST /auth/enrollment-proof` over `x-identity-internal`. Use `verified` in production; `preverified` is staging-only.
-2. Return the opaque `enrollmentProof` in the onboarding response alongside the same participant. Never derive it on mobile and never log it.
+1. After ParticipantDO and the core profile save succeed, call identity `POST /auth/enrollment-proof` over `x-identity-internal`. Use `verified` in production; `preverified` is allowed only with explicit `ALLOW_HEADER_AUTH=true`. Pending/failed KYC gets no proof or session.
+2. Return the opaque `enrollmentProof` in `participant.recorded` alongside the same participant and selected role. Never derive it on mobile and never log it. Reject duplicate participant ids and any session/identity role mismatch.
 3. Keep the existing `/auth/*` proxy generic. It must forward POST, GET, and PATCH plus `Authorization`; do not add public enrollment-proof or biometrics-service routes.
-4. Do not log, persist, trace, or send capture bodies to analytics. Forward them over TLS and enforce the agreed body cap (8 MB per image, 96 MB per request maximum).
-5. Preserve `preverified` as visibly distinct from `verified`. Biometric KYC completion upgrades identity-owned KYC state; core should reconcile its participant/KYC read model from that result.
-6. Mobile expects `enrollmentProof` from onboarding and forwards BVN/NIN type+number to hybrid enrollment. Production still requires the pre-existing verified KYC gate.
+4. Onboarding carries only the document, email, and consent—not a selfie or R2 reference. Mobile sends fresh face frames directly through `/auth/face/enroll`. Do not log, persist, trace, or send capture bodies to analytics or public media storage. Forward them over TLS and enforce the agreed body cap (8 MB per image, 96 MB per request maximum). Ordinary handoff evidence keeps its existing authorized capture path.
+5. Preserve `preverified` as visibly distinct from `verified`; production `canTransact` accepts only `verified`. Biometric KYC completion upgrades identity-owned KYC state; core should reconcile its participant/KYC read model from that result.
+6. Mobile expects `enrollmentProof` from eligible onboarding and forwards BVN/NIN type+number to hybrid enrollment. Production still requires the pre-existing verified KYC gate and real Smile ID completion for verified status.

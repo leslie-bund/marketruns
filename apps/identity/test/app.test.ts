@@ -68,6 +68,13 @@ describe("proof-bound enrollment and login", () => {
     const production = makeApp({ IDENTITY_ENV: "production", IDENTITY_INTERNAL_TOKEN: "i".repeat(32), IDENTITY_SESSION_SECRET: "s".repeat(32), IDENTITY_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64") });
     expect((await production.call("/auth/enrollment-proof", { participantId: "p-1", role: "buyer", displayName: "A", kycStatus: "preverified" }, { "x-identity-internal": "i".repeat(32) })).status).toBe(403);
   });
+  it("rejects duplicate identity proof requests that attempt to change role", async () => {
+    const { call, store } = makeApp({ IDENTITY_ENV: "staging" });
+    await proof(call, "p-fixed-role", "preverified");
+    const duplicate = await call("/auth/enrollment-proof", { participantId: "p-fixed-role", role: "runner", displayName: "Amina", kycStatus: "preverified" });
+    expect(duplicate.status).toBe(409);
+    expect(store.participants.get("p-fixed-role")?.role).toBe("buyer");
+  });
 });
 describe("device credentials and recovery", () => {
   it("requires proof or same-participant session for registration and consumes proof", async () => {

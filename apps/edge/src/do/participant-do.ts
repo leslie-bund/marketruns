@@ -128,43 +128,33 @@ export class ParticipantDO extends DurableObject<Env> {
     return notFound(`ParticipantDO route not found: ${request.method} ${path}`);
   }
 
-  /**
-   * Onboard: verify through the vendor-neutral seam, store the participant
-   * with the document hash (never the raw number), and join the first market.
-   * Failed verification records the participant as failed — retry is a new
-   * onboarding with a new id; the record is the audit trail (ADR-0004).
-   */
+  /** Create exactly one participant identity; retries never replace its role or KYC record. */
   private async onboard(command: ParticipantOnboarded): Promise<Response> {
     if (this.participant) {
-      // Idempotent replay of the same onboarding.
-      const event: ServerEvent = { type: "participant.recorded", participant: this.participant };
-      return jsonResponse(event);
+      return jsonResponse({ error: "participant-exists", message: "participant onboarding has already been recorded" }, 409);
     }
 
-    // Only this participant's object waits on the vendor await — KYC latency
-    // is isolated per participant.
+    // Only this participant's object waits on the verifier. Shape checks are
+    // preverification only in explicit staging; real KYC remains pending.
     const kycStatus = await devIdentityVerifier.verify({
       participantId: command.participantId,
       idDocumentType: command.idDocumentType,
       idDocument: command.idDocument,
-      facialCaptureRef: command.facialCaptureRef,
-    });
+    }, this.env.ALLOW_HEADER_AUTH === "true");
 
     const participant: Participant = {
       id: command.participantId,
       role: command.role,
       displayName: command.displayName,
-      ...(command.email !== undefined ? { email: command.email } : {}),
-      ...(command.verifiedLegalName !== undefined ? { verifiedLegalName: command.verifiedLegalName } : {}),
+      email: command.email,
       kycStatus,
       idDocumentType: command.idDocumentType,
       idDocumentHash: await hashIdDocument(
         command.idDocument,
         this.env.ID_DOCUMENT_HMAC_SECRET ?? "market-runs-dev-document-hmac-key",
       ),
-      ...(command.consentAt !== undefined ? { consentAt: command.consentAt } : {}),
-      ...(command.consentVersion !== undefined ? { consentVersion: command.consentVersion } : {}),
-      facialCaptureRef: command.facialCaptureRef,
+      consentAt: command.consentAt,
+      consentVersion: command.consentVersion,
       markets: [command.market],
       createdAt: Date.now(),
     };

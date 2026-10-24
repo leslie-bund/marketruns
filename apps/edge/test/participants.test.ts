@@ -1,23 +1,35 @@
-import { SELF, env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { SELF, env, fetchMock, runInDurableObject } from "cloudflare:test";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bindings, marketStub, readJson } from "./helpers.js";
 import { LEGACY_REGISTRY_NAME, participantObjectName } from "../src/do/participant-do.js";
 import { STATE_KEY } from "../src/do/state.js";
 import type { Env } from "../src/config/env.js";
 
-/**
- * Onboarding over the public wire (ADR-0004/0009/0015): participant + KYC
- * through the vendor-neutral verifier seam, first-market membership, and the
- * markets index. The dev verifier accepts 11-digit BVN/NIN with a facial
- * capture reference and rejects everything else.
- */
+/** Staging onboarding returns preverified plus a proof from the internal identity seam. */
 const BASE = "http://edge";
 
+beforeAll(() => {
+  fetchMock.activate();
+  fetchMock.disableNetConnect();
+  fetchMock.get("http://localhost:8789").intercept({ path: "/auth/enrollment-proof", method: "POST" }).reply(200, (opts) => {
+    const input = JSON.parse(String(opts.body)) as { participantId: string; displayName: string; kycStatus: "preverified" };
+    return { ...input, enrollmentProof: "p".repeat(64), verifiedLegalName: null, expiresAt: Date.now() + 60_000 };
+  }).persist();
+});
+afterAll(() => fetchMock.deactivate());
+
 async function postCommand(body: unknown): Promise<Response> {
+  const input = body as Record<string, unknown>;
+  const wire = input.type === "participant.onboarded" ? {
+    email: "participant@example.com",
+    consentAt: Date.now(),
+    consentVersion: "kyc-onboarding-v1",
+    ...input,
+  } : body;
   return SELF.fetch(new Request(`${BASE}/command`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(wire),
   }));
 }
 
@@ -37,7 +49,7 @@ describe("participant onboarding and market membership", () => {
     const body = await readJson(response);
     expect(body.type).toBe("participant.recorded");
     const participant = body.participant as { kycStatus: string; markets: string[]; idDocumentHash: string };
-    expect(participant.kycStatus).toBe("verified");
+    expect(participant.kycStatus).toBe("preverified");
     expect(participant.markets).toEqual(["Balogun"]);
     // The raw document number never persists — only its SHA-256 hash.
     expect(participant.idDocumentHash).toMatch(/^[0-9a-f]{64}$/);
@@ -63,9 +75,9 @@ describe("participant onboarding and market membership", () => {
       facialCaptureRef: "r2://archive/captures/face-2.jpg",
       market: "Balogun",
     });
-    expect(response.status).toBe(200);
-    const participant = (await readJson(response)).participant as { kycStatus: string };
-    expect(participant.kycStatus).toBe("failed");
+    expect(response.status).toBe(400);
+    const profile = await SELF.fetch(new Request(`${BASE}/participants/participant-bad`));
+    expect(profile.status).toBe(404);
 
     const members = await marketStub("Balogun").fetch(new Request("http://do/members"));
     const memberList = (await readJson(members)).members as Array<{ participantId: string }>;
@@ -123,7 +135,7 @@ describe("per-participant keying", () => {
     expect(profile.status).toBe(200);
     const participant = (await readJson(profile)).participant as { id: string; kycStatus: string; markets: string[] };
     expect(participant.id).toBe("participant-pk-self");
-    expect(participant.kycStatus).toBe("verified");
+    expect(participant.kycStatus).toBe("preverified");
     expect(participant.markets).toEqual(["PK Self"]);
   });
 
@@ -168,12 +180,10 @@ describe("per-participant keying", () => {
     expect(ghost.status).toBe(404);
   });
 
-  it("stores failed KYC on the caller's own object, readable afterwards", async () => {
-    expect((await onboard("participant-pk-failed", "PK Failed", "12345")).status).toBe(200);
+  it("rejects malformed KYC input without creating a participant record", async () => {
+    expect((await onboard("participant-pk-failed", "PK Failed", "12345")).status).toBe(400);
     const profile = await SELF.fetch(new Request(`${BASE}/participants/participant-pk-failed`));
-    expect(profile.status).toBe(200);
-    const participant = (await readJson(profile)).participant as { kycStatus: string };
-    expect(participant.kycStatus).toBe("failed");
+    expect(profile.status).toBe(404);
   });
 
   it("reads pre-rekey participants from the legacy single-object registry", async () => {

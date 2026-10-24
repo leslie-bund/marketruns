@@ -26,8 +26,8 @@ export function coreRegistry(env: Env): CoreRegistry {
   return registry;
 }
 
-export function canTransact(kycStatus: string): boolean {
-  return kycStatus === "verified" || kycStatus === "preverified";
+export function canTransact(kycStatus: string, explicitStaging = false): boolean {
+  return kycStatus === "verified" || (explicitStaging && kycStatus === "preverified");
 }
 
 export * from "./types.js";
