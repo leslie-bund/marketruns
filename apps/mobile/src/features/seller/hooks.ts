@@ -11,14 +11,20 @@ import { useSellerRun } from "../run";
  * the market's WebSocket on the `intents` topic, so this device only ever
  * hears intent lifecycle events.
  */
-export function useOpenIntents(shopItems?: string[] | null) {
+export function useOpenIntents(shopItems?: string[] | null, storeId?: string) {
   const market = useActiveMarket();
   const poll = usePoll(async () => {
     if (!shopItems || shopItems.length === 0) return [] as Intent[];
-    const entries = await discoverIntentsForItems(shopItems);
+    const entries = await discoverIntentsForItems(shopItems, storeId);
     return entries.map((entry) => entry.intent);
   }, 15000);
-  useLiveEvents(`/markets/${encodeURIComponent(market)}`, () => poll.refresh(), () => poll.refresh(), ["intents"]);
+  useLiveEvents(
+    `/markets/${encodeURIComponent(market)}`,
+    () => poll.refresh(),
+    () => poll.refresh(),
+    ["intents"],
+    { ...(storeId ? { storeId } : {}), heartbeat: Boolean(storeId) },
+  );
   return poll;
 }
 
@@ -38,7 +44,7 @@ export function useSellerProducts(storeName: string | undefined, intervalMs = 40
   const shopItems = store?.shopItems ?? null;
   const { data, refresh, error } = usePoll(async () => {
     if (!storeName || !shopItems || shopItems.length === 0) return [] as Product[];
-    const entries = await discoverIntentsForItems(shopItems);
+    const entries = await discoverIntentsForItems(shopItems, store?.id);
     return entries
       .flatMap((entry) => entry.products)
       .filter(
@@ -62,7 +68,7 @@ export function useSellerProducts(storeName: string | undefined, intervalMs = 40
  * over its WebSocket scope.
  */
 export function useSellerBadges(store: Store | null): { demand: number; threads: number; trip: number } {
-  const intents = useOpenIntents(store?.shopItems ?? null);
+  const intents = useOpenIntents(store?.shopItems ?? null, store?.id);
   const mine = useSellerProducts(store?.name);
   const run = useSellerRun(store);
 

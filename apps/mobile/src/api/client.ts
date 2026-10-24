@@ -1,4 +1,4 @@
-import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, Participant, PriceMove, Product, Run, Store } from "@market-runs/proto";
+import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, MarketRegistryEntry, Participant, PriceMove, Product, Run, Store } from "@market-runs/proto";
 import { identities, EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
 import { getActiveParticipant, participantHeaders } from "./participant";
@@ -116,9 +116,9 @@ export async function joinMarket(market: string): Promise<void> {
   });
 }
 
-/** The zone registry: every market anyone has joined. */
-export async function listMarkets(): Promise<Array<{ id: string }>> {
-  const body = await request<{ markets: Array<{ id: string }> }>("/markets");
+/** The zone registry, including each market's live authenticated seller count. */
+export async function listMarkets(): Promise<MarketRegistryEntry[]> {
+  const body = await request<{ markets: MarketRegistryEntry[] }>("/markets");
   return body.markets;
 }
 
@@ -150,10 +150,12 @@ export async function listIntents(shopItems?: string[] | null): Promise<Intent[]
  * vocabulary is the room; a seller literally only receives intents for items
  * they listed).
  */
-export async function discoverIntentsForItems(shopItems: string[]): Promise<IntentDiscoveryEntry[]> {
+export async function discoverIntentsForItems(shopItems: string[], storeId?: string): Promise<IntentDiscoveryEntry[]> {
   if (shopItems.length === 0) return [];
-  const query = `?shopItems=${encodeURIComponent(shopItems.join(","))}`;
-  const body = await request<DiscoveryResponse>(`/markets/${encodeURIComponent(getActiveMarket())}/discovery${query}`);
+  const query = new URLSearchParams({ shopItems: shopItems.join(",") });
+  // Session-authenticated seller discovery is authorized against this owned store.
+  if (storeId) query.set("storeId", storeId);
+  const body = await request<DiscoveryResponse>(`/markets/${encodeURIComponent(getActiveMarket())}/discovery?${query}`);
   return body.intents;
 }
 
@@ -320,6 +322,7 @@ export async function offerProduct(input: {
       productId,
       ...input,
       market: getActiveMarket(),
+      ...(store ? { storeId: store.id } : {}),
       sellerName,
       exchangePoint,
     }),
@@ -341,22 +344,26 @@ export async function sellerOffer(productId: string, priceKobo: number): Promise
  * never saw the checkout finds its run. Two scopes: a runner call (no scope)
  * matches the caller's runner id; a seller call (`{ storeId }`) matches runs
  * containing that store — the store's trading identity as it appears on the
- * run's products (sellerName), which is what the seller device knows from
- * its cached active store. The index is not doctrine: any failure (edge
- * down, index unavailable) degrades to an empty list and the screen falls
- * back to its own stored run id / empty state.
+ * run's products. Session callers must pass the owned store id; the demo
+ * seller retains its legacy name fallback. Transport failures stay visible to
+ * the caller so an unavailable index is never presented as "no runs".
  */
 export async function listActiveRuns(scope?: { storeId?: string }): Promise<ActiveRunsResponse> {
   const storeId = scope?.storeId;
   const query = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
-  try {
-    return await request<ActiveRunsResponse>(
-      `/markets/${encodeURIComponent(getActiveMarket())}/runs/active${query}`,
-      { headers: storeId ? demoSellerHeaders() : demoRunnerHeaders() },
-    );
-  } catch {
-    return { runs: [] };
-  }
+  return request<ActiveRunsResponse>(
+    `/markets/${encodeURIComponent(getActiveMarket())}/runs/active${query}`,
+    { headers: storeId ? demoSellerHeaders() : demoRunnerHeaders() },
+  );
+}
+
+/** Atomically claim an unassigned run through the internal-pool guarded route. */
+export async function claimRun(runId: string): Promise<void> {
+  await request(`/runs/${encodeURIComponent(runId)}/claim`, {
+    method: "POST",
+    headers: demoRunnerHeaders(),
+    body: "{}",
+  });
 }
 
 /**

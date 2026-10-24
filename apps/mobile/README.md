@@ -33,9 +33,19 @@ Phones outside your Wi-Fi need a tunnel on **both** sides:
 - **Sign-in:** once onboarded, the launch screen shows a "Welcome back" card whenever there's no live session — sign in with face (`/auth/face/verify`) or with this device's key (`/auth/device-key/authenticate`). The returned session token rides every request as `Authorization: Bearer` alongside the participant headers; a 401 session-expired/session-invalid clears it and the card returns. Lost the device? "Request a device reset" files an ops-reviewed reset (`/auth/device-reset`).
 - **Buyer checkout payment (ADR-0025):** set `EXPO_PUBLIC_FLW_PUBLIC_KEY` in `.env` (see `.env.example`) and checkout collects payment first — card / bank transfer / USSD via Flutterwave Standard in a webview — then the edge confirms the charge server-side before the run is created. The charge covers goods + **estimated** delivery; the edge cross-checks against the routed floor rate and refuses a shortfall. A confirmed payment survives a failed checkout — retry offers "Retry checkout (payment confirmed)" instead of charging again. Unset key = unpaid dev checkout, matching the edge's `PAYMENTS_REQUIRED=off` default.
 - **Seller payout account (ADR-0025):** seller join ends with an optional payout-account step — pick a bank, verify the account number, confirm the returned name, save. Seller home shows the masked account with a change path; selling is never blocked without one.
-- **Roles:** Buyer posts intents and builds a cart, Seller responds with products and negotiates, Runner collects the cart and completes QR-challenge handoffs. Before you onboard, each role is explorable under a demo identity (`src/api/config.ts`).
-- **Markets:** Balogun and Computer Village are the seed zones; the Markets screen switches the active market. `infra/dev-all.sh` seeds demo stores so the Balogun vocabulary isn't empty on a fresh backend.
+- **Roles:** Buyer posts intents and builds a cart, Seller responds with products and negotiates, Runner claims pool work before collecting the cart and completing QR-challenge handoffs. Before you onboard, each role is explorable under a demo identity (`src/api/config.ts`), including the pre-assigned `runner:internal` demo.
+- **Markets and presence:** role selection goes through the registry-backed Markets screen, which shows live seller counts and opening hours. Authenticated sellers attach their owned market-scoped `storeId` to discovery and sockets; foreground heartbeats refresh presence every 30 seconds. `infra/dev-all.sh` seeds demo stores so the Balogun vocabulary isn't empty on a fresh backend.
+- **Notifications:** the signed-in launch screen links to the durable notification centre with an unread badge. Socket opens, reconnects, and app foreground returns refresh the durable list; no Expo Push service is used.
 - **Ops dashboard:** `http://localhost:8787/ops` on the Mac (when tunneled, use the `/ops?token=…` URL the backend prints).
 - **Scripted walkthrough (dev-only):** open the `/demo` route as a deep link (`exp://<metro-host>/demo`) and the app drives a full buyer → seller → checkout → runner flow through the real API.
 
 Camera access is requested only where a capture happens (onboarding face, runner handoff evidence). The app never requests photo-library access. Buyer delivery locations are Plus Codes or a Muster Point.
+
+## Checks and device validation
+
+```bash
+npx --yes pnpm@9.15.4 --filter @market-runs/mobile typecheck
+npx --yes pnpm@9.15.4 --filter @market-runs/mobile test
+```
+
+The lightweight tests cover runner queue partitioning, claim-safe selection, ownership gates, and the legacy demo runner. Real-device validation still needs to cover: authenticated seller sockets and seller-count expiry across background/foreground; two pool runners attempting the same claim (exactly one succeeds); QR/photo handoffs and GPS after claim; and notification deep links plus unread reconciliation after connectivity loss.
