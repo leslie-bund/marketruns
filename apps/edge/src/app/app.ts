@@ -12,7 +12,7 @@ import { paymentsRoute, webhooksRoute } from "./routes/payments.js";
 import { capturesRoute } from "./routes/captures.js";
 import { marketsRoute } from "./routes/markets.js";
 import { cartsRoute, participantsRoute, productsRoute, runsRoute } from "./routes/scopes.js";
-import { internalNotificationsRoute, notificationsRoute } from "./routes/notifications.js";
+import { internalNotificationsRoute, notificationContactRoute, notificationsRoute } from "./routes/notifications.js";
 
 /**
  * The edge application: Hono app, explicit routes, one visible auth seam.
@@ -53,6 +53,7 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/captures", capturesRoute());
   app.route("/notifications", notificationsRoute());
   app.route("/internal/notifications", internalNotificationsRoute());
+  app.route("/internal/notification-contact", notificationContactRoute());
   app.route("/markets", marketsRoute());
   app.route("/participants", participantsRoute());
   app.route("/products", productsRoute());

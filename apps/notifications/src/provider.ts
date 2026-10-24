@@ -14,8 +14,6 @@ export interface NotificationProviders {
 export interface ProviderOptions {
   resendApiKey?: string | undefined;
   resendFromEmail?: string | undefined;
-  identityUrl?: string | undefined;
-  identityInternalToken?: string | undefined;
   edgeUrl?: string | undefined;
   edgeInternalToken?: string | undefined;
   fetchImpl?: typeof fetch;
@@ -48,12 +46,12 @@ export function createProviders(options: ProviderOptions): NotificationProviders
       }
     },
     async email(notification) {
-      if (!options.resendApiKey || !options.resendFromEmail || !options.identityUrl) {
-        return { kind: "skipped", error: "email provider or identity contact directory is not configured" };
+      if (!options.resendApiKey || !options.resendFromEmail || !options.edgeUrl) {
+        return { kind: "skipped", error: "email provider or edge contact directory is not configured" };
       }
       try {
-        const contact = await fetcher(`${options.identityUrl}/internal/notification-contact/${encodeURIComponent(notification.recipientId)}`, {
-          headers: options.identityInternalToken ? { "x-identity-internal": options.identityInternalToken } : {},
+        const contact = await fetcher(`${options.edgeUrl}/internal/notification-contact/${encodeURIComponent(notification.recipientId)}`, {
+          headers: options.edgeInternalToken ? { "x-notification-internal": options.edgeInternalToken } : {},
         });
         if (contact.status === 404) return { kind: "skipped", error: "participant has no verified notification email" };
         if (!contact.ok) return { kind: "retry", error: `contact directory returned ${contact.status}` };
