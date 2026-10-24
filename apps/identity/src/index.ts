@@ -2,7 +2,7 @@ import { createDatabase } from "./db.js";
 import type { Env } from "./env.js";
 import { RequestIdSchema } from "@market-runs/proto";
 import { createIdentityApp } from "./app.js";
-import { createFaceVerifier } from "./face-verifier.js";
+import { createFaceVerifier, createLocalFaceVerifier } from "./face-verifier.js";
 import { createPasskeyVerifier } from "./passkey-verifier.js";
 import { createDrizzleStore } from "./store.js";
 
@@ -43,6 +43,7 @@ export default {
           const app = createIdentityApp({
             store: createDrizzleStore(db),
             faceVerifier: createFaceVerifier(env),
+            localFaceVerifier: createLocalFaceVerifier(env),
             passkeyVerifier: createPasskeyVerifier(env),
           });
           response = await app.fetch(request, env);

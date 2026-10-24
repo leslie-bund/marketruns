@@ -85,6 +85,13 @@
       "when": 1792826776299,
       "tag": "0011_provider_reference_alias",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792847265559,
+      "tag": "0012_hybrid_biometrics",
+      "breakpoints": true
     }
   ]
 }

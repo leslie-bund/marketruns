@@ -7,5 +7,6 @@ export * from "./active-store";
 export * from "./active-market";
 export * from "./participant";
 export * from "./auth";
+export * from "./capture";
 export * from "./cart-state";
 export * from "./payments";

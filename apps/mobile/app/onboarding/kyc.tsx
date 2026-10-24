@@ -54,15 +54,17 @@ export default function OnboardingKyc() {
         facialCaptureRef: face.ref,
         market: params.market ?? "Balogun",
       });
-      if (participant.kycStatus !== "verified") {
-        Alert.alert("Verification failed", "The document could not be verified. Check the number and try again.");
+      const kycStatus: string = participant.kycStatus;
+      if (kycStatus !== "verified" && kycStatus !== "preverified") {
+        Alert.alert("Verification failed", "The document could not be preverified. Check the number and try again.");
         return;
       }
       await setActiveParticipant(participant);
       await setActiveMarket(params.market ?? "Balogun");
-      // KYC passed → step 4 enrolls the sign-in face (and registers this
-      // device's key in the background). That screen owns the onward route.
-      router.replace({ pathname: "/onboarding/face", params: { role } });
+      // Core integration: the edge forwards this opaque, participant-bound proof
+      // from POST /auth/enrollment-proof. It is never derived on mobile.
+      const enrollmentProof = (participant as typeof participant & { enrollmentProof?: string }).enrollmentProof;
+      router.replace({ pathname: "/onboarding/face", params: { role, enrollmentProof, docType: docType, docNumber } });
     } catch (error) {
       Alert.alert("Could not verify", error instanceof Error ? error.message : String(error));
     } finally {

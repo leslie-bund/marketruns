@@ -1,67 +1,49 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { router } from "expo-router";
-import { Alert, Text } from "react-native";
-import { requestDeviceReset, useActiveParticipant } from "../src/api";
+import { Alert, Platform, Text, View } from "react-native";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import { DEV_FACE_IMAGE_BASE64, captureFaceSequence, recoverDevice, useActiveParticipant } from "../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, s } from "../src/ui";
 
-/**
- * Lost-device path: ask ops to reset this participant's device access. The
- * request lands as "pending" and is approved server-side — this screen shows
- * exactly that state and nothing more.
- */
+/** Self-service recovery: participant id + fresh liveness + 1:1 match. */
 export default function DeviceReset() {
   const { participant } = useActiveParticipant();
   const [participantId, setParticipantId] = useState(participant?.id ?? "");
-  const [reason, setReason] = useState("");
+  const [permission, requestPermission] = useCameraPermissions();
+  const camera = useRef<CameraView>(null);
   const [busy, setBusy] = useState(false);
-  const [requested, setRequested] = useState<{ id: string; status: string } | null>(null);
+  const [consented, setConsented] = useState(false);
 
-  const submit = async () => {
-    if (!participantId.trim() || !reason.trim()) {
-      Alert.alert("Almost there", "We need the participant id and a short reason.");
-      return;
-    }
+  const submit = async (capture: { image: string; livenessImages: string[] }) => {
+    if (!participantId.trim() || !consented) return;
     setBusy(true);
     try {
-      setRequested(await requestDeviceReset({ participantId: participantId.trim(), reason: reason.trim() }));
-    } catch (error) {
-      Alert.alert("Request failed", error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
+      await recoverDevice({ ...capture, participantId: participantId.trim(), deviceLabel: `${Platform.OS} replacement device` });
+      Alert.alert("Device recovered", "Your old device keys and sessions were revoked. This device is now signed in.");
+      router.replace("/");
+    } catch (error) { Alert.alert("Recovery failed", error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
   };
-
-  if (requested) {
-    return (
-      <Page eyebrow="DEVICE RESET" title="Request sent">
-        <Card>
-          <Pill active>{requested.status.toUpperCase()} · OPS REVIEW</Pill>
-          <Text style={s.body}>
-            Your reset request is in. Ops reviews and approves it — once approved, onboard this device again to get a new key.
-          </Text>
-          <Text style={s.muted}>Request {requested.id}</Text>
-        </Card>
-        <Button title="Back to start" onPress={() => router.replace("/")} />
-      </Page>
-    );
-  }
+  const capture = async () => { try { await submit(await captureFaceSequence(camera)); }
+    catch (error) { Alert.alert("Capture failed", error instanceof Error ? error.message : String(error)); } };
+  const devCapture = { image: DEV_FACE_IMAGE_BASE64, livenessImages: Array(7).fill(DEV_FACE_IMAGE_BASE64) as string[] };
 
   return (
-    <Page eyebrow="DEVICE RESET" title="Lost access?">
-      <Card>
-        <Text style={s.body}>
-          If you lost your phone or the key on it no longer works, request a device reset. Ops reviews every request before anything changes.
-        </Text>
-      </Card>
-      <Section title="Participant">
-        <Label>Participant id (prefilled from this device)</Label>
-        <Field value={participantId} onChangeText={setParticipantId} autoCapitalize="none" placeholder="participant-…" />
+    <Page eyebrow="DEVICE RECOVERY" title="Prove it’s you">
+      <Card><Pill active>FRESH LIVENESS + 1:1 MATCH</Pill><Text style={s.body}>
+        Email cannot recover your account. Enter your participant id and complete a new seven-frame face check. Success revokes old keys and sessions before registering this device.
+      </Text></Card>
+      <Section title="Participant"><Label>Participant id</Label>
+        <Field value={participantId} onChangeText={setParticipantId} autoCapitalize="none" placeholder="participant-…" /></Section>
+      <Section title="Consent and capture">
+        <Text style={s.muted}>Consent biometric-capture-v1: fresh frames are sent to the private identity service for liveness and comparison with your enrolled face. Images are transit-only; no 1:N search occurs.</Text>
+        <Button title={consented ? "✓ Consent recorded for this capture" : "I consent to this biometric recovery"} secondary onPress={() => setConsented(true)} />
+        {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
+          <View style={{ height: 220, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>
+          <Button title={busy ? "Recovering…" : "Capture 7 frames and recover"} onPress={() => { if (consented && !busy) void capture(); }} />
+          <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} />
+        </>}
       </Section>
-      <Section title="Reason">
-        <Label>What happened?</Label>
-        <Field value={reason} onChangeText={setReason} placeholder="e.g. Lost my phone at the market" multiline />
-      </Section>
-      <Button title={busy ? "Sending…" : "Request a device reset"} danger onPress={submit} />
       <Button title="Back" secondary onPress={() => router.back()} />
     </Page>
   );

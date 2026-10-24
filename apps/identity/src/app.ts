@@ -1,593 +1,367 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import {
-  AuthenticateDeviceKeyRequestSchema,
-  DeviceResetDecisionRequestSchema,
-  DeviceResetRequestSchema,
-  DeviceResetStatusSchema,
-  EnrollFaceRequestSchema,
-  RegisterDeviceKeyRequestSchema,
-  ValidateSessionRequestSchema,
-  VerifyFaceRequestSchema,
-  type AuthErrorCode,
-  type Session,
+  AuthenticateDeviceKeyRequestSchema, BIOMETRIC_CONSENT_VERSION, DeviceResetDecisionRequestSchema,
+  DeviceResetRequestSchema, DeviceResetStatusSchema, DisplayNameRequestSchema, EnrollFaceRequestSchema,
+  EnrollmentProofRequestSchema, RecoverDeviceRequestSchema, RegisterDeviceKeyRequestSchema,
+  ValidateSessionRequestSchema, VerifyFaceRequestSchema, type AuthErrorCode, type BiometricConsent, type Session,
 } from "@market-runs/proto";
 import {
-  DEFAULT_FACE_MATCH_THRESHOLD,
-  SESSION_TOKEN_TTL_MS,
-  cosineSimilarity,
-  faceMatchPasses,
-  signSessionToken,
-  similarityBucket,
-  verifySessionToken,
+  DEFAULT_FACE_MATCH_THRESHOLD, SESSION_TOKEN_TTL_MS, cosineSimilarity, faceMatchPasses,
+  signSessionToken, similarityBucket, verifySessionToken,
 } from "@market-runs/domain";
 import type { Env } from "./env.js";
-import { encryptionKeyBase64, faceMatchThreshold, fidoUpsertEnabled, sessionSecret } from "./env.js";
-import { isAsyncFaceVerifier, type AsyncFaceVerifier, type FaceVerifier } from "./face-verifier.js";
+import { encryptionKeyBase64, faceMatchThreshold, fidoUpsertEnabled, isProduction, sessionSecret } from "./env.js";
+import { BiometricServiceError, isAsyncFaceVerifier, type AsyncFaceVerifier, type FaceCallbackVerdict, type FaceVerifier } from "./face-verifier.js";
 import type { PasskeyVerifier } from "./passkey-verifier.js";
-import type { FaceAuthJobRow, IdentityStore } from "./store.js";
+import type { FaceAuthJobRow, IdentityAccessProofRow, IdentityStore } from "./store.js";
 import { base64ToBytes, decryptEmbedding, encryptEmbedding, sha256Hex } from "./crypto.js";
 
+const PROOF_TTL_MS = 15 * 60_000;
+const JOB_TTL_MS = 2 * 60_000;
+const ATTEMPT_WINDOW_MS = 15 * 60_000;
+const MAX_FAILED_ATTEMPTS = 5;
 export interface IdentityDeps {
   store: IdentityStore;
-  /** Sync embedding providers (stub) OR async vendor-held providers (ADR-0009 seam). */
   faceVerifier: FaceVerifier | AsyncFaceVerifier;
-  /** Null unless FIDO_STUB_ENABLED=true — the fido routes 501 on null (no silent pass). */
+  localFaceVerifier?: FaceVerifier;
   passkeyVerifier: PasskeyVerifier | null;
+  now?: () => Date;
 }
-
 function error(c: Context, status: number, code: AuthErrorCode, message: string, extra: Record<string, unknown> = {}) {
   return c.json({ error: code, message, ...extra }, status as never);
 }
-
-/**
- * Internal-seam guard (OPS_TOKEN posture, ADR-0015): when
- * IDENTITY_INTERNAL_TOKEN is set, callers must carry it as
- * `x-identity-internal`; when unset (local dev) the route is OPEN and the
- * resolved operator is labelled "local-dev-internal". DEV-STAGE TRUST: the
- * enrollment route trusts the edge's assertion that the participant exists
- * and passed KYC — the ParticipantDO is edge-side (ADR-0016) and no
- * cross-worker call exists yet; hardening that assertion is an integration
- * step, documented in the report.
- */
 function requireInternal(): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
     const token = c.env.IDENTITY_INTERNAL_TOKEN;
-    if (token !== undefined && token !== "" && c.req.header("x-identity-internal") !== token) {
-      return error(c, 403, "unauthorized-internal", "a valid x-identity-internal token is required");
-    }
+    if (!token && isProduction(c.env)) return error(c, 503, "identity-unavailable", "IDENTITY_INTERNAL_TOKEN is required in production");
+    if (token && c.req.header("x-identity-internal") !== token) return error(c, 403, "unauthorized-internal", "valid internal token required");
     await next();
   };
 }
-
-async function issueSession(
-  store: IdentityStore,
-  env: Env,
-  participantId: string,
-  role: string,
-): Promise<Session> {
-  const now = Date.now();
-  const tokenId = crypto.randomUUID();
-  const expiresAt = now + SESSION_TOKEN_TTL_MS;
-  const token = await signSessionToken(
-    { tokenId, participantId, role, iat: now, exp: expiresAt },
-    sessionSecret(env),
-  );
-  await store.insertAuthSession({
-    tokenId,
-    participantId,
-    issuedAt: new Date(now),
-    expiresAt: new Date(expiresAt),
-    revokedAt: null,
-  });
+async function issueSession(store: IdentityStore, env: Env, participantId: string, role: string, now: Date): Promise<Session> {
+  const tokenId = crypto.randomUUID(); const expiresAt = now.getTime() + SESSION_TOKEN_TTL_MS;
+  const token = await signSessionToken({ tokenId, participantId, role, iat: now.getTime(), exp: expiresAt }, sessionSecret(env));
+  await store.insertAuthSession({ tokenId, participantId, issuedAt: now, expiresAt: new Date(expiresAt), revokedAt: null });
   return { token, tokenId, expiresAt };
 }
-
-/* ------------------------------------------------------------------------ */
-/* Async face jobs (vendor-held biometrics, ADR-0009/0022)                   */
-/* ------------------------------------------------------------------------ */
-
-function decodeFrames(list: string[] | undefined): Uint8Array[] {
-  if (!list) return [];
-  const frames: Uint8Array[] = [];
-  for (const item of list) {
-    const bytes = base64ToBytes(item);
-    if (bytes && bytes.length > 0) frames.push(bytes);
-  }
-  return frames;
-}
-
-function newFaceJob(
-  kind: FaceAuthJobRow["kind"],
-  participantId: string,
-  role: string,
-  providerJobId: string,
-): FaceAuthJobRow {
-  return {
-    id: crypto.randomUUID(),
-    providerJobId,
-    participantId,
-    role,
-    kind,
-    status: "pending",
-    failureReason: null,
-    sessionTokenId: null,
-    createdAt: new Date(),
-    completedAt: null,
-  };
-}
-
-/**
- * Transition a pending async job to its verdict — idempotent (provider
- * callbacks are at-least-once; double-completion is a no-op). On a passed
- * enrollment the face_enrollments row is written vendor-held: embedding
- * columns NULL, providerRef = the provider-side user reference. Auth attempts
- * are audited with a NULL similarity bucket (the vendor never returns a
- * score — banded-or-null doctrine holds).
- */
-async function finalizeFaceJob(
-  store: IdentityStore,
-  verifier: AsyncFaceVerifier,
-  job: FaceAuthJobRow,
-  passed: boolean,
-  reason: string | null,
-): Promise<FaceAuthJobRow> {
-  const transitioned = await store.completeFaceAuthJob(job.id, passed ? "passed" : "failed", reason, new Date());
-  if (!transitioned) {
-    return (await store.getFaceAuthJob(job.id)) ?? { ...job, status: passed ? "passed" : "failed" };
-  }
-  const now = new Date();
-  if (job.kind === "authentication") {
-    await store.insertFaceAuthAttempt({
-      id: crypto.randomUUID(),
-      participantId: job.participantId,
-      outcome: passed ? "pass" : "fail",
-      similarityBucket: null,
-      createdAt: now,
-    });
-    if (passed) await store.markFaceVerified(job.participantId, now);
-  }
-  if (passed && job.kind === "enrollment") {
-    await store.upsertFaceEnrollment({
-      participantId: job.participantId,
-      role: job.role,
-      embeddingEncrypted: null,
-      iv: null,
-      authTag: null,
-      modelVersion: verifier.modelVersion,
-      providerRef: job.participantId, // provider-side reference == our participantId (keyed at submission)
-      createdAt: now,
-      lastVerifiedAt: null,
-    });
-  }
-  return (await store.getFaceAuthJob(job.id)) ?? job;
-}
-
-/**
- * The session for a passed authentication job, issued LAZILY at collection
- * time (a callback has no client to hand a token to). HMAC tokens are
- * deterministic, so a repeat poll re-derives the exact token from the
- * auth_sessions registry row — the raw token is never stored. Returns null
- * when the issued session was revoked (device reset raced the poll).
- */
-async function sessionForJob(store: IdentityStore, env: Env, job: FaceAuthJobRow): Promise<Session | null> {
+async function sessionForJob(store: IdentityStore, env: Env, job: FaceAuthJobRow, now: Date): Promise<Session | null> {
   if (job.sessionTokenId) {
-    const record = await store.getAuthSession(job.sessionTokenId);
-    if (!record || record.revokedAt !== null) return null;
-    const token = await signSessionToken(
-      {
-        tokenId: record.tokenId,
-        participantId: record.participantId,
-        role: job.role,
-        iat: record.issuedAt.getTime(),
-        exp: record.expiresAt.getTime(),
-      },
-      sessionSecret(env),
-    );
-    return { token, tokenId: record.tokenId, expiresAt: record.expiresAt.getTime() };
+    const row = await store.getAuthSession(job.sessionTokenId);
+    if (!row || row.revokedAt) return null;
+    const token = await signSessionToken({ tokenId: row.tokenId, participantId: row.participantId, role: job.role,
+      iat: row.issuedAt.getTime(), exp: row.expiresAt.getTime() }, sessionSecret(env));
+    return { token, tokenId: row.tokenId, expiresAt: row.expiresAt.getTime() };
   }
-  const session = await issueSession(store, env, job.participantId, job.role);
-  await store.setFaceAuthJobSession(job.id, session.tokenId);
-  return session;
+  const session = await issueSession(store, env, job.participantId, job.role, now);
+  await store.setFaceAuthJobSession(job.id, session.tokenId); return session;
+}
+function decodeFrames(list: string[]): Uint8Array[] {
+  return list.map((item) => { const bytes = base64ToBytes(item); if (!bytes?.length || bytes.length > 8 * 1024 * 1024) throw new Error("invalid capture"); return bytes; });
+}
+function randomProof(): string {
+  const bytes = new Uint8Array(32); crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+class ProofFailure extends Error { constructor(readonly code: AuthErrorCode, readonly status = 401) { super(code); } }
+async function validProof(store: IdentityStore, raw: string, participantId: string, purpose: "enrollment" | "recovery", now: Date) {
+  const proof = await store.getAccessProof(await sha256Hex(raw));
+  if (!proof || proof.participantId !== participantId || proof.purpose !== purpose) throw new ProofFailure("unauthorized-proof");
+  if (proof.consumedAt) throw new ProofFailure("proof-consumed", 409);
+  if (proof.expiresAt <= now) throw new ProofFailure("proof-expired");
+  return proof;
+}
+async function sessionParticipant(store: IdentityStore, env: Env, authorization: string | undefined, now: Date): Promise<string | null> {
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const result = await verifySessionToken(authorization.slice(7), sessionSecret(env)); if (!result.ok) return null;
+  const row = await store.getAuthSession(result.payload.tokenId);
+  return row && !row.revokedAt && row.expiresAt > now ? row.participantId : null;
+}
+async function recordConsent(store: IdentityStore, participantId: string, purpose: string, consent: BiometricConsent, now: Date) {
+  if (consent.version !== BIOMETRIC_CONSENT_VERSION || !consent.granted || consent.grantedAt > now.getTime() + 60_000 || consent.grantedAt < now.getTime() - PROOF_TTL_MS) {
+    throw new ProofFailure("consent-required", 400);
+  }
+  await store.insertBiometricConsent({ id: crypto.randomUUID(), participantId, purpose, version: consent.version,
+    grantedAt: new Date(consent.grantedAt), createdAt: now });
+}
+async function analyze(local: FaceVerifier, image: Uint8Array, frames: Uint8Array[]) {
+  try { return await local.analyze(image, frames); }
+  catch (cause) {
+    if (cause instanceof BiometricServiceError && cause.status === 422) throw new ProofFailure("liveness-failed", 422);
+    throw cause;
+  }
+}
+async function checkAttempts(store: IdentityStore, participantId: string, now: Date) {
+  if (await store.countRecentFaceFailures(participantId, new Date(now.getTime() - ATTEMPT_WINDOW_MS)) >= MAX_FAILED_ATTEMPTS) {
+    throw new ProofFailure("too-many-attempts", 429);
+  }
+}
+async function audit(store: IdentityStore, participantId: string, pass: boolean, bucket: "low" | "medium" | "high" | null, now: Date) {
+  await store.insertFaceAuthAttempt({ id: crypto.randomUUID(), participantId, outcome: pass ? "pass" : "fail", similarityBucket: bucket, createdAt: now });
+}
+function pendingJob(participantId: string, role: string, providerJobId: string, now: Date,
+  pending?: { ciphertext: Uint8Array; iv: Uint8Array; authTag: Uint8Array }, modelVersion?: string): FaceAuthJobRow {
+  return { id: crypto.randomUUID(), providerJobId, participantId, role, kind: "enrollment", status: "pending",
+    failureReason: null, sessionTokenId: null, pendingEmbeddingEncrypted: pending?.ciphertext ?? null,
+    pendingEmbeddingIv: pending?.iv ?? null, pendingEmbeddingAuthTag: pending?.authTag ?? null,
+    pendingModelVersion: modelVersion ?? null, createdAt: now, expiresAt: new Date(now.getTime() + JOB_TTL_MS), completedAt: null };
+}
+async function finalizeEnrollment(store: IdentityStore, local: FaceVerifier, env: Env, job: FaceAuthJobRow,
+  verdict: FaceCallbackVerdict, now: Date): Promise<FaceAuthJobRow> {
+  if (now >= job.expiresAt || job.status !== "pending") {
+    await store.completeFaceAuthJob(job.id, "failed", "expired", now); return (await store.getFaceAuthJob(job.id)) ?? job;
+  }
+  if (!verdict.passed || verdict.userRef !== job.participantId) {
+    await store.completeFaceAuthJob(job.id, "failed", verdict.userRef !== job.participantId ? "participant-mismatch" : verdict.reason, now);
+    return (await store.getFaceAuthJob(job.id)) ?? job;
+  }
+  let encrypted = job.pendingEmbeddingEncrypted && job.pendingEmbeddingIv && job.pendingEmbeddingAuthTag ? {
+    ciphertext: job.pendingEmbeddingEncrypted, iv: job.pendingEmbeddingIv, authTag: job.pendingEmbeddingAuthTag,
+  } : null;
+  let modelVersion = job.pendingModelVersion;
+  // A provider callback image is an authorized temporary selfie fallback. It is never persisted.
+  if (!encrypted && verdict.providerImage) {
+    const embedding = await local.embed(verdict.providerImage);
+    encrypted = await encryptEmbedding(embedding, encryptionKeyBase64(env)); modelVersion = local.modelVersion;
+  }
+  if (!encrypted || !modelVersion) {
+    await store.completeFaceAuthJob(job.id, "failed", "missing-pending-embedding", now);
+    return (await store.getFaceAuthJob(job.id)) ?? job;
+  }
+  await store.completeIdentityKyc(job.participantId, verdict.verifiedLegalName ?? null, now);
+  await store.upsertFaceEnrollment({ participantId: job.participantId, role: job.role, embeddingEncrypted: encrypted.ciphertext,
+    iv: encrypted.iv, authTag: encrypted.authTag, modelVersion, providerRef: job.participantId, createdAt: now, lastVerifiedAt: null });
+  await store.completeFaceAuthJob(job.id, "passed", null, now);
+  return (await store.getFaceAuthJob(job.id)) ?? { ...job, status: "passed", completedAt: now };
 }
 
 export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
   const { store, faceVerifier, passkeyVerifier } = deps;
+  const local = deps.localFaceVerifier ?? (isAsyncFaceVerifier(faceVerifier) ? null : faceVerifier);
+  const now = () => deps.now?.() ?? new Date();
   const app = new Hono<{ Bindings: Env }>();
-
   app.get("/healthz", (c) => c.json({ ok: true, service: "market-runs-identity" }));
 
-  /* ------------------------------------------------------------------ */
-  /* Face enrollment (internal: the edge calls this after KYC passes)    */
-  /* ------------------------------------------------------------------ */
-  app.post("/auth/face/enroll", requireInternal(), async (c) => {
-    const parsed = EnrollFaceRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid enrollment request", { issues: parsed.error.issues });
-    const { participantId, role, image } = parsed.data;
-    const imageBytes = base64ToBytes(image);
-    if (!imageBytes || imageBytes.length === 0) {
-      return error(c, 400, "invalid-request", "image must be base64-encoded bytes");
-    }
-
-    /* Async vendor-held path (ADR-0022 amendment): submit the enrollment job
-       and answer 202 honestly — the row lands when the verdict arrives via
-       /callbacks/:provider or the job-status poll below. */
-    if (isAsyncFaceVerifier(faceVerifier)) {
-      const existing = await store.getFaceEnrollment(participantId);
-      let providerJobId: string;
-      try {
-        ({ providerJobId } = await faceVerifier.submitEnrollment({
-          participantId,
-          selfie: imageBytes,
-          livenessImages: decodeFrames(parsed.data.livenessImages),
-          userDetails: parsed.data.userDetails,
-          // Re-enrollment (e.g. after an approved device reset) replaces the
-          // provider-side reference instead of failing.
-          allowNewEnroll: existing !== null,
-        }));
-      } catch {
-        return error(c, 502, "identity-unavailable", "the face provider rejected the enrollment submission");
-      }
-      const job = newFaceJob("enrollment", participantId, role, providerJobId);
-      await store.insertFaceAuthJob(job);
-      return c.json(
-        { participantId, kind: job.kind, status: "pending" as const, jobId: job.id, submittedAt: job.createdAt.getTime() },
-        202,
-      );
-    }
-
-    const embedding = await faceVerifier.embed(imageBytes);
-    const encrypted = await encryptEmbedding(embedding, encryptionKeyBase64(c.env));
-    const now = new Date();
-    await store.upsertFaceEnrollment({
-      participantId,
-      role,
-      embeddingEncrypted: encrypted.ciphertext,
-      iv: encrypted.iv,
-      authTag: encrypted.authTag,
-      modelVersion: faceVerifier.modelVersion,
-      providerRef: null, // self-held embedding mode
-      createdAt: now,
-      lastVerifiedAt: null,
-    });
-    return c.json({ participantId, enrolled: true as const, modelVersion: faceVerifier.modelVersion, enrolledAt: now.getTime() });
+  app.post("/auth/enrollment-proof", requireInternal(), async (c) => {
+    const parsed = EnrollmentProofRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return error(c, 400, "invalid-request", "invalid proof request");
+    if (isProduction(c.env) && parsed.data.kycStatus !== "verified") return error(c, 403, "kyc-required", "production enrollment requires verified KYC");
+    const at = now(); const existing = await store.getIdentityParticipant(parsed.data.participantId);
+    const kycStatus = existing?.kycStatus === "verified" ? "verified" : parsed.data.kycStatus;
+    await store.putIdentityParticipant({ participantId: parsed.data.participantId, role: parsed.data.role,
+      displayName: parsed.data.displayName, verifiedLegalName: existing?.verifiedLegalName ?? null,
+      kycStatus, createdAt: existing?.createdAt ?? at, updatedAt: at });
+    const raw = randomProof(); const expiresAt = new Date(at.getTime() + PROOF_TTL_MS);
+    await store.insertAccessProof({ id: crypto.randomUUID(), proofHash: await sha256Hex(raw), participantId: parsed.data.participantId,
+      purpose: "enrollment", expiresAt, consumedAt: null, createdAt: at });
+    return c.json({ participantId: parsed.data.participantId, enrollmentProof: raw, kycStatus,
+      displayName: parsed.data.displayName, verifiedLegalName: existing?.verifiedLegalName ?? null, expiresAt: expiresAt.getTime() });
   });
 
-  /* ------------------------------------------------------------------ */
-  /* Face verification → session (passwordless login)                    */
-  /* ------------------------------------------------------------------ */
+  app.post("/auth/face/enroll", async (c) => {
+    const parsed = EnrollFaceRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success || !local) return error(c, 400, "invalid-request", "invalid enrollment request");
+    const { participantId, image, enrollmentProof, consent } = parsed.data;
+    try {
+      await validProof(store, enrollmentProof, participantId, "enrollment", now());
+      const profile = await store.getIdentityParticipant(participantId);
+      if (!profile || (isProduction(c.env) && profile.kycStatus !== "verified")) return error(c, 403, "kyc-required", "verified participant proof required");
+      await recordConsent(store, participantId, "enrollment", consent, now());
+      const imageBytes = base64ToBytes(image); if (!imageBytes?.length) return error(c, 400, "invalid-request", "invalid image");
+      const analysis = await analyze(local, imageBytes, decodeFrames(parsed.data.livenessImages));
+      if (isAsyncFaceVerifier(faceVerifier)) {
+        if (!parsed.data.identityDocument) return error(c, 400, "invalid-request", "Biometric KYC document required");
+        const encrypted = await encryptEmbedding(analysis.embedding, encryptionKeyBase64(c.env));
+        let providerJobId: string;
+        try { ({ providerJobId } = await faceVerifier.submitEnrollment({ participantId, selfie: imageBytes,
+          livenessImages: decodeFrames(parsed.data.livenessImages), userDetails: parsed.data.userDetails,
+          identityDocument: parsed.data.identityDocument, consent })); }
+        catch { return error(c, 502, "identity-unavailable", "KYC provider rejected submission"); }
+        const job = pendingJob(participantId, profile.role, providerJobId, now(), encrypted, analysis.modelVersion);
+        await store.insertFaceAuthJob(job);
+        return c.json({ participantId, kind: "enrollment", status: "pending", jobId: job.id,
+          submittedAt: job.createdAt.getTime(), expiresAt: job.expiresAt.getTime() }, 202);
+      }
+      const at = now(); const encrypted = await encryptEmbedding(analysis.embedding, encryptionKeyBase64(c.env));
+      await store.upsertFaceEnrollment({ participantId, role: profile.role,
+        embeddingEncrypted: encrypted.ciphertext, iv: encrypted.iv, authTag: encrypted.authTag,
+        modelVersion: analysis.modelVersion, providerRef: null, createdAt: at, lastVerifiedAt: null });
+      const session = await issueSession(store, c.env, participantId, profile.role, at);
+      return c.json({ participantId, enrolled: true, modelVersion: analysis.modelVersion, enrolledAt: at.getTime(), session });
+    } catch (cause) {
+      if (cause instanceof ProofFailure) return error(c, cause.status, cause.code, cause.message);
+      return error(c, 502, "identity-unavailable", "biometric analysis unavailable");
+    }
+  });
+
   app.post("/auth/face/verify", async (c) => {
     const parsed = VerifyFaceRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid verification request", { issues: parsed.error.issues });
-    const { participantId, image } = parsed.data;
-    const enrollment = await store.getFaceEnrollment(participantId);
-    if (!enrollment) {
-      return error(c, 404, "face-not-enrolled", "no face enrollment for this participant");
+    if (!parsed.success || !local) return error(c, 400, "invalid-request", "invalid verification request");
+    const { participantId, image, consent } = parsed.data; const at = now();
+    try {
+      await checkAttempts(store, participantId, at); await recordConsent(store, participantId, "authentication", consent, at);
+      const enrollment = await store.getFaceEnrollment(participantId);
+      if (!enrollment) return error(c, 404, "face-not-enrolled", "no face enrollment");
+      if (!enrollment.embeddingEncrypted || !enrollment.iv || !enrollment.authTag) return error(c, 409, "enrollment-provider-mismatch", "local embedding required");
+      const imageBytes = base64ToBytes(image); if (!imageBytes?.length) return error(c, 400, "invalid-request", "invalid image");
+      const analysis = await analyze(local, imageBytes, decodeFrames(parsed.data.livenessImages));
+      const stored = await decryptEmbedding({ ciphertext: enrollment.embeddingEncrypted, iv: enrollment.iv, authTag: enrollment.authTag }, encryptionKeyBase64(c.env));
+      const similarity = cosineSimilarity(analysis.embedding, stored); const threshold = faceMatchThreshold(c.env) ?? DEFAULT_FACE_MATCH_THRESHOLD;
+      const bucket = similarityBucket(similarity, threshold); const passed = faceMatchPasses(similarity, threshold);
+      await audit(store, participantId, passed, bucket, at);
+      if (!passed) return error(c, 401, "face-mismatch", "face verification failed", { similarityBucket: bucket });
+      const session = await issueSession(store, c.env, participantId, enrollment.role, at); await store.markFaceVerified(participantId, at);
+      return c.json({ participantId, verified: true, session });
+    } catch (cause) {
+      if (cause instanceof ProofFailure) return error(c, cause.status, cause.code, cause.message);
+      return error(c, 502, "identity-unavailable", "biometric analysis unavailable");
     }
-    const imageBytes = base64ToBytes(image);
-    if (!imageBytes || imageBytes.length === 0) {
-      return error(c, 400, "invalid-request", "image must be base64-encoded bytes");
-    }
-
-    /* Async vendor-held path: delegate to the provider's authentication job
-       against the enrolled reference; the session is issued when the client
-       collects a passing verdict from GET /auth/face/job/:jobId. */
-    if (isAsyncFaceVerifier(faceVerifier)) {
-      if (enrollment.providerRef === null) {
-        return error(
-          c,
-          409,
-          "enrollment-provider-mismatch",
-          "this enrollment is self-held (local embedding) but the active provider is vendor-held; re-enroll or switch FACE_VERIFIER",
-        );
-      }
-      let providerJobId: string;
-      try {
-        ({ providerJobId } = await faceVerifier.submitAuthentication({
-          participantId,
-          selfie: imageBytes,
-          livenessImages: decodeFrames(parsed.data.livenessImages),
-          userDetails: parsed.data.userDetails,
-        }));
-      } catch {
-        return error(c, 502, "identity-unavailable", "the face provider rejected the verification submission");
-      }
-      const job = newFaceJob("authentication", participantId, enrollment.role, providerJobId);
-      await store.insertFaceAuthJob(job);
-      return c.json(
-        { participantId, kind: job.kind, status: "pending" as const, jobId: job.id, submittedAt: job.createdAt.getTime() },
-        202,
-      );
-    }
-
-    /* Self-held path: decrypt the one row and compare in memory. A NULL
-       embedding under a sync provider means the row is vendor-held — the
-       active provider mode and the row's mode disagree. */
-    if (!enrollment.embeddingEncrypted || !enrollment.iv || !enrollment.authTag) {
-      return error(
-        c,
-        409,
-        "enrollment-provider-mismatch",
-        "this enrollment is vendor-held but the active provider is self-held; re-enroll or switch FACE_VERIFIER",
-      );
-    }
-    const embedding = await faceVerifier.embed(imageBytes);
-    const stored = await decryptEmbedding(
-      { ciphertext: enrollment.embeddingEncrypted, iv: enrollment.iv, authTag: enrollment.authTag },
-      encryptionKeyBase64(c.env),
-    );
-    const similarity = cosineSimilarity(embedding, stored);
-    const threshold = faceMatchThreshold(c.env) ?? DEFAULT_FACE_MATCH_THRESHOLD;
-    const bucket = similarityBucket(similarity, threshold);
-    if (!faceMatchPasses(similarity, threshold)) {
-      await store.insertFaceAuthAttempt({
-        id: crypto.randomUUID(),
-        participantId,
-        outcome: "fail",
-        similarityBucket: bucket,
-        createdAt: new Date(),
-      });
-      // The band is returned for UX ("try again, better light"); the raw
-      // score is NEVER on the wire — a live score oracle lets an attacker
-      // hill-climb toward the threshold.
-      return error(c, 401, "face-mismatch", "face verification failed", { similarityBucket: bucket });
-    }
-    const session = await issueSession(store, c.env, participantId, enrollment.role);
-    const now = new Date();
-    await store.markFaceVerified(participantId, now);
-    await store.insertFaceAuthAttempt({
-      id: crypto.randomUUID(),
-      participantId,
-      outcome: "pass",
-      similarityBucket: bucket,
-      createdAt: now,
-    });
-    return c.json({ participantId, verified: true as const, session });
   });
 
-  /* ------------------------------------------------------------------ */
-  /* Async face jobs: status polling + provider callbacks (ADR-0009)      */
-  /* ------------------------------------------------------------------ */
-
-  /**
-   * Client poll for an async enroll/verify job. While pending and an async
-   * provider is active, we poll the provider eagerly so local/sandbox dev
-   * works without a public callback URL; the callback route is the production
-   * path. Failed jobs answer 401 face-mismatch (same honesty as the sync
-   * path: the vendor's reason string is server-side, the client gets the
-   * code). Passed authentication jobs issue the session here, at collection.
-   */
   app.get("/auth/face/job/:jobId", async (c) => {
-    let job = await store.getFaceAuthJob(c.req.param("jobId"));
-    if (!job) return error(c, 404, "job-not-found", "unknown face job");
-    if (job.status === "pending" && isAsyncFaceVerifier(faceVerifier)) {
+    let job = await store.getFaceAuthJob(c.req.param("jobId")); if (!job) return error(c, 404, "job-not-found", "unknown job");
+    if (job.status === "pending" && now() >= job.expiresAt) {
+      await store.completeFaceAuthJob(job.id, "failed", "expired", now());
+      return error(c, 410, "job-expired", "face job expired", { jobId: job.id });
+    }
+    if (job.status === "pending" && isAsyncFaceVerifier(faceVerifier) && local) {
       try {
         const verdict = await faceVerifier.pollJob(job.providerJobId);
-        if (verdict.outcome !== "pending") {
-          job = await finalizeFaceJob(
-            store,
-            faceVerifier,
-            job,
-            verdict.outcome === "passed",
-            verdict.outcome === "failed" ? verdict.reason : null,
-          );
-        }
-      } catch {
-        // Provider unreachable — stay pending honestly; the client re-polls.
-      }
+        if (verdict.outcome !== "pending") job = await finalizeEnrollment(store, local, c.env, job, {
+          providerJobId: job.providerJobId, userRef: job.participantId, passed: verdict.outcome === "passed",
+          reason: verdict.outcome === "failed" ? verdict.reason : null,
+          verifiedLegalName: verdict.outcome === "passed" ? verdict.verifiedLegalName ?? null : null,
+          providerImage: verdict.outcome === "passed" ? verdict.providerImage ?? null : null,
+        }, now());
+      } catch { /* remain pending while the provider is temporarily unavailable */ }
     }
-    if (job.status === "pending") {
-      return c.json({ jobId: job.id, participantId: job.participantId, kind: job.kind, status: "pending" as const, completedAt: null });
-    }
-    if (job.status === "failed") {
-      return error(c, 401, "face-mismatch", "face job failed", { jobId: job.id });
-    }
-    const complete = {
-      jobId: job.id,
-      participantId: job.participantId,
-      kind: job.kind,
-      status: "complete" as const,
-      completedAt: job.completedAt?.getTime() ?? null,
-    };
-    if (job.kind === "enrollment") return c.json(complete);
-    const session = await sessionForJob(store, c.env, job);
-    if (!session) return error(c, 401, "session-invalid", "the session issued for this job was revoked");
-    return c.json({ ...complete, session });
+    if (job.status === "pending") return c.json({ jobId: job.id, participantId: job.participantId, kind: job.kind,
+      status: "pending", completedAt: null });
+    if (job.status === "failed") return error(c, job.failureReason === "expired" ? 410 : 401,
+      job.failureReason === "expired" ? "job-expired" : "face-mismatch", "face job failed", { jobId: job.id });
+    const profile = await store.getIdentityParticipant(job.participantId);
+    const session = await sessionForJob(store, c.env, job, now());
+    if (!session) return error(c, 401, "session-invalid", "job session was revoked");
+    return c.json({ jobId: job.id, participantId: job.participantId, kind: job.kind, status: "complete",
+      completedAt: job.completedAt?.getTime() ?? now().getTime(), suggestedDisplayName: profile?.verifiedLegalName ?? profile?.displayName,
+      verifiedLegalName: profile?.verifiedLegalName ?? undefined, session });
   });
 
-  /**
-   * Provider result callbacks. The :provider segment must match the ACTIVE
-   * verifier's declared provider, and the verifier authenticates the request
-   * by signature — no internal token here, the signature IS the auth.
-   * Unknown-but-authentic jobs are acked 200 so the provider stops retrying
-   * (delivery is at-least-once, retried 3×; a job we never recorded is not
-   * ours to complete).
-   */
   app.post("/callbacks/:provider", async (c) => {
-    if (!isAsyncFaceVerifier(faceVerifier) || c.req.param("provider") !== faceVerifier.callbackProvider) {
-      return error(c, 404, "job-not-found", "no active face provider answers this callback path");
-    }
-    let verdict;
-    try {
-      verdict = await faceVerifier.handleCallback(c.req.raw);
-    } catch {
-      return error(c, 400, "invalid-request", "well-signed callback with an unparseable payload");
-    }
-    if (!verdict) return error(c, 401, "callback-invalid", "callback signature did not verify");
-    const job = await store.getFaceAuthJobByProviderId(verdict.providerJobId);
-    if (!job) return c.json({ ok: false as const, reason: "unknown-job" as const });
-    const completed = await finalizeFaceJob(store, faceVerifier, job, verdict.passed, verdict.reason);
-    return c.json({ ok: true as const, jobId: completed.id, status: completed.status });
+    if (!isAsyncFaceVerifier(faceVerifier) || !local || c.req.param("provider") !== faceVerifier.callbackProvider) return error(c, 404, "job-not-found", "inactive callback");
+    let verdict: FaceCallbackVerdict | null;
+    try { verdict = await faceVerifier.handleCallback(c.req.raw); } catch { return error(c, 400, "invalid-request", "unparseable callback"); }
+    if (!verdict) return error(c, 401, "callback-invalid", "invalid callback signature");
+    const job = await store.getFaceAuthJobByProviderId(verdict.providerJobId); if (!job) return c.json({ ok: false, reason: "unknown-job" });
+    if (job.status !== "pending") return c.json({ ok: true, jobId: job.id, status: job.status });
+    if (now() >= job.expiresAt) return error(c, 410, "job-expired", "face job expired");
+    const completed = await finalizeEnrollment(store, local, c.env, job, verdict, now());
+    return c.json({ ok: completed.status === "passed", jobId: completed.id, status: completed.status });
   });
 
-  /* ------------------------------------------------------------------ */
-  /* Device credentials (keychain seam + dev-gated FIDO stub)            */
-  /* ------------------------------------------------------------------ */
   app.post("/auth/device-key/register", async (c) => {
     const parsed = RegisterDeviceKeyRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid registration request", { issues: parsed.error.issues });
-    const { participantId, credentialType, secret, publicKey, deviceLabel } = parsed.data;
-
-    let storedPublicKey: string | null = null;
-    let secretHash: string | null = null;
-    if (credentialType === "fido") {
-      if (!passkeyVerifier) {
-        return error(c, 501, "fido-not-implemented", "FIDO verification is TODO-real-vendor; the dev stub requires FIDO_STUB_ENABLED=true");
+    if (!parsed.success) return error(c, 400, "invalid-request", "invalid registration request");
+    const { participantId, credentialType, secret, publicKey, deviceLabel } = parsed.data; const at = now();
+    let proof: IdentityAccessProofRow | null = null;
+    const sessionId = await sessionParticipant(store, c.env, c.req.header("authorization"), at);
+    try {
+      if (sessionId !== participantId) {
+        if (!parsed.data.enrollmentProof) return error(c, 401, "unauthorized-proof", "session or enrollment proof required");
+        proof = await validProof(store, parsed.data.enrollmentProof, participantId, "enrollment", at);
       }
-      const attestation = publicKey ?? secret;
-      if (!attestation) return error(c, 400, "invalid-request", "fido registration requires publicKey");
-      storedPublicKey = (await passkeyVerifier.verifyRegistration(attestation)).publicKey;
-    } else {
-      if (!secret) return error(c, 400, "invalid-request", "device-key registration requires secret");
-      secretHash = await sha256Hex(secret); // the raw secret is never stored
-    }
-
-    const existing = await store.getLiveCredential(participantId, credentialType);
-    if (existing && !fidoUpsertEnabled(c.env)) {
-      return error(c, 409, "credential-exists", "a credential of this type already exists; request a device reset, or set FIDO_UPSERT_ENABLED=true for multi-device testing");
-    }
-    const now = new Date();
-    const row = {
-      id: crypto.randomUUID(),
-      participantId,
-      credentialType,
-      publicKey: storedPublicKey,
-      secretHash,
-      deviceLabel: deviceLabel ?? null,
-      createdAt: now,
-      revokedAt: null,
-    };
-    // Upsert semantics: replaces any existing (revoked, or — under
-    // FIDO_UPSERT_ENABLED — live) row for (participant, type).
-    await store.putDeviceCredential(row);
-    return c.json({ credentialId: row.id, participantId, credentialType, createdAt: now.getTime() });
+      let storedPublicKey: string | null = null; let secretHash: string | null = null;
+      if (credentialType === "fido") {
+        if (!passkeyVerifier) return error(c, 501, "fido-not-implemented", "real FIDO verification unavailable");
+        storedPublicKey = (await passkeyVerifier.verifyRegistration(publicKey ?? secret ?? "")).publicKey;
+      } else { if (!secret) return error(c, 400, "invalid-request", "secret required"); secretHash = await sha256Hex(secret); }
+      if (await store.getLiveCredential(participantId, credentialType) && !fidoUpsertEnabled(c.env)) return error(c, 409, "credential-exists", "credential already exists");
+      const row = { id: crypto.randomUUID(), participantId, credentialType, publicKey: storedPublicKey,
+        secretHash, deviceLabel: deviceLabel ?? null, createdAt: at, revokedAt: null };
+      await store.putDeviceCredential(row); if (proof && !(await store.consumeAccessProof(proof.id, at))) return error(c, 409, "proof-consumed", "proof already consumed");
+      return c.json({ credentialId: row.id, participantId, credentialType, createdAt: at.getTime() });
+    } catch (cause) { if (cause instanceof ProofFailure) return error(c, cause.status, cause.code, cause.message); throw cause; }
   });
 
   app.post("/auth/device-key/authenticate", async (c) => {
-    const parsed = AuthenticateDeviceKeyRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid authentication request", { issues: parsed.error.issues });
-    const { participantId, credentialId, secret } = parsed.data;
-    const credential = await store.getCredentialById(credentialId);
-    if (!credential || credential.participantId !== participantId) {
-      return error(c, 401, "no-credential", "unknown credential");
-    }
-    if (credential.revokedAt !== null) {
-      return error(c, 401, "credential-revoked", "credential was revoked (device reset); re-enroll");
-    }
+    const parsed = AuthenticateDeviceKeyRequestSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return error(c, 400, "invalid-request", "invalid request");
+    const { participantId, credentialId, secret } = parsed.data; const credential = await store.getCredentialById(credentialId);
+    if (!credential || credential.participantId !== participantId) return error(c, 401, "no-credential", "unknown credential");
+    if (credential.revokedAt) return error(c, 401, "credential-revoked", "credential revoked");
     if (credential.credentialType === "fido") {
-      if (!passkeyVerifier || !credential.publicKey) {
-        return error(c, 501, "fido-not-implemented", "FIDO verification is TODO-real-vendor; the dev stub requires FIDO_STUB_ENABLED=true");
-      }
-      const ok = await passkeyVerifier.verifyAssertion(credential.publicKey, secret);
-      if (!ok) return error(c, 401, "no-credential", "assertion rejected");
-    } else {
-      if ((await sha256Hex(secret)) !== credential.secretHash) {
-        return error(c, 401, "no-credential", "device-key mismatch");
-      }
-    }
-    // Role authority is the ParticipantDO (edge-side, ADR-0016); the identity
-    // worker reuses the enrollment-recorded role, falling back to buyer with
-    // this dev-stage caveat — the integration step should pass the edge's
-    // asserted role through the proxy.
-    const enrollment = await store.getFaceEnrollment(participantId);
-    const session = await issueSession(store, c.env, participantId, enrollment?.role ?? "buyer");
-    return c.json({ participantId, authenticated: true as const, session });
+      if (!passkeyVerifier || !credential.publicKey) return error(c, 501, "fido-not-implemented", "FIDO unavailable");
+      if (!await passkeyVerifier.verifyAssertion(credential.publicKey, secret)) return error(c, 401, "no-credential", "assertion rejected");
+    } else if (await sha256Hex(secret) !== credential.secretHash) return error(c, 401, "no-credential", "device-key mismatch");
+    const enrollment = await store.getFaceEnrollment(participantId); if (!enrollment) return error(c, 401, "no-credential", "participant not enrolled");
+    return c.json({ participantId, authenticated: true, session: await issueSession(store, c.env, participantId, enrollment.role, now()) });
   });
 
-  /* ------------------------------------------------------------------ */
-  /* Session validation (authoritative; the edge usually verifies HMAC   */
-  /* locally and only calls this when revocation matters)                */
-  /* ------------------------------------------------------------------ */
+  app.post("/auth/recovery", async (c) => {
+    const parsed = RecoverDeviceRequestSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success || !local) return error(c, 400, "invalid-request", "invalid recovery request");
+    const { participantId, image, consent, secret, deviceLabel } = parsed.data; const at = now();
+    try {
+      await checkAttempts(store, participantId, at); await recordConsent(store, participantId, "recovery", consent, at);
+      const enrollment = await store.getFaceEnrollment(participantId);
+      if (!enrollment?.embeddingEncrypted || !enrollment.iv || !enrollment.authTag) return error(c, 404, "face-not-enrolled", "recoverable enrollment not found");
+      const imageBytes = base64ToBytes(image); if (!imageBytes?.length) return error(c, 400, "invalid-request", "invalid image");
+      const analysis = await analyze(local, imageBytes, decodeFrames(parsed.data.livenessImages));
+      const stored = await decryptEmbedding({ ciphertext: enrollment.embeddingEncrypted, iv: enrollment.iv, authTag: enrollment.authTag }, encryptionKeyBase64(c.env));
+      const similarity = cosineSimilarity(analysis.embedding, stored); const threshold = faceMatchThreshold(c.env) ?? DEFAULT_FACE_MATCH_THRESHOLD;
+      const passed = faceMatchPasses(similarity, threshold); await audit(store, participantId, passed, similarityBucket(similarity, threshold), at);
+      if (!passed) return error(c, 401, "face-mismatch", "recovery face match failed");
+      await store.revokeDeviceCredentials(participantId, at); await store.revokeAuthSessions(participantId, at);
+      const credential = { id: crypto.randomUUID(), participantId, credentialType: "device-key" as const,
+        publicKey: null, secretHash: await sha256Hex(secret), deviceLabel: deviceLabel ?? null, createdAt: at, revokedAt: null };
+      await store.putDeviceCredential(credential);
+      return c.json({ participantId, recovered: true, credentialId: credential.id, session: await issueSession(store, c.env, participantId, enrollment.role, at) });
+    } catch (cause) { if (cause instanceof ProofFailure) return error(c, cause.status, cause.code, cause.message); return error(c, 502, "identity-unavailable", "recovery unavailable"); }
+  });
+
+  app.get("/auth/identity/:participantId", async (c) => {
+    const id = await sessionParticipant(store, c.env, c.req.header("authorization"), now());
+    if (id !== c.req.param("participantId")) return error(c, 401, "session-invalid", "live session required");
+    const profile = await store.getIdentityParticipant(id); if (!profile) return error(c, 404, "invalid-request", "profile not found");
+    return c.json({ participantId: id, displayName: profile.displayName, verifiedLegalName: profile.verifiedLegalName, kycStatus: profile.kycStatus });
+  });
+  app.patch("/auth/identity/:participantId/display-name", async (c) => {
+    const id = await sessionParticipant(store, c.env, c.req.header("authorization"), now());
+    if (id !== c.req.param("participantId")) return error(c, 401, "session-invalid", "live session required");
+    const parsed = DisplayNameRequestSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return error(c, 400, "invalid-request", "invalid display name");
+    await store.updateDisplayName(id, parsed.data.displayName, now()); return c.json({ participantId: id, displayName: parsed.data.displayName });
+  });
   app.post("/auth/session/validate", async (c) => {
-    const parsed = ValidateSessionRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid validation request", { issues: parsed.error.issues });
+    const parsed = ValidateSessionRequestSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return error(c, 400, "invalid-request", "invalid request");
     const result = await verifySessionToken(parsed.data.token, sessionSecret(c.env));
-    if (!result.ok) {
-      return error(c, 401, result.reason === "expired" ? "session-expired" : "session-invalid", `session token ${result.reason}`);
-    }
-    const record = await store.getAuthSession(result.payload.tokenId);
-    if (!record || record.revokedAt !== null) {
-      return error(c, 401, "session-invalid", "session was revoked or never issued");
-    }
-    return c.json({ valid: true as const, payload: result.payload });
+    if (!result.ok) return error(c, 401, result.reason === "expired" ? "session-expired" : "session-invalid", `session ${result.reason}`);
+    const row = await store.getAuthSession(result.payload.tokenId);
+    if (!row || row.revokedAt) return error(c, 401, "session-invalid", "session revoked or unknown");
+    return c.json({ valid: true, payload: result.payload });
   });
 
-  /* ------------------------------------------------------------------ */
-  /* Device reset — the dispute-like flow                                */
-  /* ------------------------------------------------------------------ */
-  app.post("/auth/device-reset", async (c) => {
-    // Public by design: a participant who lost their device cannot present
-    // that device's session. The ops decision below is the gate.
-    const parsed = DeviceResetRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid device-reset request", { issues: parsed.error.issues });
-    const now = new Date();
-    const row = {
-      id: crypto.randomUUID(),
-      participantId: parsed.data.participantId,
-      reason: parsed.data.reason,
-      status: "pending" as const,
-      createdAt: now,
-      resolvedAt: null,
-      resolvedBy: null,
-    };
-    await store.insertDeviceResetRequest(row);
-    return c.json({ id: row.id, participantId: row.participantId, status: row.status, createdAt: now.getTime(), resolvedAt: null });
+  // Manual resets are internal-only. Public replacement uses /auth/recovery with fresh face proof.
+  app.post("/auth/device-reset", requireInternal(), async (c) => {
+    const parsed = DeviceResetRequestSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return error(c, 400, "invalid-request", "invalid request");
+    const at = now(); const row = { id: crypto.randomUUID(), participantId: parsed.data.participantId, reason: parsed.data.reason,
+      status: "pending" as const, createdAt: at, resolvedAt: null, resolvedBy: null };
+    await store.insertDeviceResetRequest(row); return c.json({ id: row.id, participantId: row.participantId, status: row.status, createdAt: at.getTime(), resolvedAt: null });
   });
-
-  /**
-   * The reset queue for the ops console (ADR-0022's ops-approved reset):
-   * internal like the decision route — a participant's reset history is not
-   * public. `?status=` filters; absent returns every request, oldest first.
-   */
   app.get("/auth/device-reset", requireInternal(), async (c) => {
-    const raw = c.req.query("status");
-    const status = raw === undefined ? undefined : DeviceResetStatusSchema.safeParse(raw);
-    if (status !== undefined && !status.success) {
-      return error(c, 400, "invalid-request", "status must be pending, approved, or rejected", { issues: status.error.issues });
-    }
+    const raw = c.req.query("status"); const status = raw === undefined ? undefined : DeviceResetStatusSchema.safeParse(raw);
+    if (status && !status.success) return error(c, 400, "invalid-request", "invalid status");
     const rows = await store.listDeviceResetRequests(status?.data);
-    return c.json({
-      requests: rows.map((row) => ({
-        id: row.id,
-        participantId: row.participantId,
-        reason: row.reason,
-        status: row.status,
-        createdAt: row.createdAt.getTime(),
-        resolvedAt: row.resolvedAt?.getTime() ?? null,
-        resolvedBy: row.resolvedBy,
-      })),
-    });
+    return c.json({ requests: rows.map((r) => ({ id: r.id, participantId: r.participantId, reason: r.reason, status: r.status,
+      createdAt: r.createdAt.getTime(), resolvedAt: r.resolvedAt?.getTime() ?? null, resolvedBy: r.resolvedBy })) });
   });
-
   app.post("/auth/device-reset/:id/decision", requireInternal(), async (c) => {
-    const parsed = DeviceResetDecisionRequestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return error(c, 400, "invalid-request", "invalid decision request", { issues: parsed.error.issues });
-    const request = await store.getDeviceResetRequest(c.req.param("id"));
-    if (!request) return error(c, 404, "reset-not-found", "unknown device-reset request");
-    if (request.status !== "pending") {
-      return error(c, 409, "reset-already-resolved", `request already ${request.status}`);
-    }
-    const now = new Date();
-    const resolvedBy = c.env.IDENTITY_INTERNAL_TOKEN ? "ops" : "local-dev-internal";
-    await store.resolveDeviceResetRequest(request.id, parsed.data.decision, resolvedBy, now);
-    let revokedCredentials = 0;
-    let revokedSessions = 0;
-    if (parsed.data.decision === "approved") {
-      revokedCredentials = await store.revokeDeviceCredentials(request.participantId, now);
-      if (parsed.data.revokeSessions ?? true) {
-        revokedSessions = await store.revokeAuthSessions(request.participantId, now);
-      }
-    }
-    return c.json({
-      id: request.id,
-      participantId: request.participantId,
-      status: parsed.data.decision,
-      createdAt: request.createdAt.getTime(),
-      resolvedAt: now.getTime(),
-      revokedCredentials,
-      revokedSessions,
-    });
+    const parsed = DeviceResetDecisionRequestSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return error(c, 400, "invalid-request", "invalid decision");
+    const request = await store.getDeviceResetRequest(c.req.param("id")); if (!request) return error(c, 404, "reset-not-found", "unknown reset");
+    if (request.status !== "pending") return error(c, 409, "reset-already-resolved", "already resolved");
+    const at = now(); await store.resolveDeviceResetRequest(request.id, parsed.data.decision, c.env.IDENTITY_INTERNAL_TOKEN ? "ops" : "local-dev-internal", at);
+    let revokedCredentials = 0, revokedSessions = 0;
+    if (parsed.data.decision === "approved") { revokedCredentials = await store.revokeDeviceCredentials(request.participantId, at);
+      if (parsed.data.revokeSessions ?? true) revokedSessions = await store.revokeAuthSessions(request.participantId, at); }
+    return c.json({ id: request.id, participantId: request.participantId, status: parsed.data.decision,
+      createdAt: request.createdAt.getTime(), resolvedAt: at.getTime(), revokedCredentials, revokedSessions });
   });
-
   return app;
 }

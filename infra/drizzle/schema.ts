@@ -630,6 +630,55 @@ export const CREDENTIAL_TYPES = ["fido", "device-key"] as const;
 export const DEVICE_RESET_STATUSES = ["pending", "approved", "rejected"] as const;
 export const FACE_ATTEMPT_OUTCOMES = ["pass", "fail"] as const;
 export const SIMILARITY_BUCKETS = ["low", "medium", "high"] as const;
+export const IDENTITY_KYC_STATUSES = ["preverified", "verified"] as const;
+export const ACCESS_PROOF_PURPOSES = ["enrollment", "recovery"] as const;
+
+/** Identity-owned profile: legal identity is immutable; display name is editable. */
+export const identityParticipants = pgTable(
+  "identity_participants",
+  {
+    participantId: text("participant_id").primaryKey(),
+    role: text("role").notNull(),
+    kycStatus: text("kyc_status").notNull(),
+    displayName: text("display_name").notNull(),
+    verifiedLegalName: text("verified_legal_name"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [check("identity_participants_kyc_status_valid", sql`${table.kycStatus} IN ('preverified', 'verified')`)],
+);
+
+/** Opaque proofs are random on the wire and SHA-256 hashed at rest. */
+export const identityAccessProofs = pgTable(
+  "identity_access_proofs",
+  {
+    id: text("id").primaryKey(),
+    proofHash: text("proof_hash").notNull(),
+    participantId: text("participant_id").notNull(),
+    purpose: text("purpose").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("identity_access_proofs_hash_unique").on(table.proofHash),
+    index("identity_access_proofs_participant_idx").on(table.participantId),
+    check("identity_access_proofs_purpose_valid", sql`${table.purpose} IN ('enrollment', 'recovery')`),
+  ],
+);
+
+export const biometricConsentReceipts = pgTable(
+  "biometric_consent_receipts",
+  {
+    id: text("id").primaryKey(),
+    participantId: text("participant_id").notNull(),
+    purpose: text("purpose").notNull(),
+    version: text("version").notNull(),
+    grantedAt: timestamp("granted_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("biometric_consent_participant_idx").on(table.participantId)],
+);
 
 /**
  * Face enrollments — one per participant (upserted on re-enrollment, e.g.
@@ -696,6 +745,12 @@ export const faceAuthJobs = pgTable(
     failureReason: text("failure_reason"),
     /** jti of the session issued when a passed authentication was collected. */
     sessionTokenId: text("session_token_id"),
+    /** Pending hybrid embedding, encrypted exactly like the final enrollment. */
+    pendingEmbeddingEncrypted: bytea("pending_embedding_encrypted"),
+    pendingEmbeddingIv: bytea("pending_embedding_iv"),
+    pendingEmbeddingAuthTag: bytea("pending_embedding_auth_tag"),
+    pendingModelVersion: text("pending_model_version"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },

@@ -1,0 +1,18 @@
+services:
+  biometrics:
+    build: .
+    environment:
+      BIOMETRICS_INTERNAL_TOKEN: ${BIOMETRICS_INTERNAL_TOKEN:?required}
+      FACE_MODEL_PATH: /models/w600k_r50.onnx
+      LIVENESS_MODEL_PATH: /models/MiniFASNetV2.onnx
+      LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.8}
+      BIND_ADDRESS: 0.0.0.0
+    volumes:
+      - ${BIOMETRIC_MODEL_DIR:?required}:/models:ro
+    expose:
+      - "8791"
+    # Deliberately no ports: reachable only by identity on this internal network.
+    networks: [identity-internal]
+networks:
+  identity-internal:
+    internal: true
