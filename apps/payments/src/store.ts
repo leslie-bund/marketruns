@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, lt, sql, type SQL } from "drizzle-orm";
 import type { DispatchAccount, PaymentDispatchStatus, PaymentDispatchView } from "@market-runs/proto";
 import type { PaymentDispatchRequested } from "./messages.js";
 import type { DispatchTransferResult } from "./dispatcher.js";
+import { providerReferenceFor } from "./provider-reference.js";
 import { paymentDispatches } from "../../../infra/drizzle/schema.js";
 import type { createDatabase } from "./db.js";
 
@@ -20,6 +21,12 @@ import type { createDatabase } from "./db.js";
 export interface DispatchRow {
   id: string;
   idempotencyKey: string;
+  /**
+   * Provider-facing reference alias (ADR-0024 amendment). The full
+   * idempotencyKey remains canonical; this is the short, deterministic value
+   * sent to the provider and used for webhook/reconcile matching.
+   */
+  providerReference: string | null;
   settlementRecordId: string;
   runId: string;
   market: string;
@@ -53,6 +60,8 @@ export interface DispatchStore {
   byIdempotencyKey(idempotencyKey: string): Promise<DispatchRow | null>;
   byId(id: string): Promise<DispatchRow | null>;
   byProviderRef(providerRef: string): Promise<DispatchRow | null>;
+  /** Match an inbound provider reference alias (ADR-0024 amendment). */
+  byProviderReference(providerReference: string): Promise<DispatchRow | null>;
   /** Record a dispatcher outcome: status + providerRef/failureReason, attempts + 1. */
   recordResult(id: string, result: DispatchTransferResult): Promise<void>;
   /**
@@ -89,6 +98,7 @@ export function dispatchRow(message: PaymentDispatchRequested, legIndex: number)
   return {
     id: dispatchRowId(message, legIndex),
     idempotencyKey: legIdempotencyKey(message, legIndex),
+    providerReference: null,
     settlementRecordId: message.settlementRecordId,
     runId: message.runId,
     market: message.market,
@@ -104,6 +114,19 @@ export function dispatchRow(message: PaymentDispatchRequested, legIndex: number)
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+}
+
+/**
+ * The pending row with its deterministic provider alias already attached.
+ * The consumer inserts this before the first send, so a webhook that races
+ * ahead of the HTTP response can match by providerReference.
+ */
+export async function dispatchRowWithReference(
+  message: PaymentDispatchRequested,
+  legIndex: number,
+): Promise<DispatchRow> {
+  const row = dispatchRow(message, legIndex);
+  return { ...row, providerReference: await providerReferenceFor(row.idempotencyKey) };
 }
 
 /** Row → wire view (epoch-millisecond timestamps, packages/proto convention). */
@@ -165,11 +188,24 @@ export class DrizzleDispatchStore implements DispatchStore {
     return (rows[0] as DispatchRow | undefined) ?? null;
   }
 
+  async byProviderReference(providerReference: string): Promise<DispatchRow | null> {
+    const rows = await this.db
+      .select()
+      .from(paymentDispatches)
+      .where(eq(paymentDispatches.providerReference, providerReference))
+      .limit(1);
+    return (rows[0] as DispatchRow | undefined) ?? null;
+  }
+
   async recordResult(id: string, result: DispatchTransferResult): Promise<void> {
     await this.db
       .update(paymentDispatches)
       .set({
         status: result.status,
+        // The dispatcher returns the alias it actually sent. Persist it for
+        // legacy rows that were created before the alias column existed; new
+        // rows already carry it from insert. Never clear an existing alias.
+        ...(result.providerReference !== undefined ? { providerReference: result.providerReference } : {}),
         providerRef: result.providerRef ?? null,
         failureReason: result.failureReason ?? null,
         // A successful retry clears the terminal flag; a failed result defaults

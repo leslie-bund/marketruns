@@ -52,6 +52,7 @@ describe("payments consumer against real Postgres", () => {
     expect(rows).toHaveLength(3); // duplicate delivery collapsed on the idempotency key
     expect(rows.every((row) => row.status === "sent")).toBe(true);
     expect(rows.every((row) => row.providerRef?.startsWith("stub:"))).toBe(true);
+    expect(rows.every((row) => /^mr_[0-9a-f]{48}$/.test(row.providerReference ?? ""))).toBe(true);
     expect(rows.every((row) => row.attempts === 1)).toBe(true);
     expect(first.every((message) => message.acked)).toBe(true);
 

@@ -15,8 +15,15 @@ import { createVendorIntegration } from "./flutterwave/index.js";
  */
 
 export interface DispatchTransferRequest {
-  /** Per-leg idempotency key (`settlement:<recordId>:leg:<n>`); a vendor impl passes this through as its transfer reference so PSP-level retries collapse too. */
+  /** Canonical per-leg idempotency key (`settlement:<recordId>:leg:<n>`), persisted and used for local replay. */
   idempotencyKey: string;
+  /**
+   * Provider-facing reference alias persisted on the row (ADR-0024 amendment).
+   * Vendors with a reference-length cap send this instead of the full key.
+   * Omitted for legacy rows; the vendor derives the same deterministic alias
+   * from idempotencyKey.
+   */
+  providerReference?: string;
   recipient: { partyId: string; account: DispatchAccount };
   amountKobo: number;
   memo: string;
@@ -32,6 +39,8 @@ export interface DispatchTransferResult {
   status: "sent" | "queued" | "failed" | "completed";
   /** Vendor-neutral transfer reference for reconciliation; required unless failed. */
   providerRef?: string;
+  /** The provider-facing reference alias actually sent; persisted for webhook/reconcile matching. */
+  providerReference?: string;
   failureReason?: string;
   /**
    * Only meaningful when status is "failed". `true` (the default when omitted)
@@ -67,7 +76,7 @@ export function isTransferStatusLookup(dispatcher: PaymentDispatcher): dispatche
  * from its quarantine module; the HTTP route in index.ts stays generic).
  */
 export interface TransferWebhookOutcome {
-  /** Our per-leg idempotency key, echoed back as the transfer reference. */
+  /** Provider-facing reference alias, echoed back as the transfer reference. */
   reference: string | null;
   /** Full providerRef for fallback row matching when no reference is carried. */
   providerRef: string | null;

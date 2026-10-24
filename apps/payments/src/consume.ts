@@ -1,7 +1,7 @@
 import type { PaymentDispatcher } from "./dispatcher.js";
 import type { PaymentDispatchRequested } from "./messages.js";
 import type { HoldStore } from "./holds.js";
-import { dispatchRow, legIdempotencyKey, type DispatchRow, type DispatchStore } from "./store.js";
+import { dispatchRowWithReference, type DispatchRow, type DispatchStore } from "./store.js";
 
 /**
  * The payment-dispatch consumer core. Execution only (ADR-0007/0008): the
@@ -50,11 +50,14 @@ export async function handleDispatchRequested(
 
   for (let index = 0; index < value.legs.length; index += 1) {
     let row: DispatchRow | null;
-    const inserted = await store.insertPending(dispatchRow(value, index));
+    // Persist the provider alias before the first send: a webhook can race
+    // ahead of the HTTP response and must be able to find this row.
+    const pending = await dispatchRowWithReference(value, index);
+    const inserted = await store.insertPending(pending);
     if (inserted) {
-      row = await store.byId(dispatchRow(value, index).id);
+      row = await store.byId(pending.id);
     } else {
-      row = await store.byIdempotencyKey(legIdempotencyKey(value, index));
+      row = await store.byIdempotencyKey(pending.idempotencyKey);
     }
     if (!row) throw new Error(`dispatch row for leg ${index} of ${value.idempotencyKey} vanished after insert`);
     // Replay of an already-executed leg: the durable record says the money
@@ -77,6 +80,7 @@ export async function handleDispatchRequested(
     if (!leg) throw new Error(`leg ${index} is out of range`);
     const result = await dispatcher.dispatchTransfer({
       idempotencyKey: row.idempotencyKey,
+      ...(row.providerReference !== null ? { providerReference: row.providerReference } : {}),
       recipient: { partyId: row.partyId, account: row.account },
       amountKobo: row.amountKobo,
       memo: row.memo,

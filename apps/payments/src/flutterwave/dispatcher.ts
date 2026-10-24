@@ -6,6 +6,7 @@ import type {
   TransferStatusLookup,
 } from "../dispatcher.js";
 import { RECIPIENT_UNRESOLVED, type RecipientResolver } from "../recipients.js";
+import { providerReferenceFor } from "../provider-reference.js";
 import type { FlutterwaveConfig } from "./config.js";
 
 /**
@@ -27,19 +28,22 @@ import type { FlutterwaveConfig } from "./config.js";
  *   provider SUCCESSFUL → completed (settled at the destination account)
  *   provider FAILED     → failed    (complete_message carries the reason)
  *
- * Idempotency: our per-leg idempotencyKey is sent as the transfer `reference`;
- * the provider rejects duplicates ("Payout with this ref already exists"), and
- * we then resolve the ORIGINAL transfer by reference and report its real
- * status — provider-level retries collapse instead of double-paying.
+ * Idempotency: the local per-leg idempotencyKey remains canonical, but it is
+ * longer than the provider's 64-character `reference` cap. The dispatcher
+ * sends a deterministic short alias (`mr_` + 192 bits of SHA-256, ADR-0024
+ * amendment) and the dispatch row persists the alias. The provider rejects
+ * duplicate aliases ("Payout with this ref already exists"), and we then
+ * resolve the ORIGINAL transfer by alias and report its real status —
+ * provider-level retries collapse instead of double-paying.
  *
  * Test-mode transfer accelerator (LOCAL DEV ONLY, `FLUTTERWAVE_TEST_MODE`):
  * mock transfers sit PENDING ~10 min by default; a reference ending
  * `_PMCKDU_1` forces SUCCESSFUL in ~1 min (provider-documented). Under test
- * mode we append that suffix to the outgoing reference and strip it from
- * every reference that comes BACK (webhook parse, duplicate-collapse lookup)
- * so dispatch rows still match on the bare idempotencyKey. NEVER enable in
- * production. The provider also documents a failure variant (`_PMCK_ST_FDU_1`)
- * for failure drills — deliberately NOT wired here; drills append it manually.
+ * mode we append that suffix to the outgoing alias and strip it from every
+ * reference that comes BACK (webhook parse, duplicate-collapse lookup) so
+ * dispatch rows still match on the bare alias. NEVER enable in production.
+ * The provider also documents a failure variant (`_PMCK_ST_FDU_1`) for failure
+ * drills — deliberately NOT wired here; drills append it manually.
  *
  * Amounts: kobo → naira happens HERE and nowhere upstream (the provider takes
  * decimal naira). Payout rails limits (Flutterwave support docs, NGN bank
@@ -60,12 +64,12 @@ export const TEST_MODE_SUCCESS_SUFFIX = "_PMCKDU_1";
 /** The provider's mock-mode failure suffix — for MANUAL failure drills only; never sent by this dispatcher. */
 export const TEST_MODE_FAILURE_SUFFIX = "_PMCK_ST_FDU_1";
 
-/** The reference sent to the provider: the bare idempotency key, suffixed only under test mode. */
-export function outboundReference(idempotencyKey: string, testMode: boolean): string {
-  return testMode ? `${idempotencyKey}${TEST_MODE_SUCCESS_SUFFIX}` : idempotencyKey;
+/** The reference sent to the provider: the short alias, suffixed only under test mode. */
+export function outboundReference(providerReference: string, testMode: boolean): string {
+  return testMode ? `${providerReference}${TEST_MODE_SUCCESS_SUFFIX}` : providerReference;
 }
 
-/** Map an inbound provider reference back to our idempotency key (strips the test-mode suffix, test mode only). */
+/** Map an inbound provider reference back to the bare alias (strips the test-mode suffix, test mode only). */
 export function inboundReference(reference: string, testMode: boolean): string {
   return testMode && reference.endsWith(TEST_MODE_SUCCESS_SUFFIX)
     ? reference.slice(0, -TEST_MODE_SUCCESS_SUFFIX.length)
@@ -138,6 +142,20 @@ export class FlutterwaveDispatcher implements PaymentDispatcher, TransferStatusL
   }
 
   async dispatchTransfer(request: DispatchTransferRequest): Promise<DispatchTransferResult> {
+    // The alias is deterministic; rows created by the consumer carry it from
+    // insert, while legacy rows derive the same value here on replay.
+    const providerReference = request.providerReference ?? (await providerReferenceFor(request.idempotencyKey));
+    const result = await this.dispatchWithReference(request, providerReference);
+    // Always echo the alias so recordResult can persist it even for legacy
+    // rows (and even when the provider rejected the transfer before creating
+    // anything).
+    return { ...result, providerReference };
+  }
+
+  private async dispatchWithReference(
+    request: DispatchTransferRequest,
+    providerReference: string,
+  ): Promise<DispatchTransferResult> {
     const recipient = await this.recipients.resolve(request.recipient.partyId, request.recipient.account);
     if (!recipient) {
       // A missing payout target is a configuration gap, not a transient error.
@@ -158,9 +176,9 @@ export class FlutterwaveDispatcher implements PaymentDispatcher, TransferStatusL
       };
     }
 
-    // The provider-side reference: bare idempotency key, or suffixed with the
-    // mock success accelerator under FLUTTERWAVE_TEST_MODE (never production).
-    const reference = outboundReference(request.idempotencyKey, this.config.testMode);
+    // The provider-side reference: the short alias, or the alias suffixed with
+    // the mock success accelerator under FLUTTERWAVE_TEST_MODE (never production).
+    const reference = outboundReference(providerReference, this.config.testMode);
 
     let response: Response;
     try {
@@ -206,10 +224,10 @@ export class FlutterwaveDispatcher implements PaymentDispatcher, TransferStatusL
     if (parsed.data.status !== "success") {
       const message = parsed.data.message ?? `HTTP ${response.status}`;
       if (isDuplicateReference(message)) {
-        // Our idempotency key already lives at the provider: resolve the
+        // Our provider alias already lives at the provider: resolve the
         // original transfer and report ITS status — never a second payout.
-        // Provider-side lookups use the same (possibly suffixed) reference
-        // the original transfer was created with.
+        // Provider-side lookups use the same (possibly suffixed) alias the
+        // original transfer was created with.
         const original = await this.lookupByReference(reference);
         if (original) return original;
         // The original may not be visible yet (eventual consistency); retry

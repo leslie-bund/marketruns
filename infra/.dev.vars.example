@@ -42,11 +42,12 @@
 
 # Test-mode transfer accelerator (LOCAL DEV ONLY — NEVER in production):
 # truthy appends the provider's magic `_PMCKDU_1` suffix to every outgoing
-# transfer reference so mock transfers settle SUCCESSFUL in ~1 min instead of
-# sitting PENDING ~10 min (provider-documented). Webhook/lookup references are
-# stripped back to the bare idempotency key before row matching, so this is
-# invisible upstream. The failure variant `_PMCK_ST_FDU_1` exists for failure
-# drills but is NOT wired — append it to a reference manually when drilling.
+# transfer reference (the short provider alias from ADR-0024's amendment) so
+# mock transfers settle SUCCESSFUL in ~1 min instead of sitting PENDING ~10 min
+# (provider-documented). Webhook/lookup references are stripped back to the
+# bare provider alias before row matching, so this is invisible upstream. The
+# failure variant `_PMCK_ST_FDU_1` exists for failure drills but is NOT wired —
+# append it to a reference manually when drilling.
 # FLUTTERWAVE_TEST_MODE=1
 
 # Dev payout recipients (JSON, keyed by partyId). Without it, the demo

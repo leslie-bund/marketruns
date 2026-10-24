@@ -41,6 +41,8 @@ describe("payment dispatch consumer", () => {
     expect(rows.every((row) => row.status === "sent")).toBe(true);
     expect(rows.every((row) => row.attempts === 1)).toBe(true);
     expect(rows.every((row) => row.providerRef?.startsWith("stub:"))).toBe(true);
+    expect(rows.every((row) => /^mr_[0-9a-f]{48}$/.test(row.providerReference ?? ""))).toBe(true);
+    expect(new Set(rows.map((row) => row.providerReference)).size).toBe(3);
     expect(rows.map((row) => row.id).sort()).toEqual([
       "run:cart:Balogun:buyer:1:dispatch:0",
       "run:cart:Balogun:buyer:1:dispatch:1",

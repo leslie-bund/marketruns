@@ -1,0 +1,2 @@
+ALTER TABLE "payment_dispatches" ADD COLUMN "provider_reference" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "payment_dispatches_provider_reference_unique" ON "payment_dispatches" USING btree ("provider_reference");

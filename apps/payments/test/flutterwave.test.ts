@@ -12,6 +12,7 @@ import {
 import { flutterwaveConfig } from "../src/flutterwave/config.js";
 import { createVendorIntegration } from "../src/flutterwave/index.js";
 import { DevRecipientResolver } from "../src/flutterwave/recipients.js";
+import { providerReferenceFor } from "../src/provider-reference.js";
 import { parseTransferWebhook, verifyWebhookHash } from "../src/flutterwave/webhook.js";
 import type { FlutterwaveConfig } from "../src/flutterwave/config.js";
 
@@ -53,6 +54,7 @@ const request: DispatchTransferRequest = {
   amountKobo: 165_000,
   memo: "Seller settlement",
 };
+const providerReference = await providerReferenceFor(request.idempotencyKey);
 
 function transferData(status: string, extra: Record<string, unknown> = {}) {
   return {
@@ -63,7 +65,7 @@ function transferData(status: string, extra: Record<string, unknown> = {}) {
     amount: 1650,
     fee: 45,
     status,
-    reference: request.idempotencyKey,
+    reference: providerReference,
     complete_message: "",
     ...extra,
   };
@@ -80,7 +82,7 @@ describe("flutterwaveConfig", () => {
 });
 
 describe("FlutterwaveDispatcher request mapping", () => {
-  it("posts the v3 transfer body: kobo→naira, reference=idempotencyKey, Bearer auth", async () => {
+  it("posts the v3 transfer body: kobo→naira, reference=short alias, Bearer auth", async () => {
     const { calls, fetchImpl } = fetchQueue([
       () => ({ body: { status: "success", message: "Transfer Queued Successfully", data: transferData("NEW") } }),
     ]);
@@ -101,11 +103,12 @@ describe("FlutterwaveDispatcher request mapping", () => {
       currency: "NGN",
       debit_currency: "NGN",
       narration: "Seller settlement",
-      reference: request.idempotencyKey,
+      reference: providerReference,
       beneficiary_name: "TEST — Forrest Green",
     });
     expect(result.status).toBe("queued");
     expect(result.providerRef).toBe(`${PROVIDER_REF_PREFIX}26251`);
+    expect(result.providerReference).toBe(providerReference);
   });
 
   it("sends callback_url only when configured", async () => {
@@ -164,7 +167,7 @@ describe("FlutterwaveDispatcher status mapping", () => {
       () => ({ status: 400, body: { status: "error", message: "Payout with this ref already exists", data: null } }),
       (call) => {
         expect(call.url).toBe(
-          `https://api.flutterwave.com/v3/transfers?reference=${encodeURIComponent(request.idempotencyKey)}`,
+          `https://api.flutterwave.com/v3/transfers?reference=${encodeURIComponent(providerReference)}`,
         );
         return { body: { status: "success", message: "Transfers fetched", data: [transferData("SUCCESSFUL", { id: 99999 })] } };
       },
@@ -208,7 +211,8 @@ describe("FlutterwaveDispatcher guards (no HTTP call made)", () => {
       ...request,
       recipient: { partyId: "seller:unknown", account: "seller" },
     });
-    expect(result).toEqual({ status: "failed", failureReason: "recipient-unresolved", retryable: false });
+    expect(result).toMatchObject({ status: "failed", failureReason: "recipient-unresolved", retryable: false });
+    expect(result.providerReference).toBe(providerReference);
     expect(calls).toHaveLength(0);
   });
 
@@ -369,7 +373,7 @@ describe("test-mode transfer accelerator (FLUTTERWAVE_TEST_MODE)", () => {
       () => ({
         body: {
           status: "success",
-          data: transferData("PENDING", { reference: `${request.idempotencyKey}${TEST_MODE_SUCCESS_SUFFIX}` }),
+          data: transferData("PENDING", { reference: `${providerReference}${TEST_MODE_SUCCESS_SUFFIX}` }),
         },
       }),
     ]);
@@ -377,18 +381,18 @@ describe("test-mode transfer accelerator (FLUTTERWAVE_TEST_MODE)", () => {
     const result = await dispatcher.dispatchTransfer(request);
 
     const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
-    expect(body.reference).toBe(`${request.idempotencyKey}${TEST_MODE_SUCCESS_SUFFIX}`);
+    expect(body.reference).toBe(`${providerReference}${TEST_MODE_SUCCESS_SUFFIX}`);
     expect(result.status).toBe("sent");
   });
 
-  it("sends the bare idempotency key outside test mode", async () => {
+  it("sends the bare alias outside test mode", async () => {
     const { calls, fetchImpl } = fetchQueue([
       () => ({ body: { status: "success", data: transferData("NEW") } }),
     ]);
     const dispatcher = new FlutterwaveDispatcher(config, new DevRecipientResolver(), fetchImpl);
     await dispatcher.dispatchTransfer(request);
     const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
-    expect(body.reference).toBe(request.idempotencyKey);
+    expect(body.reference).toBe(providerReference);
   });
 
   it("duplicate-collapse lookups use the suffixed reference in test mode", async () => {
@@ -399,7 +403,7 @@ describe("test-mode transfer accelerator (FLUTTERWAVE_TEST_MODE)", () => {
     const dispatcher = new FlutterwaveDispatcher(testConfig, new DevRecipientResolver(), fetchImpl);
     const result = await dispatcher.dispatchTransfer(request);
     expect(calls[1]?.url).toBe(
-      `https://api.flutterwave.com/v3/transfers?reference=${encodeURIComponent(`${request.idempotencyKey}${TEST_MODE_SUCCESS_SUFFIX}`)}`,
+      `https://api.flutterwave.com/v3/transfers?reference=${encodeURIComponent(`${providerReference}${TEST_MODE_SUCCESS_SUFFIX}`)}`,
     );
     expect(result.status).toBe("completed");
   });
@@ -409,7 +413,7 @@ describe("test-mode transfer accelerator (FLUTTERWAVE_TEST_MODE)", () => {
       event: "transfer.completed",
       data: {
         id: 708320,
-        reference: `${request.idempotencyKey}${TEST_MODE_SUCCESS_SUFFIX}`,
+        reference: `${providerReference}${TEST_MODE_SUCCESS_SUFFIX}`,
         status: "SUCCESSFUL",
         complete_message: "Transaction was successful",
       },
@@ -422,14 +426,14 @@ describe("test-mode transfer accelerator (FLUTTERWAVE_TEST_MODE)", () => {
     const testParsed = testIntegration.webhook?.hooks.parse(body);
     expect(testParsed?.kind).toBe("outcome");
     if (testParsed?.kind === "outcome") {
-      expect(testParsed.outcome.reference).toBe(request.idempotencyKey);
+      expect(testParsed.outcome.reference).toBe(providerReference);
     }
 
     const liveIntegration = createVendorIntegration({ FLUTTERWAVE_SECRET_KEY: "FLWSECK-mock-X" });
     const liveParsed = liveIntegration.webhook?.hooks.parse(body);
     if (liveParsed?.kind === "outcome") {
       // Outside test mode a reference is matched verbatim — no stripping.
-      expect(liveParsed.outcome.reference).toBe(`${request.idempotencyKey}${TEST_MODE_SUCCESS_SUFFIX}`);
+      expect(liveParsed.outcome.reference).toBe(`${providerReference}${TEST_MODE_SUCCESS_SUFFIX}`);
     }
   });
 

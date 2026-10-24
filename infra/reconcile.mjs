@@ -41,6 +41,8 @@ const postgres = require("postgres");
 const DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:54322/market_runs";
 const FLUTTERWAVE_BASE_URL = "https://api.flutterwave.com";
 const KOBO_PER_NAIRA = 100;
+/** Mirrors apps/payments/src/provider-reference.ts (short provider-facing alias). */
+const PROVIDER_REFERENCE_PREFIX = "mr_";
 /** Mirrors apps/payments/src/flutterwave/dispatcher.ts (test-mode accelerator). */
 const TEST_MODE_SUCCESS_SUFFIX = "_PMCKDU_1";
 /** Queue max_retries=5 (infra/wrangler.payments.toml) + the initial attempt. */
@@ -482,12 +484,13 @@ async function checkSettlementLedger(sql, settlements) {
 
 /**
  * Check 6 — vendor tie-out (Flutterwave Transfers v3), only with
- * FLUTTERWAVE_SECRET_KEY. Our per-leg idempotencyKey is sent as the transfer
- * `reference`; amounts cross the boundary as naira (kobo/100, exact to 2dp).
- * In test mode the provider echoes the `_PMCKDU_1` accelerator suffix, so
- * comparison strips it before matching. Local rows executed by the stub
- * dispatcher (`stub:` provider refs) are reported as skipped — they never hit
- * the provider.
+ * FLUTTERWAVE_SECRET_KEY. Each dispatch row sends its persisted short
+ * provider_reference alias as the transfer `reference`; amounts cross the
+ * boundary as naira (kobo/100, exact to 2dp). Legacy rows without an alias
+ * fall back to the full idempotency_key. In test mode the provider echoes the
+ * `_PMCKDU_1` accelerator suffix, so comparison strips it before matching.
+ * Local rows executed by the stub dispatcher (`stub:` provider refs) are
+ * reported as skipped — they never hit the provider.
  */
 async function checkVendor(sql, opts, dispatches, holds, secretKey) {
   const check = makeCheck("vendor");
@@ -513,14 +516,16 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
     for (let page = 1; page <= 10; page += 1) {
       const body = await get(`/v3/transfers?page=${page}`);
       transfers.push(...(body.data ?? []));
-      const totalPages = body.meta?.pagination?.total_pages ?? page;
+      // Flutterwave v3 currently nests pagination as meta.page_info; keep the
+      // older meta.pagination shape as a fallback.
+      const totalPages = body.meta?.page_info?.total_pages ?? body.meta?.pagination?.total_pages ?? page;
       if (page >= totalPages) break;
     }
     transactions = [];
     for (let page = 1; page <= 3; page += 1) {
       const body = await get(`/v3/transactions?page=${page}`);
       transactions.push(...(body.data ?? []));
-      const totalPages = body.meta?.pagination?.total_pages ?? page;
+      const totalPages = body.meta?.page_info?.total_pages ?? body.meta?.pagination?.total_pages ?? page;
       if (page >= totalPages) break;
     }
   } catch (error) {
@@ -543,10 +548,14 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
       stubSkipped += 1; // stub dispatcher (or pre-dispatch) — no provider row exists by design
       continue;
     }
-    const transfer = transferByReference.get(d.idempotency_key);
+    const localReference = d.provider_reference ?? d.idempotency_key;
+    const transfer = transferByReference.get(localReference);
     if (!transfer) {
-      fail(check, "payment_dispatches", d.id, { amountKobo: kobo(d.amount_kobo), idempotencyKey: d.idempotency_key },
-        "executed dispatch has no provider transfer with reference == idempotencyKey — money marked moved that the provider never saw");
+      fail(check, "payment_dispatches", d.id, {
+        amountKobo: kobo(d.amount_kobo),
+        providerReference: d.provider_reference,
+        idempotencyKey: d.idempotency_key,
+      }, "executed dispatch has no provider transfer with reference == provider_reference (or legacy idempotencyKey) — money marked moved that the provider never saw");
       continue;
     }
     const providerKobo = Math.round(Number(transfer.amount) * KOBO_PER_NAIRA);
@@ -566,16 +575,20 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
   }
 
   // Provider transfers carrying OUR reference shape with no local row:
-  // payout money moved that Postgres never authorized.
-  const localKeys = new Set(dispatches.map((d) => d.idempotency_key));
+  // payout money moved that Postgres never authorized. New rows use the
+  // `mr_` alias; legacy rows may still carry the full settlement key.
+  const localKeys = new Set(
+    dispatches.flatMap((d) => [d.provider_reference, d.idempotency_key]).filter((value) => value !== null),
+  );
   let providerOrphans = 0;
   for (const t of transfers) {
     const reference = bareReference(String(t.reference ?? ""));
-    if (!reference.startsWith("settlement:")) continue; // unrelated account activity is not ours to reconcile
+    const ours = reference.startsWith(PROVIDER_REFERENCE_PREFIX) || reference.startsWith("settlement:");
+    if (!ours) continue; // unrelated account activity is not ours to reconcile
     if (!localKeys.has(reference)) {
       providerOrphans += 1;
       fail(check, "flutterwave:transfers", String(t.id), { reference, providerKobo: Math.round(Number(t.amount) * KOBO_PER_NAIRA) },
-        "provider transfer with a settlement reference has no local dispatch row — money moved without a Postgres record");
+        "provider transfer with one of our reference shapes has no local dispatch row — money moved without a Postgres record");
     }
   }
 
@@ -660,8 +673,8 @@ async function main() {
     checks.push(await checkSettlementLedger(sql, settlements));
 
     const dispatchRows = await (opts.market
-      ? sql`SELECT d.id, d.idempotency_key, d.settlement_record_id, d.status, d.provider_ref, d.amount_kobo FROM payment_dispatches d WHERE d.market = ${opts.market}`
-      : sql`SELECT d.id, d.idempotency_key, d.settlement_record_id, d.status, d.provider_ref, d.amount_kobo FROM payment_dispatches d`);
+      ? sql`SELECT d.id, d.idempotency_key, d.provider_reference, d.settlement_record_id, d.status, d.provider_ref, d.amount_kobo FROM payment_dispatches d WHERE d.market = ${opts.market}`
+      : sql`SELECT d.id, d.idempotency_key, d.provider_reference, d.settlement_record_id, d.status, d.provider_ref, d.amount_kobo FROM payment_dispatches d`);
     checks.push(await checkVendor(sql, opts, dispatchRows, holdRows, process.env.FLUTTERWAVE_SECRET_KEY ?? null));
 
     report.checks = checks;

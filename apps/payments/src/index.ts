@@ -188,6 +188,7 @@ async function routeRequest(
     // provider that already accepted the transfer collapses this retry.
     const result = await dispatcher.dispatchTransfer({
       idempotencyKey: row.idempotencyKey,
+      ...(row.providerReference !== null ? { providerReference: row.providerReference } : {}),
       recipient: { partyId: row.partyId, account: row.account },
       amountKobo: row.amountKobo,
       memo: row.memo,
@@ -251,9 +252,13 @@ async function routeRequest(
       return handleChargeWebhook(options, chargeParsed.charge);
     }
     const { outcome } = parsed;
-    // Match by our idempotency key (sent as the transfer reference) first,
-    // falling back to the providerRef.
-    let row = outcome.reference !== null ? await store.byIdempotencyKey(outcome.reference) : null;
+    // Match by the provider alias first (the transfer reference we sent),
+    // then by the legacy full idempotency key (rows created before the alias
+    // column), then by the providerRef.
+    let row = outcome.reference !== null ? await store.byProviderReference(outcome.reference) : null;
+    if (!row && outcome.reference !== null) {
+      row = await store.byIdempotencyKey(outcome.reference);
+    }
     if (!row && outcome.providerRef !== null) {
       row = await store.byProviderRef(outcome.providerRef);
     }

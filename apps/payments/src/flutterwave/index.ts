@@ -98,7 +98,7 @@ export function createVendorIntegration(
         verify: verifyWebhookHash,
         // Test mode (FLUTTERWAVE_TEST_MODE, dev only): outgoing references
         // carry the mock success suffix, so an echoed webhook reference must
-        // be stripped back to the bare idempotency key before row matching.
+        // be stripped back to the bare provider alias before row matching.
         parse: (body: unknown): TransferWebhookParse => {
           const parsed = parseTransferWebhook(body);
           if (parsed.kind === "outcome" && parsed.outcome.reference !== null) {

@@ -61,10 +61,18 @@ export class InMemoryDispatchStore implements DispatchStore {
     return null;
   }
 
+  async byProviderReference(providerReference: string): Promise<DispatchRow | null> {
+    for (const row of this.rows.values()) {
+      if (row.providerReference === providerReference) return { ...row };
+    }
+    return null;
+  }
+
   async recordResult(id: string, result: DispatchTransferResult): Promise<void> {
     const row = this.rows.get(id);
     if (!row) throw new Error(`dispatch ${id} is unknown`);
     row.status = result.status;
+    if (result.providerReference !== undefined) row.providerReference = result.providerReference;
     row.providerRef = result.providerRef ?? null;
     row.failureReason = result.failureReason ?? null;
     row.failureRetryable = result.status === "failed" ? result.retryable !== false : true;

@@ -438,6 +438,13 @@ export const paymentDispatches = pgTable(
      * Queue redelivery replays the same keys; the consumer onConflict-no-ops.
      */
     idempotencyKey: text("idempotency_key").notNull(),
+    /**
+     * Short deterministic provider-facing reference alias (ADR-0024
+     * amendment). The full idempotency_key remains canonical; this is what
+     * the provider sees and what inbound webhooks/reconcile match on.
+     * NULL for legacy rows; those fall back to idempotency_key matching.
+     */
+    providerReference: text("provider_reference"),
     settlementRecordId: text("settlement_record_id").notNull(),
     runId: text("run_id").notNull(),
     market: text("market").notNull(),
@@ -464,6 +471,7 @@ export const paymentDispatches = pgTable(
   },
   (table) => [
     uniqueIndex("payment_dispatches_idempotency_key_unique").on(table.idempotencyKey),
+    uniqueIndex("payment_dispatches_provider_reference_unique").on(table.providerReference),
     index("payment_dispatches_run_id_idx").on(table.runId),
     index("payment_dispatches_settlement_record_id_idx").on(table.settlementRecordId),
     index("payment_dispatches_status_idx").on(table.status),

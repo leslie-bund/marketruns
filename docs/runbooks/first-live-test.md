@@ -24,9 +24,9 @@ scenarios (see §6 incident scripts for sanctioned fallbacks).
 |---|-------|-----------------|-----------------|
 | 1 | Stack boots clean | `npx pnpm@9.15.4 dev:all -- --tunnel` | Postgres ready, migrations applied, edge :8787 / archive :8788 / identity :8789 / payments :8790 all healthy, demo seed no-ops, summary box prints tunnel URL + `EXPO_PUBLIC_EDGE_URL=…` line + guarded `/ops?token=…` link |
 | 2 | Demo driver passes end-to-end | Ops console → "Dev demo driver" panel (collapsed at the bottom) | Buyer → seller → runner wire flow completes with no error feed entries |
-| 3 | Reconcile exits 0 modulo baseline | `node infra/reconcile.mjs` (full stack up so queued dispatches land first) | Exit 0. **If the two known 2026-10-15 baseline settlements are still present**, the only accepted exceptions are their 6 payout legs with no dispatch rows (created before the payments worker existed) — document them once in the session log and never re-litigate them. A fresh/reset dev DB will not have them. Any *other* FAIL, or any unexplained WARN, is no-go. |
+| 3 | Reconcile exits 0 modulo baseline | `node infra/reconcile.mjs` (full stack up so queued dispatches land first) | Exit 0. **If the two known 2026-10-15 baseline settlements are still present**, the only accepted exceptions are their 6 payout legs with no dispatch rows (created before the payments worker existed) — document them once in the session log and never re-litigate them. A fresh/reset dev DB will not have them. **Pre-alias e2e baseline (2026-10-21):** dispatch WARNs whose `payment_dispatches.provider_reference IS NULL` are pre-fix e2e artifacts (12 stub terminal legs + 12 reference-cap/recipient failures) retained as evidence; they are explained and must not be replayed as part of the session. Any WARN row with a non-null `provider_reference`, any *other* FAIL, or any unexplained WARN is no-go. |
 | 4 | Buyer collection key | `apps/mobile/.env` → `EXPO_PUBLIC_FLW_PUBLIC_KEY=FLWPUBK_TEST-…` | Set; unset silently degrades checkout to unpaid dev mode |
-| 5 | Payout dispatcher | `infra/.dev.vars` → `PAYMENT_DISPATCHER=flutterwave`, `FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-…`, and `FLUTTERWAVE_TEST_MODE=true` | Payments worker starts without throwing (a missing key throws at startup). `FLUTTERWAVE_TEST_MODE` (ADR-0026) appends the provider's mock-success suffix so mock transfers complete in **~1 min instead of ~10**; reconcile strips the same suffix. **Known blocker (2026-10-23):** Flutterwave caps transfer references at 64 chars and the current idempotency keys are longer (66+; 75 with the suffix), so every real payout leg is rejected until the provider-reference alias lands (ADR-0024/0026, see `infra/README.md`). For session-day money scenarios use the stub dispatcher until that fix is in; do not promise real Flutterwave payouts. |
+| 5 | Payout dispatcher | `infra/.dev.vars` → `PAYMENT_DISPATCHER=flutterwave`, `FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-…`, and `FLUTTERWAVE_TEST_MODE=true` | Payments worker starts without throwing (a missing key throws at startup). `FLUTTERWAVE_TEST_MODE` (ADR-0026) appends the provider's mock-success suffix so mock transfers complete in **~1 min instead of ~10**; reconcile strips the same suffix. The provider reference is the short deterministic alias (`mr_` + 48 hex, ADR-0024 amendment), not the 66+ character local idempotency key, so it fits Flutterwave's 64-character cap. Real test-mode payouts are expected to dispatch; confirm the Payments tab shows `queued`/`sent`/`completed`, not `failed`. |
 | 6 | Webhook hash | `infra/.dev.vars` → `FLUTTERWAVE_WEBHOOK_SECRET_HASH=<random 64-hex>`, same value pasted in Flutterwave dashboard → Settings → Webhooks → Secret hash | Unset ⇒ the webhook route 503s; wrong ⇒ 401. (Optional in dev — see §1.3 for the fallback.) |
 | 7 | Face verifier | `infra/.dev.vars` → `FACE_VERIFIER=smileid`, `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`, `SMILEID_ENV=sandbox` (default) | Identity worker starts without throwing (`FACE_VERIFIER=smileid` without keys throws at startup). **No Smile ID credentials yet?** Leave `FACE_VERIFIER` unset (stub default), restart, and record "identity stubbed" in the session log — the trust/money scenarios stay runnable; live KYC is not exercised. |
 | 8 | Paid-flow gate | `infra/.dev.vars` → `PAYMENTS_REQUIRED=true` | Edge requires a confirmed payment hold at checkout. **Only set this when testing the paid flow** — with it unset, checkout is the unpaid dev posture. |
@@ -183,8 +183,9 @@ accounts — the resolve step returns the canned name the bank "returns":
 (These are also the fallback recipients for the demo seed's seller stores —
 `Amina's Fresh Store`, `Mama Ngozi Provisions`, `Emeka Phones & Accessories` —
 plus `runner:internal` and `platform`. Seller settlement legs carry the store
-display name at this stage, not the participant id; see the known Flutterwave
-reference-cap blocker in `infra/README.md` before relying on real payouts.)
+display name at this stage, not the participant id. Real test-mode payouts use
+the short provider alias from ADR-0024's amendment; see `infra/README.md` for
+the alias/mapping details.)
 
 ### Buyer test cards
 
@@ -341,9 +342,11 @@ anything.
    Save the output and **attach it to the session log** (the last line is
    always `RECONCILE_EXIT=0|1`). Expected: exit 0; if the accepted 2026-10-15
    baseline rows are still present, only their known dispatch gaps are
-   tolerated (§0 item 3). Every WARN (pending transfers, refund-manual rows,
-   stale holds) must have a one-line explanation in the log — the WARN budget
-   is 0 unexplained.
+   tolerated (§0 item 3). The pre-alias e2e rows (`provider_reference IS NULL`)
+   are also explained baseline evidence; any WARN row with a non-null
+   `provider_reference` is not. Every other WARN (pending transfers,
+   refund-manual rows, stale holds) must have a one-line explanation in the
+   log — the WARN budget is 0 unexplained.
 
    At the top of the log, record the session posture: identity mode (Smile ID
    sandbox vs stub) and payments gate (`PAYMENTS_REQUIRED` on/off).

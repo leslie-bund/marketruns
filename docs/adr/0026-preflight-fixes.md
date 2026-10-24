@@ -15,9 +15,9 @@ In-flight disputes still appear only at retirement. That was true before and rem
 
 ## Flutterwave test-mode accelerator
 
-Test-mode transfers against the provider's mock banks sit `pending` for ~10 minutes before the webhook lands — unusable inside a live session. The provider documents magic reference suffixes that force mock outcomes, and the payments worker now uses them, quarantined exactly where the vendor name already lives (`apps/payments/src/flutterwave/`, ADR-0009): with `FLUTTERWAVE_TEST_MODE` truthy, every outgoing transfer reference gets `_PMCKDU_1` appended (mock SUCCESSFUL in ~1 min), and the webhook match strips the suffix before looking the row up by idempotency key. The failure variant `_PMCK_ST_FDU_1` is documented for manual failure drills.
+Test-mode transfers against the provider's mock banks sit `pending` for ~10 minutes before the webhook lands — unusable inside a live session. The provider documents magic reference suffixes that force mock outcomes, and the payments worker now uses them, quarantined exactly where the vendor name already lives (`apps/payments/src/flutterwave/`, ADR-0009): with `FLUTTERWAVE_TEST_MODE` truthy, every outgoing transfer reference gets `_PMCKDU_1` appended (mock SUCCESSFUL in ~1 min), and the webhook match strips the suffix before looking the row up by provider alias. The failure variant `_PMCK_ST_FDU_1` is documented for manual failure drills.
 
-The guardrails are the point: test-mode only, **never production**; the vendor name and its magic strings appear in no other folder; and the reconcile script's vendor check compares bare references, so the strip-on-match keeps the money tying out under test mode.
+The guardrails are the point: test-mode only, **never production**; the vendor name and its magic strings appear in no other folder; and the reconcile script's vendor check compares bare provider aliases, so the strip-on-match keeps the money tying out under test mode. *[Amended 2026-10-24: the reference being suffixed is now the short provider alias from ADR-0024's amendment, not the full idempotency key; reconcile matches on `payment_dispatches.provider_reference` with a legacy idempotency-key fallback.]*
 
 ## The checkout tombstone
 

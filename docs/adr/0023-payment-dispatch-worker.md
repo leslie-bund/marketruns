@@ -25,7 +25,7 @@ Retries use backoff up to `max_retries` 5, then dead-letter to `payment-dispatch
 
 ## The vendor decision stays open — with the research recorded
 
-*[Amended: decided in ADR-0024 — Flutterwave. `FlutterwaveDispatcher` lands in the vendor quarantine with per-leg idempotency mapped to the provider `reference`, a `completed` terminal status, webhook + poll tracking, and a `RecipientResolver` seam over payout details onboarding doesn't collect yet.]*
+*[Amended: decided in ADR-0024 — Flutterwave. `FlutterwaveDispatcher` lands in the vendor quarantine with per-leg idempotency mapped to the provider `reference` through a short deterministic alias (ADR-0024 amendment), a `completed` terminal status, webhook + poll tracking, and a `RecipientResolver` seam over payout details onboarding doesn't collect yet.]*
 
 The PSP is undecided and this ADR deliberately does not decide it. What is recorded so the research isn't re-run:
 

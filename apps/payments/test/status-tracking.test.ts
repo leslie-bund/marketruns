@@ -3,7 +3,7 @@ import { createPaymentsApp, type PaymentsAppOptions } from "../src/index.js";
 import type { DispatchTransferResult, PaymentDispatcher, TransferStatusLookup } from "../src/dispatcher.js";
 import { StubDispatcher } from "../src/dispatcher.js";
 import { WEBHOOK_HASH_HEADER, parseTransferWebhook, verifyWebhookHash } from "../src/flutterwave/webhook.js";
-import { dispatchRow, type DispatchRow } from "../src/store.js";
+import { dispatchRow, dispatchRowWithReference, type DispatchRow } from "../src/store.js";
 import { handleDispatchRequested } from "../src/consume.js";
 import { FakeMessage, InMemoryDispatchStore, sampleDispatchRequest } from "./helpers.js";
 
@@ -38,7 +38,7 @@ async function seededInFlight(store: InMemoryDispatchStore): Promise<DispatchRow
   const request = sampleDispatchRequest();
   const rows: DispatchRow[] = [];
   for (let index = 0; index < request.legs.length; index += 1) {
-    const row = dispatchRow(request, index);
+    const row = await dispatchRowWithReference(request, index);
     await store.insertPending(row);
     await store.recordResult(row.id, { status: "queued", providerRef: `flw:${100 + index}` });
     rows.push((await store.byId(row.id))!);
@@ -56,7 +56,7 @@ describe("POST /webhooks/transfers", () => {
       webhookRequest({
         event: "transfer.completed",
         "event.type": "Transfer",
-        data: { id: 100, reference: row!.idempotencyKey, status: "SUCCESSFUL", complete_message: "Transaction was successful" },
+        data: { id: 100, reference: row!.providerReference, status: "SUCCESSFUL", complete_message: "Transaction was successful" },
       }),
     );
     expect(response.status).toBe(200);
@@ -64,6 +64,21 @@ describe("POST /webhooks/transfers", () => {
     expect(body.status).toBe("applied");
     expect(body.dispatch.status).toBe("completed");
     expect(body.dispatch.attempts).toBe(1); // webhook is not a re-execution
+  });
+
+  it("still matches legacy rows by the full idempotency key", async () => {
+    const store = new InMemoryDispatchStore();
+    const [row] = await seededInFlight(store);
+    const app = createPaymentsApp(store, new StubDispatcher(), WEBHOOK_OPTIONS);
+
+    const response = await app.fetch(
+      webhookRequest({
+        event: "transfer.completed",
+        data: { id: 100, reference: row!.idempotencyKey, status: "SUCCESSFUL" },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { status: string }).status).toBe("applied");
   });
 
   it("rejects a bad (or missing) hash with 401 and touches nothing", async () => {
@@ -96,7 +111,7 @@ describe("POST /webhooks/transfers", () => {
       webhookRequest({
         event: "transfer.completed",
         "event.type": "Transfer",
-        data: { id: 100, reference: row!.idempotencyKey, status: "FAILED", complete_message: "DISBURSE FAILED: Insufficient funds" },
+        data: { id: 100, reference: row!.providerReference, status: "FAILED", complete_message: "DISBURSE FAILED: Insufficient funds" },
       }),
     );
     expect(response.status).toBe(200);

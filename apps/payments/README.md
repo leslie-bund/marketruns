@@ -24,9 +24,11 @@ RunDO.releaseSettlement ── payment.dispatch-requested ──▶ payment-disp
 - **Idempotent**: per-leg idempotency key `settlement:<settlementRecordId>:leg:<n>`
   (unique column). Queue redelivery is a no-op replay — `sent`/`queued`/
   `completed` legs are never dispatched twice; `pending`/`failed` rows are
-  retried. The key is also sent as the provider transfer `reference`, so a
-  provider-side duplicate collapses onto the original transfer instead of
-  double-paying.
+  retried. The provider receives a deterministic short alias
+  (`provider_reference`, `mr_` + 192 bits of SHA-256, ADR-0024 amendment),
+  persisted on the row before the first send; the full key remains canonical.
+  A provider-side duplicate alias collapses onto the original transfer instead
+  of double-paying.
 - **Status lifecycle**: `pending` → `queued` (provider accepted) → `sent`
   (in-flight on the rails) → `completed` (settled at the destination,
   terminal) | `failed` (terminal, replayable). In-flight rows converge via
@@ -100,9 +102,10 @@ ADR-0015.
   fails again.
 - `POST /webhooks/transfers` — provider transfer outcome (terminal states).
   Verified against the configured webhook secret hash (401 on mismatch, 503
-  when unconfigured); matches rows by transfer reference (our idempotency
-  key) or providerRef, then records `completed`/`failed` without bumping
-  `attempts`. Unknown references are acknowledged as `unmatched` (200).
+  when unconfigured); matches rows by `provider_reference` (the short alias
+  sent to the provider), then legacy full idempotency key, then providerRef,
+  and records `completed`/`failed` without bumping `attempts`. Unknown
+  references are acknowledged as `unmatched` (200).
 - `POST /dispatches/sync` — polling fallback: rows stuck `sent`/`queued`
   longer than `staleMinutes` (default 15; JSON body may override) are
   re-queried at the provider and converged. 501 `sync-unsupported` when the
@@ -111,8 +114,19 @@ ADR-0015.
 ## Dispatcher contract
 
 ```ts
-dispatchTransfer({ idempotencyKey, recipient: { partyId, account }, amountKobo, memo })
-  → { status: "queued" | "sent" | "completed" | "failed", providerRef?, failureReason? }
+dispatchTransfer({
+  idempotencyKey,                 // canonical local key, unchanged
+  providerReference?,             // short alias persisted on the row
+  recipient: { partyId, account },
+  amountKobo,
+  memo,
+})
+  → {
+      status: "queued" | "sent" | "completed" | "failed",
+      providerRef?,               // vendor transfer id
+      providerReference?,         // alias actually sent (persisted by recordResult)
+      failureReason?,
+    }
 ```
 
 A vendor implementation registers in `resolveDispatcher` /
@@ -128,8 +142,9 @@ onboarding is the documented follow-up.
 
 Postgres (Neon via Hyperdrive in prod, `DATABASE_URL` in dev) — same
 connection pattern as apps/archive (`db.ts`). Tables: `payment_dispatches`
-(migrations 0005, 0006), `payment_holds`, `payment_refunds`,
-`payout_accounts` (migration 0007). Money never lives in D1 (ADR-0011).
+(migrations 0005, 0006, 0011 adds `provider_reference`), `payment_holds`,
+`payment_refunds`, `payout_accounts` (migration 0007). Money never lives in D1
+(ADR-0011).
 
 ## Dev
 

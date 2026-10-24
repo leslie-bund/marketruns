@@ -37,7 +37,7 @@ const V3WebhookSchema = z.object({
 
 /** A terminal transfer outcome carried by a webhook. */
 export interface TransferWebhookOutcome {
-  /** Our idempotency key (the transfer `reference` we sent at creation). */
+  /** Provider-facing reference alias (the transfer `reference` we sent at creation). */
   reference: string | null;
   /** Full providerRef (`flw:<id>`) for fallback row matching. */
   providerRef: string | null;

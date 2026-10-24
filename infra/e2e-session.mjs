@@ -640,7 +640,7 @@ async function assertDb(label, sql, ctx) {
   const dispatchDeadline = Date.now() + DB_POLL_MS;
   let dispatches = [];
   for (;;) {
-    dispatches = await sql`SELECT idempotency_key, account, party_id, amount_kobo, status, attempts, failure_reason, failure_retryable FROM payment_dispatches WHERE settlement_record_id = ${recordId} ORDER BY id`;
+    dispatches = await sql`SELECT idempotency_key, provider_reference, account, party_id, amount_kobo, status, attempts, failure_reason, failure_retryable FROM payment_dispatches WHERE settlement_record_id = ${recordId} ORDER BY id`;
     const allPresent = dispatches.length >= expectedDispatches.length;
     const allExecuted = allPresent && dispatches.every((d) => kobo(d.attempts) >= 1);
     if (allExecuted || Date.now() > dispatchDeadline) break;
@@ -656,6 +656,15 @@ async function assertDb(label, sql, ctx) {
     `${label}: every settlement leg has exactly one dispatch row (payment_dispatches, per-leg idempotency keys)`,
     dispatchOk,
     `dispatches ${JSON.stringify(dispatches.map((d) => d.idempotency_key))}`,
+  );
+  // ADR-0024 amendment: the provider sees a deterministic short alias, never
+  // the full local key (which is over Flutterwave's 64-character cap).
+  const aliases = dispatches.map((d) => d.provider_reference);
+  check(
+    `${label}: provider references are short deterministic aliases (mr_ + 48 hex, <=64 chars)`,
+    aliases.every((alias) => typeof alias === "string" && /^mr_[0-9a-f]{48}$/.test(alias) && alias.length <= 64) &&
+      new Set(aliases).size === aliases.length,
+    `provider_references ${JSON.stringify(aliases)}`,
   );
   const badStatus = dispatches.find((d) => !["pending", "queued", "sent", "completed"].includes(d.status) || kobo(d.attempts) < 1);
   check(
@@ -732,12 +741,17 @@ async function runReconcile(sql) {
   const dispatchWarnings = report.checks.find((c) => c.name === "dispatch-completeness")?.warnings ?? [];
   if (dispatchWarnings.length > 0) {
     const ids = dispatchWarnings.map((w) => w.id);
-    const rows = await sql`SELECT id, provider_ref FROM payment_dispatches WHERE id IN ${sql(ids)}`;
+    const rows = await sql`SELECT id, provider_ref, provider_reference, failure_reason FROM payment_dispatches WHERE id IN ${sql(ids)}`;
     const stubbed = rows.filter((r) => String(r.provider_ref ?? "").startsWith("stub:")).length;
-    if (rows.length === ids.length && stubbed === ids.length) {
-      console.log("      · dispatch-completeness WARNs verified against payment_dispatches: all carry stub: provider refs — 'sent' is the stub dispatcher's terminal state (nothing external converges) — explained dev posture");
+    const preAlias = rows.filter((r) => r.provider_reference === null).length;
+    const preAliasReasons = [...new Set(rows.filter((r) => r.provider_reference === null && r.failure_reason).map((r) => String(r.failure_reason)))];
+    if (rows.length === ids.length && preAlias === ids.length) {
+      console.log(
+        `      · dispatch-completeness WARNs verified against payment_dispatches: all ${ids.length} are pre-alias legacy rows (provider_reference NULL; ${stubbed} stub terminal, ${preAlias - stubbed} pre-fix failures${preAliasReasons.length > 0 ? `: ${preAliasReasons.join("; ")}` : ""}) — retained as evidence; new dispatches all carry mr_ aliases`,
+      );
     } else {
-      console.log(`      · UNEXPLAINED: ${ids.length - stubbed} of ${ids.length} stuck-dispatch WARNs are not stub rows — flag these in the session log; the WARN budget is 0 unexplained`);
+      const unexplained = ids.length - preAlias;
+      console.log(`      · UNEXPLAINED: ${unexplained} of ${ids.length} stuck-dispatch WARNs are not pre-alias legacy rows — flag these in the session log; the WARN budget is 0 unexplained`);
     }
   }
   check("reconcile child exit code 0", child.status === 0, `exit ${child.status}, ${exitLine}`);
