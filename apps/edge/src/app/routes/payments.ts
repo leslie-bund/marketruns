@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import type { Env } from "../../config/env.js";
 import { errorResponse } from "../../do/runtime/index.js";
 import { correlationHeaders } from "../middleware/request-id.js";
+import { headerAuthAllowed } from "../../registry/index.js";
 
 /**
  * /payments/* proxy → the payments worker (apps/payments), which owns charge
@@ -75,6 +76,25 @@ async function proxyPayments(
   const headers = options?.forwardInboundHeaders
     ? correlationHeaders(c, forwardableHeaders(c.req.raw.headers))
     : correlationHeaders(c, { "content-type": c.req.header("content-type") ?? "application/json" });
+
+  // Rebuild identity from the edge's resolved participant; never forward
+  // client-supplied identity/internal headers on this public proxy.
+  if (!options?.forwardInboundHeaders && isPayoutAccountManagement(url.pathname, c.req.method)) {
+    const who = c.get("participant");
+    const session = who.source === "session";
+    const headerDemo = who.source === "header" && headerAuthAllowed(c.env);
+    if (!session && !headerDemo) {
+      return errorResponse(401, "unauthorized", "a valid Bearer session is required");
+    }
+    const internalToken = c.env.PAYMENTS_INTERNAL_TOKEN;
+    if (session && !internalToken) {
+      return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+    }
+    if (internalToken) headers.set("x-payments-internal", internalToken);
+    headers.set("x-participant-id", who.id);
+    headers.set("x-participant-role", who.role);
+  }
+
   try {
     upstream = await fetch(target, {
       method: c.req.method,
@@ -91,4 +111,10 @@ async function proxyPayments(
       "x-request-id": upstream.headers.get("x-request-id") ?? c.get("requestId"),
     },
   });
+}
+
+function isPayoutAccountManagement(pathname: string, method: string): boolean {
+  if (pathname === "/payments/payout-accounts/resolve") return method === "POST";
+  if (pathname === "/payments/payout-accounts") return method === "POST";
+  return /^\/payments\/payout-accounts\/[^/]+$/.test(pathname) && (method === "GET" || method === "DELETE");
 }

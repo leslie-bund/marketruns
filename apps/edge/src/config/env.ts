@@ -25,6 +25,8 @@ export interface Env {
   OPS_ARCHIVE_URL?: string;
   /** Payments service base URL for the ops console payments proxy (dev default: http://localhost:8790). */
   PAYMENTS_URL?: string;
+  /** Shared edge → payments secret for resolved-participant payout-account routes. */
+  PAYMENTS_INTERNAL_TOKEN?: string;
   /** Durable notification read API and participant realtime callback. */
   NOTIFICATIONS_URL?: string;
   NOTIFICATION_INTERNAL_TOKEN?: string;

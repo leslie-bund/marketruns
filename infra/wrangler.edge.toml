@@ -59,6 +59,7 @@ PAYMENTS_URL = "http://localhost:8790"
 #   wrangler secret put IDENTITY_SESSION_SECRET   # on BOTH edge and identity
 #   wrangler secret put IDENTITY_INTERNAL_TOKEN   # on BOTH edge and identity — the edge
 #                                                 # injects it on the guarded /auth/* routes
+#   wrangler secret put PAYMENTS_INTERNAL_TOKEN   # on BOTH edge and payments — payout-account auth
 #   (IDENTITY_ENCRYPTION_KEY lives on the identity worker only)
 
 # Dev-only: the free public OSRM demo server (no key, demo usage policy).

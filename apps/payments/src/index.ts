@@ -48,13 +48,11 @@ import { paymentNotification, queuePaymentNotifications, type PaymentNotificatio
  * push, hash-verified) or POST /dispatches/sync (polling fallback for rows
  * stuck in-flight).
  *
- * Auth posture (dev-stage, mirrors apps/archive's admin endpoints): the HTTP
- * surface is unauthenticated and trusted-internal — the edge ops console
- * proxies /dispatches behind its ops guard, and deployed environments bind
- * this worker as a Service binding, not a public route. The ONE exception is
- * /webhooks/transfers, which must be reachable by the provider and therefore
- * verifies the configured webhook secret hash on every call. Revisit the rest
- * with ADR-0015 when real authentication lands.
+ * Auth posture: ops and internal DO routes remain trusted-internal. Payout
+ * account management additionally requires the edge's PAYMENTS_INTERNAL_TOKEN
+ * plus its resolved seller/runner identity, and enforces participant equality
+ * on every save/read/revoke (explicit header-auth demo excepted). Provider
+ * webhooks keep their own hash verification and never require participant auth.
  */
 
 const DEFAULT_LIMIT = 50;
@@ -87,6 +85,12 @@ export interface PaymentsAppOptions {
   collections?: { holds: HoldStore; refunds: RefundStore; gateway: ChargeGateway | null };
   /** Payout-account directory: saved accounts + bank list / account resolve. */
   payouts?: { accounts: PayoutAccountStore; gateway: ChargeGateway | null };
+  /**
+   * Trusted edge identity for payout-account management. Deployed callers must
+   * arrive through the internal-token seam; explicit header auth is demo-only.
+   * Absent configuration fails closed rather than trusting client identity.
+   */
+  participantAuth?: { internalToken?: string; allowHeaderAuth?: boolean };
   /** Actual persisted payment transitions → durable notification queue. */
   notify?: PaymentNotificationSink;
 }
@@ -515,6 +519,8 @@ async function routeRequest(
 
   // Resolve an account number to its account name (never stores anything).
   if (request.method === "POST" && url.pathname === "/payments/payout-accounts/resolve") {
+    const authorization = requirePayoutParticipant(request, options);
+    if (authorization instanceof Response) return authorization;
     const gateway = options.payouts?.gateway ?? null;
     if (!gateway) return collectionsUnavailable();
     const parsed = PayoutAccountResolveRequestSchema.safeParse(await readOptionalJson(request));
@@ -537,6 +543,8 @@ async function routeRequest(
   // Save a payout account — ALWAYS resolved with the provider first; an
   // unresolved account is never stored (a wrong account misdirects money).
   if (request.method === "POST" && url.pathname === "/payments/payout-accounts") {
+    const participant = requirePayoutParticipant(request, options);
+    if (participant instanceof Response) return participant;
     const payouts = options.payouts;
     if (!payouts || !payouts.gateway) return collectionsUnavailable();
     const parsed = PayoutAccountUpsertRequestSchema.safeParse(await readOptionalJson(request));
@@ -546,6 +554,8 @@ async function routeRequest(
         { status: 400 },
       );
     }
+    const sameParticipant = requireSameParticipant(participant.id, parsed.data.participantId);
+    if (sameParticipant) return sameParticipant;
     const resolved = await payouts.gateway.resolveAccount(parsed.data.bankCode, parsed.data.accountNumber);
     if (!resolved) {
       return Response.json(
@@ -554,7 +564,7 @@ async function routeRequest(
       );
     }
     const row: PayoutAccountRow = {
-      participantId: parsed.data.participantId,
+      participantId: participant.id,
       bankCode: parsed.data.bankCode,
       accountNumber: parsed.data.accountNumber,
       accountName: resolved.accountName,
@@ -568,26 +578,24 @@ async function routeRequest(
     return Response.json(payoutAccountView(row));
   }
 
-  // Read / revoke a participant's payout account.
+  // Read / revoke only the authenticated participant's own payout account.
   const payoutAccountMatch = /^\/payments\/payout-accounts\/([^/]+)$/.exec(url.pathname);
-  if (payoutAccountMatch && request.method === "GET") {
+  if (payoutAccountMatch && (request.method === "GET" || request.method === "DELETE")) {
+    const participant = requirePayoutParticipant(request, options);
+    if (participant instanceof Response) return participant;
     if (!options.payouts) return collectionsUnavailable();
     const participantId = decodeURIComponent(payoutAccountMatch[1] ?? "");
+    const sameParticipant = requireSameParticipant(participant.id, participantId);
+    if (sameParticipant) return sameParticipant;
     const row = await options.payouts.accounts.byParticipantId(participantId);
     if (!row) {
       return Response.json({ error: "not-found", message: `no active payout account for ${participantId}` }, { status: 404 });
+    }
+    if (request.method === "DELETE") {
+      await options.payouts.accounts.revoke(participantId);
+      return Response.json(payoutAccountView({ ...row, revokedAt: new Date() }));
     }
     return Response.json(payoutAccountView(row));
-  }
-  if (payoutAccountMatch && request.method === "DELETE") {
-    if (!options.payouts) return collectionsUnavailable();
-    const participantId = decodeURIComponent(payoutAccountMatch[1] ?? "");
-    const row = await options.payouts.accounts.byParticipantId(participantId);
-    if (!row) {
-      return Response.json({ error: "not-found", message: `no active payout account for ${participantId}` }, { status: 404 });
-    }
-    await options.payouts.accounts.revoke(participantId);
-    return Response.json(payoutAccountView({ ...row, revokedAt: new Date() }));
   }
 
   return Response.json({ error: "not-found", message: `no route: ${request.method} ${url.pathname}` }, { status: 404 });
@@ -598,6 +606,38 @@ function collectionsUnavailable(): Response {
     { error: "collection-unavailable", message: "no collection provider is configured on this worker" },
     { status: 503 },
   );
+}
+
+type PayoutParticipant = { id: string; role: "seller" | "runner" };
+
+/** Only the edge's authenticated internal seam can assert participant identity. */
+function requirePayoutParticipant(request: Request, options: PaymentsAppOptions): PayoutParticipant | Response {
+  const auth = options.participantAuth;
+  if (auth?.internalToken) {
+    if (request.headers.get("x-payments-internal") !== auth.internalToken) {
+      return Response.json({ error: "unauthorized", message: "valid internal authentication is required" }, { status: 401 });
+    }
+  } else if (auth?.allowHeaderAuth !== true) {
+    return Response.json(
+      { error: "payments-auth-unconfigured", message: "PAYMENTS_INTERNAL_TOKEN is required" },
+      { status: 503 },
+    );
+  }
+
+  const id = request.headers.get("x-participant-id");
+  const role = request.headers.get("x-participant-role");
+  if (!id || !role) {
+    return Response.json({ error: "unauthorized", message: "resolved participant identity is required" }, { status: 401 });
+  }
+  if (role !== "seller" && role !== "runner") {
+    return Response.json({ error: "forbidden", message: "seller or runner role is required" }, { status: 403 });
+  }
+  return { id, role };
+}
+
+function requireSameParticipant(resolvedId: string, requestedId: string): Response | null {
+  if (resolvedId === requestedId) return null;
+  return Response.json({ error: "forbidden", message: "cannot manage another participant's payout account" }, { status: 403 });
 }
 
 /**
@@ -788,6 +828,10 @@ export default {
         ...(integration.webhook !== undefined ? { webhook: integration.webhook } : {}),
         collections: { holds, refunds, gateway: integration.gateway ?? null },
         payouts: { accounts: payoutAccounts, gateway: integration.gateway ?? null },
+        participantAuth: {
+          ...(env.PAYMENTS_INTERNAL_TOKEN !== undefined ? { internalToken: env.PAYMENTS_INTERNAL_TOKEN } : {}),
+          allowHeaderAuth: env.ALLOW_HEADER_AUTH === "true",
+        },
         notify: queuePaymentNotifications(env.NOTIFICATION_QUEUE),
       });
     } finally {

@@ -34,12 +34,15 @@ export interface PayoutAccountStore {
   revoke(participantId: string): Promise<boolean>;
 }
 
-/** Row → wire view (epoch-millisecond timestamps, packages/proto convention). */
+/** Row → wire view; full bank details stay server-side for dispatch only. */
 export function payoutAccountView(row: PayoutAccountRow): PayoutAccountView {
+  const accountNumber = row.accountNumber.length <= 4
+    ? "****"
+    : `${"*".repeat(row.accountNumber.length - 4)}${row.accountNumber.slice(-4)}`;
   return {
     participantId: row.participantId,
     bankCode: row.bankCode,
-    accountNumber: row.accountNumber,
+    accountNumber,
     accountName: row.accountName,
     verifiedAt: row.verifiedAt.getTime(),
     revokedAt: row.revokedAt === null ? null : row.revokedAt.getTime(),

@@ -10,5 +10,9 @@ export interface Env extends DatabaseEnv {
    * are validated there.
    */
   PAYMENT_DISPATCHER?: string;
+  /** Shared edge → payments secret required for payout-account management. */
+  PAYMENTS_INTERNAL_TOKEN?: string;
+  /** Explicit local demo only; deployed payout auth requires the internal token. */
+  ALLOW_HEADER_AUTH?: string;
   NOTIFICATION_QUEUE?: Queue;
 }
