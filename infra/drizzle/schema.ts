@@ -197,6 +197,20 @@ export const stores = pgTable(
   ],
 );
 
+/** Released 0012 table retained so the current runner-pool model upgrades additively. */
+export const internalRunnerPools = pgTable(
+  "internal_runner_pools",
+  {
+    marketId: text("market_id").notNull().references(() => markets.id),
+    participantId: text("participant_id").notNull(),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("internal_runner_pools_membership_unique").on(table.marketId, table.participantId),
+    index("internal_runner_pools_participant_idx").on(table.participantId),
+  ],
+);
+
 /** Expiring presence read model; one row per seller per market dedupes sockets/devices. */
 export const sellerPresence = pgTable(
   "seller_presence",

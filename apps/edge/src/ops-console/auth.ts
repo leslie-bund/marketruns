@@ -4,7 +4,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { eq } from "drizzle-orm";
 import { opsUsers } from "../../../../infra/drizzle/schema.js";
 import type { Env } from "../config/env.js";
-import { createOpsDatabase, databaseConfigured, type OpsDatabase } from "./db.js";
+import { createOpsDatabase, databaseConfigured, opsAuthSchema, type OpsDatabase } from "./db.js";
 
 export type OpsRole = "viewer" | "operator" | "admin";
 export interface OpsIdentity { id: string; email: string; name: string; role: OpsRole; mustChangePassword: boolean; }
@@ -29,7 +29,7 @@ export function createOpsAuth(env: Env, db: OpsDatabase, options: { bootstrap?: 
     baseURL: env.OPS_BASE_URL,
     basePath: "/ops/auth",
     secret: env.OPS_AUTH_SECRET,
-    database: drizzleAdapter(db, { provider: "pg" }),
+    database: drizzleAdapter(db, { provider: "pg", schema: opsAuthSchema }),
     emailAndPassword: { enabled: true, disableSignUp: options.bootstrap !== true, minPasswordLength: 12 },
     user: {
       additionalFields: {

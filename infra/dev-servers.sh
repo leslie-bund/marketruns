@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start the local dev environment (edge + archive + identity + payments + status check).
+# Start the local dev environment (edge + archive + identity + payments + notifications + status check).
 # Usage: infra/dev-servers.sh [--stop]
 set -u
 cd "$(dirname "$0")/.."
@@ -46,12 +46,17 @@ wait_port_free 8787
 # OPS_TOKEN (optional env) guards the ops console API — mandatory whenever the
 # edge is reachable beyond localhost (see dev-all.sh --tunnel). Passed as a
 # wrangler dev var; unset keeps the dev-open console behavior.
+# The local demo explicitly enables header auth and the direct Postgres adapter.
 if [ -n "${OPS_TOKEN:-}" ]; then
   nohup npx wrangler dev --config infra/wrangler.edge.toml --port 8787 \
     --var OPS_TOKEN:"${OPS_TOKEN}" \
+    --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+    --var ALLOW_HEADER_AUTH:true \
     > .dev-logs/edge.log 2>&1 &
 else
   nohup npx wrangler dev --config infra/wrangler.edge.toml --port 8787 \
+    --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+    --var ALLOW_HEADER_AUTH:true \
     > .dev-logs/edge.log 2>&1 &
 fi
 echo $! >> "$PIDFILE"
@@ -83,4 +88,12 @@ nohup npx wrangler dev --config infra/wrangler.payments.toml --port 8790 \
 echo $! >> "$PIDFILE"
 wait_http http://localhost:8790 || exit 1
 echo "payments ready"
+
+wait_port_free 8791
+nohup npx wrangler dev --config infra/wrangler.notifications.toml --port 8791 \
+  --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+  > .dev-logs/notifications.log 2>&1 &
+echo $! >> "$PIDFILE"
+wait_http http://localhost:8791 || exit 1
+echo "notifications ready"
 echo "console: http://localhost:8787/ops"

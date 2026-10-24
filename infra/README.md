@@ -16,11 +16,11 @@ npx pnpm@9.15.4 dev:all -- --no-seed  # skip the demo seed
 
 1. **Postgres** — starts the `market-runs-postgres` docker container (`postgres:16-alpine` on `:54322`) if needed, reuses it if already running, and waits for `pg_isready`.
 2. **Migrations** — `drizzle-kit migrate` in `infra/drizzle` with `DATABASE_URL` (default `postgres://postgres:postgres@localhost:54322/market_runs`). Logs to `.dev-logs/migrate.log`.
-3. **Edge + archive + identity + payments** — delegates to `infra/dev-servers.sh` (edge on `:8787`, archive on `:8788`, identity on `:8789`, payments on `:8790`, health checks, logs in `.dev-logs/`).
+3. **Edge + archive + identity + payments + notifications** — delegates to `infra/dev-servers.sh` (edge on `:8787`, archive on `:8788`, identity on `:8789`, payments on `:8790`, notifications on `:8791`, health checks, logs in `.dev-logs/`). The edge receives explicit local `DATABASE_URL` and `ALLOW_HEADER_AUTH=true` values.
 4. **Demo seed** (default on) — `infra/seed-demo.mjs` registers two Balogun stores (Amina's Fresh Store, Mama Ngozi Provisions) and one Computer Village store (Emeka Phones & Accessories) over the real `POST /command` wire, so a fresh backend has a market vocabulary buyers can post intents against. It uses deterministic store ids — re-running is a no-op.
 5. **`--tunnel`** — runs `cloudflared tunnel --url http://localhost:8787`, captures the `*.trycloudflare.com` URL, and prints a summary box: the tunnel URL, the exact `EXPO_PUBLIC_EDGE_URL=…` line for `apps/mobile/.env`, the guarded `/ops?token=…` console link, and the friend-side step (`npx expo start --tunnel`, which needs `@expo/ngrok`). Without `cloudflared` installed it prints `brew install cloudflared` and continues LAN-only.
 
-Ctrl-C stops everything the script started — the tunnel, both dev servers, and the Postgres container **only if the script started it** (a container you left running stays running; container data persists either way).
+Ctrl-C stops everything the script started — the tunnel, all worker processes, and the Postgres container **only if the script started it** (a container you left running stays running; container data persists either way).
 
 ### OPS_TOKEN and the tunnel
 
@@ -44,14 +44,15 @@ friend's phone ──Expo Go──► expo tunnel (@expo/ngrok) ──► Metro 
 
 The backend tunnel carries app↔edge traffic; the Expo tunnel carries the JS bundle and Metro. Both are needed. Phones on the same Wi-Fi need neither — set `EXPO_PUBLIC_EDGE_URL` to the Mac's LAN IP instead (see `apps/mobile/.env.example`).
 
-## The four workers
+## The five workers
 
 | Worker | Port | What it does | Env / secrets |
 | --- | --- | --- | --- |
-| `apps/edge` (`infra/wrangler.edge.toml`) | 8787 | Public API, Durable Objects (live state), ops console; proxies `/auth/*`, `/payments/*`, `/ops/api/admin/payments|holds|refunds`, and `/ops/api/device-resets*` (the ops device-reset queue → identity's internal seam) | Vars: `OPS_ARCHIVE_URL`, `IDENTITY_URL`, `PAYMENTS_URL`, `OSRM_BASE_URL`, `PAYMENTS_REQUIRED` (unset = unpaid dev checkout). Secrets: `OPS_TOKEN` (any deploy / `--tunnel`), `IDENTITY_SESSION_SECRET` (must match the identity worker), `IDENTITY_INTERNAL_TOKEN` (must match the identity worker when set — the edge injects it as `x-identity-internal` on the guarded `/auth/*` routes; unset = nothing injected) |
+| `apps/edge` (`infra/wrangler.edge.toml`) | 8787 | Public API, Durable Objects (live state), ops console; proxies `/auth/*`, `/payments/*`, `/ops/api/admin/payments|holds|refunds`, and `/ops/api/device-resets*` (the ops device-reset queue → identity's internal seam) | Vars: `OPS_ARCHIVE_URL`, `IDENTITY_URL`, `PAYMENTS_URL`, `NOTIFICATIONS_URL`, `DATABASE_URL` + `ALLOW_HEADER_AUTH=true` (local demo), `OSRM_BASE_URL`, `PAYMENTS_REQUIRED` (unset = unpaid dev checkout). Secrets: `OPS_TOKEN` (any deploy / `--tunnel`), `IDENTITY_SESSION_SECRET` (must match the identity worker), `IDENTITY_INTERNAL_TOKEN` (must match the identity worker when set — the edge injects it as `x-identity-internal` on the guarded `/auth/*` routes; unset = nothing injected) |
 | `apps/archive` (`infra/wrangler.archive.toml`) | 8788 | Queue consumer: retirement snapshots → Postgres/R2 + reputation/admin read API | Var: `DATABASE_URL` (dev) / Hyperdrive (prod) |
 | `apps/identity` (`infra/wrangler.identity.toml`) | 8789 | Face enroll/verify, device-key registration/authentication, HMAC sessions, device-reset — owns all credential state in Postgres | Var: `DATABASE_URL` (dev) / Hyperdrive (prod). Secrets: `IDENTITY_ENCRYPTION_KEY`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN` (must be the SAME value on edge and identity when set — the edge's `/auth/*` proxy injects it on the guarded routes; unset = internal routes open in dev). Vars: `FACE_VERIFIER` (stub \| smileid — smileid without keys throws at startup), `FACE_MATCH_THRESHOLD`, `FIDO_UPSERT_ENABLED`, `FIDO_STUB_ENABLED`. Smile ID secrets when enabled: `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`, plus vars `SMILEID_ENV` (default sandbox), `SMILEID_CALLBACK_URL`, `SMILEID_PRIVACY_NOTICE_URL` (ADR-0022, amended) |
 | `apps/payments` (`infra/wrangler.payments.toml`) | 8790 | `payment-dispatch` + `payment.refund-requested` queue consumer: persists each settlement leg and executes it via the dispatcher abstraction (stub in dev; Flutterwave test-mode supported); buyer collection — `POST /payments/charges/confirm` (server-side verify → `payment_holds`), refund rail (card via provider, non-card → `refund-manual`), seller payout accounts (`GET /payments/banks`, resolve-then-save); serves `GET /dispatches` + replay, `POST /webhooks/transfers|charges`, `POST /dispatches/sync` | Var: `DATABASE_URL` (dev) / Hyperdrive (prod), `PAYMENT_DISPATCHER=stub`. Vendor secrets via `infra/.dev.vars` (below) |
+| `apps/notifications` (`infra/wrangler.notifications.toml`) | 8791 | `notification-events` consumer plus durable notification read/mark-read API and realtime/email delivery | Var: `DATABASE_URL` (dev) / Hyperdrive (prod), `EDGE_URL`, `IDENTITY_URL`. Secrets: `NOTIFICATION_INTERNAL_TOKEN`, `IDENTITY_INTERNAL_TOKEN`, `RESEND_API_KEY`; verified sender var `RESEND_FROM_EMAIL` |
 
 ## Flutterwave test-mode payouts (payments worker)
 

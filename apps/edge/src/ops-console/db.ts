@@ -5,6 +5,14 @@ import type { Env } from "../config/env.js";
 
 export type OpsDatabase = ReturnType<typeof createOpsDatabase>["db"];
 
+/** Better Auth model names mapped to the ops-only tables in the combined schema. */
+export const opsAuthSchema = {
+  user: schema.opsUsers,
+  session: schema.opsSessions,
+  account: schema.opsAccounts,
+  verification: schema.opsVerifications,
+};
+
 /** Hyperdrive in deployed Workers; DATABASE_URL is the explicit local adapter. */
 export function createOpsDatabase(env: Pick<Env, "DATABASE_URL" | "HYPERDRIVE">) {
   const connectionString = env.DATABASE_URL ?? env.HYPERDRIVE?.connectionString;
