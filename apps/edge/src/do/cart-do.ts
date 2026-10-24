@@ -157,7 +157,7 @@ export class CartDO extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(this.state.deadline);
 
     const event: ServerEvent = { type: "cart.updated", cart: this.cartView() };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -328,6 +328,7 @@ export class CartDO extends DurableObject<Env> {
     // floor-rate runner is assigned at creation (ADR-0013); the v2 auction
     // would seed with runnerId null until a bid wins.
     const runnerId = "runner:internal";
+    const sellerParticipantIds = [...new Set(state.entries.flatMap((entry) => entry.product.sellerParticipantId ? [entry.product.sellerParticipantId] : []))];
     const runStub = this.env.RUN_DO.get(this.env.RUN_DO.idFromName(runId));
     const seeded = await runStub.fetch(
       internalPost(
@@ -338,6 +339,7 @@ export class CartDO extends DurableObject<Env> {
           settlement: config.settlement,
           buyerId,
           runnerId,
+          ...(sellerParticipantIds.length > 0 ? { sellerParticipantIds } : {}),
         },
         correlation.headers !== undefined ? new Headers(correlation.headers) : undefined,
       ),
@@ -370,6 +372,7 @@ export class CartDO extends DurableObject<Env> {
       startedAt: now,
       stopCount: stops.length,
       storeIds,
+      ...(sellerParticipantIds.length > 0 ? { sellerParticipantIds } : {}),
       ...(requestId !== undefined ? { requestId } : {}),
     };
     await this.env.ARCHIVE_QUEUE.send(serializeEvent(runStarted)).catch((error: unknown) => {
@@ -383,8 +386,10 @@ export class CartDO extends DurableObject<Env> {
       runId,
       floorRateKobo,
       delivery: command.delivery,
+      buyerId,
+      runnerId,
     };
-    broadcast(this.ctx, accepted);
+    broadcast(this.ctx, this.env, accepted);
 
     // Retirement: every product is sold; the cart is checked out. Archive
     // snapshots go on the queue, then DO storage is deleted (ADR-0010).
@@ -413,7 +418,7 @@ export class CartDO extends DurableObject<Env> {
       snapshot: { ...this.cartView(), status: "checked-out" },
       ...(requestId !== undefined ? { requestId } : {}),
     };
-    broadcast(this.ctx, cartRetired);
+    broadcast(this.ctx, this.env,cartRetired);
     await this.env.ARCHIVE_QUEUE.send(serializeEvent(cartRetired));
     // Doctrine (ADR-0010): retirement = archive snapshot + delete DO storage.
     // The tombstone is the ONE exception — a minimal receipt so a checkout
@@ -554,6 +559,7 @@ export class CartDO extends DurableObject<Env> {
       acceptanceCount: state.acceptanceCount,
       deadline: state.deadline ?? 0,
       status: state.status,
+      ...(state.buyerId ? { buyerId: state.buyerId } : {}),
     };
   }
 
@@ -602,9 +608,10 @@ export class CartDO extends DurableObject<Env> {
         acceptanceCount: this.state.acceptanceCount,
         deadline: this.state.deadline,
         status: "retired",
+        ...(this.state.buyerId ? { buyerId: this.state.buyerId } : {}),
       },
     };
-    broadcast(this.ctx, cartRetired);
+    broadcast(this.ctx, this.env, cartRetired);
     await this.env.ARCHIVE_QUEUE.send(serializeEvent(cartRetired));
     // Expiry retirement deletes cart state (ADR-0010) — but never a prior
     // checkout tombstone: that receipt belongs to the checked-out cart and is

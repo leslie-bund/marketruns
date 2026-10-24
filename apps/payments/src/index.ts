@@ -30,6 +30,7 @@ import {
 import { parsePaymentMessage } from "./messages.js";
 import { DrizzleDispatchStore, dispatchView, type DispatchStore } from "./store.js";
 import type { Env } from "./env.js";
+import { paymentNotification, queuePaymentNotifications, type PaymentNotificationSink } from "./notifications.js";
 
 /**
  * apps/payments — the payment-dispatch worker (queue consumer + ops reads +
@@ -86,6 +87,8 @@ export interface PaymentsAppOptions {
   collections?: { holds: HoldStore; refunds: RefundStore; gateway: ChargeGateway | null };
   /** Payout-account directory: saved accounts + bank list / account resolve. */
   payouts?: { accounts: PayoutAccountStore; gateway: ChargeGateway | null };
+  /** Actual persisted payment transitions → durable notification queue. */
+  notify?: PaymentNotificationSink;
 }
 
 export interface PaymentsWorker {
@@ -272,6 +275,18 @@ async function routeRequest(
       status: outcome.status,
       failureReason: outcome.status === "failed" ? outcome.completeMessage ?? "provider reported failure" : null,
     });
+    if (options.notify && row.account !== "platform") {
+      await options.notify(paymentNotification({
+        sourceEventId: `payment.dispatch-status:${row.id}:${outcome.status}`,
+        sourceEventType: "payment.dispatch-updated",
+        recipientId: row.partyId,
+        title: outcome.status === "failed" ? "Dispatch failed" : "Dispatch completed",
+        body: `Your ${row.account} dispatch is ${outcome.status}.`,
+        runId: row.runId,
+        deepLink: "/notifications",
+        status: outcome.status,
+      }));
+    }
     console.error(
       JSON.stringify({
         event: "payment.webhook_applied",
@@ -324,6 +339,18 @@ async function routeRequest(
           status: outcome.status,
           failureReason: outcome.status === "failed" ? outcome.failureReason ?? "provider reported failure" : null,
         });
+        if (options.notify && row.account !== "platform") {
+          await options.notify(paymentNotification({
+            sourceEventId: `payment.dispatch-status:${row.id}:${outcome.status}`,
+            sourceEventType: "payment.dispatch-updated",
+            recipientId: row.partyId,
+            title: outcome.status === "failed" ? "Dispatch failed" : "Dispatch completed",
+            body: `Your ${row.account} dispatch is ${outcome.status}.`,
+            runId: row.runId,
+            deepLink: "/notifications",
+            status: outcome.status,
+          }));
+        }
         updated += 1;
       } else {
         unchanged += 1;
@@ -361,6 +388,18 @@ async function routeRequest(
     const result = await confirmHold(collections.holds, collections.gateway, parsed.data);
     if (result.kind === "error") {
       return Response.json({ error: result.error, message: result.message }, { status: result.status });
+    }
+    if (!result.replayed && options.notify) {
+      await options.notify(paymentNotification({
+        sourceEventId: `payment.hold-placed:${result.hold.id}:${result.hold.status}`,
+        sourceEventType: "payment.hold-placed",
+        recipientId: result.hold.buyerId,
+        title: "Payment hold confirmed",
+        body: "Your payment was verified and held for checkout.",
+        cartId: result.hold.cartId,
+        ...(result.hold.runId ? { runId: result.hold.runId } : {}),
+        status: result.hold.status,
+      }));
     }
     console.error(
       JSON.stringify({
@@ -606,6 +645,17 @@ async function handleChargeWebhook(
     );
     return Response.json({ status: "ignored" });
   }
+  if (!result.replayed && options.notify) {
+    await options.notify(paymentNotification({
+      sourceEventId: `payment.hold-placed:${result.hold.id}:${result.hold.status}`,
+      sourceEventType: "payment.hold-placed",
+      recipientId: result.hold.buyerId,
+      title: "Payment hold confirmed",
+      body: "Your payment was verified and held for checkout.",
+      cartId: result.hold.cartId,
+      status: result.hold.status,
+    }));
+  }
   console.error(
     JSON.stringify({ event: "payment.hold_placed", holdId: result.hold.id, source: "webhook", replayed: result.replayed }),
   );
@@ -637,7 +687,7 @@ async function handleQueue(
     }
     try {
       if (result.data.type === "payment.dispatch-requested") {
-        await handleDispatchRequested(store, dispatcher, message, result.data, options.collections?.holds);
+        await handleDispatchRequested(store, dispatcher, message, result.data, options.collections?.holds, options.notify);
       } else {
         // payment.refund-requested — the refund rail against the run's hold.
         if (!options.collections) {
@@ -649,6 +699,7 @@ async function handleQueue(
           options.collections.gateway,
           message,
           result.data,
+          options.notify,
         );
       }
     } catch (error) {
@@ -737,6 +788,7 @@ export default {
         ...(integration.webhook !== undefined ? { webhook: integration.webhook } : {}),
         collections: { holds, refunds, gateway: integration.gateway ?? null },
         payouts: { accounts: payoutAccounts, gateway: integration.gateway ?? null },
+        notify: queuePaymentNotifications(env.NOTIFICATION_QUEUE),
       });
     } finally {
       await client.end();
@@ -753,6 +805,7 @@ export default {
           refunds: new DrizzleRefundStore(db),
           gateway: integration.gateway ?? null,
         },
+        notify: queuePaymentNotifications(env.NOTIFICATION_QUEUE),
       });
     } finally {
       await client.end();

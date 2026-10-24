@@ -241,6 +241,7 @@ export const SeedRunRequestSchema = z.object({
   /** Durable identities carried from checkout through to the archive records. */
   buyerId: z.string().min(1),
   runnerId: z.string().min(1),
+  sellerParticipantIds: z.array(z.string().min(1)).optional(),
 });
 export type SeedRunRequest = z.infer<typeof SeedRunRequestSchema>;
 

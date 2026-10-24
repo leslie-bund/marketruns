@@ -1,5 +1,10 @@
 import type { ServerEvent } from "@market-runs/proto";
+import { notificationSourceEnvelope } from "@market-runs/proto";
 import { serializeEvent } from "./wire.js";
+
+interface NotificationSinkEnv {
+  NOTIFICATION_QUEUE?: Queue;
+}
 
 /** Hibernated-WebSocket helpers: topic-filtered broadcast + inbound control messages. */
 
@@ -95,7 +100,11 @@ function socketTopics(socket: WebSocket): string[] {
  * subscribed to one of the event's topics. Topic-less sockets (legacy clients)
  * and topic-less events (unclassified types) both receive everything.
  */
-export function broadcast(ctx: DurableObjectState, event: ServerEvent): void {
+export function broadcast(ctx: DurableObjectState, event: ServerEvent): void;
+export function broadcast(ctx: DurableObjectState, env: NotificationSinkEnv | undefined, event: ServerEvent): void;
+export function broadcast(ctx: DurableObjectState, envOrEvent: NotificationSinkEnv | ServerEvent | undefined, maybeEvent?: ServerEvent): void {
+  const event = maybeEvent ?? envOrEvent as ServerEvent;
+  const env = maybeEvent === undefined ? undefined : envOrEvent as NotificationSinkEnv | undefined;
   const payload = serializeEvent(event);
   const topics = eventTopics(event);
   for (const socket of ctx.getWebSockets()) {
@@ -103,6 +112,14 @@ export function broadcast(ctx: DurableObjectState, event: ServerEvent): void {
     if (subscribed.length === 0 || topics.length === 0 || topics.some((topic) => subscribed.includes(topic))) {
       safeSend(socket, payload);
     }
+  }
+  // Queue acceptance is the durable handoff. Websockets above remain best effort;
+  // the notifications worker writes Postgres before attempting any delivery.
+  if (env?.NOTIFICATION_QUEUE) {
+    const envelope = notificationSourceEnvelope("edge", event);
+    ctx.waitUntil(env.NOTIFICATION_QUEUE.send(envelope).catch((error: unknown) => {
+      console.error(JSON.stringify({ event: "notification.source_send_failed", sourceEventId: envelope.sourceEventId, error: String(error) }));
+    }));
   }
 }
 

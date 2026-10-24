@@ -171,8 +171,12 @@ export class ProductDO extends DurableObject<Env> {
     if (expiresAt <= now) return this.retire({ reason: "expired" }, now);
     await this.ctx.storage.setAlarm(expiresAt);
 
-    const event: ServerEvent = { type: "product.offered", product };
-    broadcast(this.ctx, event);
+    const event: ServerEvent = {
+      type: "product.offered",
+      product,
+      ...(this.state.intentBuyerId ? { buyerId: this.state.intentBuyerId } : {}),
+    };
+    broadcast(this.ctx, this.env, event);
     return jsonResponse(event);
   }
 
@@ -201,8 +205,10 @@ export class ProductDO extends DurableObject<Env> {
       by: command.by,
       priceKobo: command.priceKobo,
       at: command.at,
+      ...(this.state.intentBuyerId ? { buyerId: this.state.intentBuyerId } : {}),
+      ...(product.sellerParticipantId ? { sellerParticipantId: product.sellerParticipantId } : {}),
     };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env, event);
     return jsonResponse(event);
   }
 
@@ -272,7 +278,7 @@ export class ProductDO extends DurableObject<Env> {
         ...(this.state.intentBuyerId !== undefined ? { buyerId: this.state.intentBuyerId } : {}),
         ...(requestId !== undefined ? { requestId } : {}),
       };
-      broadcast(this.ctx, event);
+      broadcast(this.ctx, this.env,event);
       await this.env.ARCHIVE_QUEUE.send(serializeEvent(event));
     }
     await this.ctx.storage.deleteAll();

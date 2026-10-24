@@ -10,4 +10,5 @@ export interface Env extends DatabaseEnv {
    * are validated there.
    */
   PAYMENT_DISPATCHER?: string;
+  NOTIFICATION_QUEUE?: Queue;
 }

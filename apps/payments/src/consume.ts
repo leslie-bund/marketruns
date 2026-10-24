@@ -2,6 +2,7 @@ import type { PaymentDispatcher } from "./dispatcher.js";
 import type { PaymentDispatchRequested } from "./messages.js";
 import type { HoldStore } from "./holds.js";
 import { dispatchRowWithReference, type DispatchRow, type DispatchStore } from "./store.js";
+import { paymentNotification, type PaymentNotificationSink } from "./notifications.js";
 
 /**
  * The payment-dispatch consumer core. Execution only (ADR-0007/0008): the
@@ -42,6 +43,7 @@ export async function handleDispatchRequested(
   message: QueueMessageLike,
   value: PaymentDispatchRequested,
   holds?: HoldStore,
+  notify?: PaymentNotificationSink,
 ): Promise<void> {
   let deepestAttempts = 0;
   let retryableFailure = false;
@@ -86,6 +88,18 @@ export async function handleDispatchRequested(
       memo: row.memo,
     });
     await store.recordResult(row.id, result);
+    if (notify && row.account !== "platform") {
+      await notify(paymentNotification({
+        sourceEventId: `payment.dispatch:${row.id}:${result.status}:${row.attempts + 1}`,
+        sourceEventType: "payment.dispatch-updated",
+        recipientId: row.partyId,
+        title: result.status === "failed" ? "Dispatch failed" : "Dispatch updated",
+        body: `Your ${row.account} dispatch is ${result.status}.`,
+        runId: row.runId,
+        deepLink: "/notifications",
+        status: result.status,
+      }));
+    }
     if (result.status === "failed") {
       blockingFailure = true;
       const retryable = result.retryable !== false;
@@ -122,7 +136,21 @@ export async function handleDispatchRequested(
   // state — release() never overwrites it.
   if (holds) {
     const hold = await holds.byRunId(value.runId);
-    if (hold) await holds.release(hold.id);
+    if (hold) {
+      await holds.release(hold.id);
+      if (notify && hold.status === "held") {
+        await notify(paymentNotification({
+          sourceEventId: `payment.hold-released:${hold.id}`,
+          sourceEventType: "payment.hold-released",
+          recipientId: hold.buyerId,
+          title: "Payment hold released",
+          body: "Your held payment was released for settlement dispatch.",
+          runId: value.runId,
+          cartId: hold.cartId,
+          status: "released",
+        }));
+      }
+    }
   }
   message.ack();
 }

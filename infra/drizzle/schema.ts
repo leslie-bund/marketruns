@@ -805,3 +805,60 @@ export const faceAuthAttempts = pgTable(
     ),
   ],
 );
+
+/* ------------------------------------------------------------------------ */
+/* Notifications: Postgres is authoritative; sockets are best-effort hints.  */
+/* ------------------------------------------------------------------------ */
+
+export const NOTIFICATION_CATEGORIES = ["marketplace", "payment", "security", "system"] as const;
+export const NOTIFICATION_CHANNELS = ["websocket", "email"] as const;
+export const NOTIFICATION_OUTBOX_STATUSES = ["pending", "delivered", "failed", "skipped"] as const;
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),
+    recipientId: text("recipient_id").notNull(),
+    sourceEventId: text("source_event_id").notNull(),
+    sourceEventType: text("source_event_type").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    category: text("category").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    deepLink: text("deep_link"),
+    data: jsonb("data").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("notifications_recipient_dedupe_unique").on(table.recipientId, table.dedupeKey),
+    index("notifications_recipient_created_idx").on(table.recipientId, table.createdAt),
+    index("notifications_recipient_read_idx").on(table.recipientId, table.readAt),
+    index("notifications_source_event_idx").on(table.sourceEventId),
+    check("notifications_category_valid", sql`${table.category} IN ('marketplace', 'payment', 'security', 'system')`),
+  ],
+);
+
+/** At-least-once delivery execution; one row per durable notification/channel. */
+export const notificationOutbox = pgTable(
+  "notification_outbox",
+  {
+    id: text("id").primaryKey(),
+    notificationId: text("notification_id").notNull().references(() => notifications.id),
+    channel: text("channel").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+    lastError: text("last_error"),
+    providerRef: text("provider_ref"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("notification_outbox_notification_channel_unique").on(table.notificationId, table.channel),
+    index("notification_outbox_delivery_idx").on(table.status, table.availableAt),
+    check("notification_outbox_channel_valid", sql`${table.channel} IN ('websocket', 'email')`),
+    check("notification_outbox_status_valid", sql`${table.status} IN ('pending', 'delivered', 'failed', 'skipped')`),
+    check("notification_outbox_attempts_nonnegative", sql`${table.attempts} >= 0`),
+  ],
+);

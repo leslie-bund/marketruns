@@ -1,6 +1,6 @@
 import { createDatabase } from "./db.js";
 import type { Env } from "./env.js";
-import { RequestIdSchema } from "@market-runs/proto";
+import { RequestIdSchema, notificationSourceEnvelope } from "@market-runs/proto";
 import {
   listAdminDisputes,
   listAdminLedger,
@@ -76,6 +76,10 @@ export default {
         for (const { message, value } of ordered) {
           try {
             await persistMessage(tx, value, env.ARCHIVE_BUCKET);
+            if (env.NOTIFICATION_QUEUE) {
+              // The original edge event id is retained so archive + realtime sinks dedupe.
+              await env.NOTIFICATION_QUEUE.send(notificationSourceEnvelope("edge", value));
+            }
             // One line per persisted message; requestId joins the row to the
             // originating request's trace when the emitter carried one.
             console.log(

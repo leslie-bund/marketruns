@@ -12,6 +12,8 @@ export const StoreSchema = z.object({
   market: z.string().min(1),
   name: z.string().min(1),
   exchangePoint: z.string().min(1),
+  /** Auth seam contract: the seller participant operating this store (added by participant-presence work). */
+  sellerParticipantId: z.string().min(1).optional(),
   /** The store's persistent catalog: what this store can supply. */
   shopItems: z.array(z.string().min(1)).min(1),
   joinedAt: TimestampSchema,

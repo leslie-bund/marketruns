@@ -35,6 +35,8 @@ export const ProductSchema = z.object({
   exchangePoint: z.string().min(1),
   expiresAt: TimestampSchema,
   status: ProductStatusSchema,
+  /** Seller participant resolved by the authenticated edge; store-only legacy offers omit it. */
+  sellerParticipantId: z.string().min(1).optional(),
   /** Camera-only capture at offer time; the signed R2 reference, never bytes. */
   photoCaptureRef: z.string().min(1).optional(),
 });
@@ -44,6 +46,8 @@ export type Product = z.infer<typeof ProductSchema>;
 export const ProductOfferedSchema = z.object({
   type: z.literal("product.offered"),
   product: ProductSchema,
+  /** Buyer resolved from the ProductDO's stored intent, never supplied as a notification target by clients. */
+  buyerId: z.string().min(1).optional(),
   /**
    * The negotiation thread so far (initial offer plus every adjustment).
    * Carried on the ProductDO read response so clients can render history;
@@ -71,5 +75,7 @@ export const NegotiationPriceAdjustedSchema = z.object({
   by: z.enum(["buyer", "seller"]),
   priceKobo: KoboSchema,
   at: TimestampSchema,
+  buyerId: z.string().min(1).optional(),
+  sellerParticipantId: z.string().min(1).optional(),
 });
 export type NegotiationPriceAdjusted = z.infer<typeof NegotiationPriceAdjustedSchema>;

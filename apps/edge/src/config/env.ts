@@ -17,12 +17,17 @@ export interface Env {
   ARCHIVE_QUEUE: Queue;
   /** Payment dispatch requests (payment.dispatch-requested) → apps/payments consumer. */
   PAYMENT_QUEUE: Queue;
+  /** Trusted lifecycle events → durable notifications worker. Optional in legacy unit-test envs. */
+  NOTIFICATION_QUEUE?: Queue;
   ARCHIVE_BUCKET: R2Bucket;
   MARKET_CONFIG: KVNamespace;
   /** Archive service base URL for the ops console reputation panel (dev: wrangler dev of apps/archive). */
   OPS_ARCHIVE_URL?: string;
   /** Payments service base URL for the ops console payments proxy (dev default: http://localhost:8790). */
   PAYMENTS_URL?: string;
+  /** Durable notification read API and participant realtime callback. */
+  NOTIFICATIONS_URL?: string;
+  NOTIFICATION_INTERNAL_TOKEN?: string;
   /**
    * Checkout payment gate: when truthy ("1"/"true"), checkout.requested must
    * carry `paymentRef` naming a payments-worker hold that covers the

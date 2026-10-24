@@ -9,6 +9,10 @@ queue = "archive-snapshots"
 max_batch_size = 10
 max_batch_timeout = 5
 
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "notification-events"
+
 [[r2_buckets]]
 binding = "ARCHIVE_BUCKET"
 bucket_name = "market-runs-archive"

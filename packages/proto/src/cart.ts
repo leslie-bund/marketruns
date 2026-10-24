@@ -19,6 +19,8 @@ export const CartSchema = z.object({
   acceptanceCount: z.number().int().nonnegative(),
   deadline: TimestampSchema,
   status: CartStatusSchema,
+  /** Edge-resolved cart owner; optional only for legacy anonymous carts. */
+  buyerId: z.string().min(1).optional(),
 });
 export type Cart = z.infer<typeof CartSchema>;
 
@@ -66,5 +68,7 @@ export const CheckoutAcceptedSchema = z.object({
   runId: z.string().min(1),
   floorRateKobo: KoboSchema,
   delivery: DeliverySchema,
+  buyerId: z.string().min(1).optional(),
+  runnerId: z.string().min(1).optional(),
 });
 export type CheckoutAccepted = z.infer<typeof CheckoutAcceptedSchema>;

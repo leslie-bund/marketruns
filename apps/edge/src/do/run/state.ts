@@ -33,6 +33,8 @@ export interface RunState {
   /** Durable identities carried to settlement.released and run.retired. */
   buyerId?: string;
   runnerId?: string;
+  /** Seller participants resolved from accepted products; legacy store-only runs omit it. */
+  sellerParticipantIds?: string[];
   handoffs: InternalHandoff[];
   finalDeliveryAt?: number;
   settlementReleased: boolean;

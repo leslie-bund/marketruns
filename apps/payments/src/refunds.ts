@@ -6,6 +6,7 @@ import type { createDatabase } from "./db.js";
 import type { ChargeGateway } from "./gateway.js";
 import { retryDelaySeconds, type QueueMessageLike } from "./consume.js";
 import type { HoldRow, HoldStore } from "./holds.js";
+import { paymentNotification, type PaymentNotificationSink } from "./notifications.js";
 
 /**
  * The refund rail (ADR-0023/0024 follow-up): buyer refunds release against
@@ -103,6 +104,7 @@ export async function handleRefundRequested(
   gateway: ChargeGateway | null,
   message: QueueMessageLike,
   value: PaymentRefundRequested,
+  notify?: PaymentNotificationSink,
 ): Promise<void> {
   const refundId = refundIdForSettlement(value.settlementRecordId);
 
@@ -149,8 +151,23 @@ export async function handleRefundRequested(
     await refunds.insertPending(row);
   }
 
+  const emit = async (status: string): Promise<void> => {
+    if (!notify) return;
+    await notify(paymentNotification({
+      sourceEventId: `payment.refund:${row.id}:${status}:${row.attempts + 1}`,
+      sourceEventType: "payment.refund-updated",
+      recipientId: value.buyerId,
+      title: status === "failed" ? "Refund failed" : "Refund updated",
+      body: `Your refund is ${status}.`,
+      runId: value.runId,
+      cartId: hold.cartId,
+      status,
+    }));
+  };
+
   const fail = async (failureReason: string, retry: boolean): Promise<void> => {
     await refunds.recordResult(row.id, { status: "failed", failureReason });
+    await emit("failed");
     console.error(
       JSON.stringify({
         event: "payment.refund_failed",
@@ -180,6 +197,7 @@ export async function handleRefundRequested(
       status: "refund-manual",
       failureReason: `no API refund rail for payment method "${hold.paymentMethod}"`,
     });
+    await emit("refund-manual");
     console.error(
       JSON.stringify({
         event: "payment.refund_manual",
@@ -202,6 +220,7 @@ export async function handleRefundRequested(
     providerRef: result.providerRef ?? null,
     failureReason: result.failureReason ?? null,
   });
+  await emit(result.status);
   if (result.status === "failed") {
     console.error(
       JSON.stringify({

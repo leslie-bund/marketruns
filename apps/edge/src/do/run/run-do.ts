@@ -166,9 +166,21 @@ export class RunDO extends DurableObject<Env> {
     if (!run) throw new Error("wireRun called before seed");
     return {
       ...run,
+      ...(this.state.buyerId ? { buyerId: this.state.buyerId } : {}),
+      ...(this.state.runnerId ? { runnerId: this.state.runnerId } : {}),
+      ...(this.state.sellerParticipantIds?.length ? { sellerParticipantIds: this.state.sellerParticipantIds } : {}),
       disputed: this.state.disputed,
       disputeRaisedByParticipantId: this.state.disputeRaisedByParticipantId ?? null,
       finalDeliveryAt: this.state.finalDeliveryAt ?? null,
+    };
+  }
+
+  /** Trusted recipient attribution attached to handoff events at the source. */
+  private participantAttribution(): Pick<Run, "buyerId" | "runnerId" | "sellerParticipantIds"> {
+    return {
+      ...(this.state.buyerId ? { buyerId: this.state.buyerId } : {}),
+      ...(this.state.runnerId ? { runnerId: this.state.runnerId } : {}),
+      ...(this.state.sellerParticipantIds?.length ? { sellerParticipantIds: this.state.sellerParticipantIds } : {}),
     };
   }
 
@@ -194,10 +206,11 @@ export class RunDO extends DurableObject<Env> {
     this.state.settlementConfig = data.settlement;
     this.state.buyerId = data.buyerId;
     this.state.runnerId = data.runnerId;
+    if (data.sellerParticipantIds !== undefined) this.state.sellerParticipantIds = data.sellerParticipantIds;
     if (requestId !== undefined) this.state.requestId = requestId;
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -237,9 +250,10 @@ export class RunDO extends DurableObject<Env> {
       counterparty: data.counterparty,
       requestedAt: now,
       deadline,
+      ...this.participantAttribution(),
     };
-    broadcast(this.ctx, event);
-    broadcast(this.ctx, { type: "run.updated", run: this.wireRun() });
+    broadcast(this.ctx, this.env,event);
+    broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
     return jsonResponse(event);
   }
 
@@ -272,7 +286,7 @@ export class RunDO extends DurableObject<Env> {
       run.handoffs = this.wireHandoffs();
       await this.ctx.storage.put(STATE_KEY, this.state);
       await this.scheduleAlarm();
-      broadcast(this.ctx, { type: "run.updated", run: this.wireRun() });
+      broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
       return refusal(
         "photo-required",
         "scan recorded, but a handoff cannot confirm without photo evidence — capture the photo to complete the handoff",
@@ -289,9 +303,10 @@ export class RunDO extends DurableObject<Env> {
       runId: run.id,
       confirmedAt,
       autoConfirmed: false,
+      ...this.participantAttribution(),
     };
-    broadcast(this.ctx, event);
-    broadcast(this.ctx, { type: "run.updated", run: this.wireRun() });
+    broadcast(this.ctx, this.env,event);
+    broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
     return jsonResponse(event);
   }
 
@@ -332,9 +347,10 @@ export class RunDO extends DurableObject<Env> {
       runId: run.id,
       confirmedAt,
       autoConfirmed: false,
+      ...this.participantAttribution(),
     };
-    broadcast(this.ctx, event);
-    broadcast(this.ctx, { type: "run.updated", run: this.wireRun() });
+    broadcast(this.ctx, this.env,event);
+    broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
     return jsonResponse(event);
   }
 
@@ -357,16 +373,17 @@ export class RunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
     if (confirms) {
-      broadcast(this.ctx, {
+      broadcast(this.ctx, this.env,{
         type: "handoff.confirmed",
         handoffId: handoff.id,
         runId: run.id,
         confirmedAt: handoff.confirmedAt ?? this.now(),
         autoConfirmed: false,
+      ...this.participantAttribution(),
       });
     }
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -384,7 +401,7 @@ export class RunDO extends DurableObject<Env> {
     };
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -415,7 +432,7 @@ export class RunDO extends DurableObject<Env> {
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
   }
 
@@ -440,7 +457,7 @@ export class RunDO extends DurableObject<Env> {
     this.state.disputeEvidenceRefs = [...refs];
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, event);
+    broadcast(this.ctx, this.env,event);
     return jsonResponse({
       disputed: true,
       reason: data.reason,
@@ -563,17 +580,18 @@ export class RunDO extends DurableObject<Env> {
       }
       this.confirmHandoff(handoff, true, deadline);
       handoffsChanged = true;
-      broadcast(this.ctx, {
+      broadcast(this.ctx, this.env,{
         type: "handoff.confirmed",
         handoffId: handoff.id,
         runId: run.id,
         confirmedAt: deadline,
         autoConfirmed: true,
+        ...this.participantAttribution(),
       });
     }
     if (handoffsChanged) {
       run.handoffs = this.wireHandoffs();
-      broadcast(this.ctx, { type: "run.updated", run: this.wireRun() });
+      broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
     }
 
     // Dispute window lapsed with no dispute: run the settlement function with
@@ -660,8 +678,8 @@ export class RunDO extends DurableObject<Env> {
         : {}),
       ...(this.state.requestId !== undefined ? { requestId: this.state.requestId } : {}),
     };
-    broadcast(this.ctx, released);
-    broadcast(this.ctx, retirementSnapshot);
+    broadcast(this.ctx, this.env,released);
+    broadcast(this.ctx, this.env,retirementSnapshot);
     // Archive order matters: run.retired first so the settlement_records
     // foreign key to runs_archive is satisfied within the same batch.
     await this.env.ARCHIVE_QUEUE.sendBatch([

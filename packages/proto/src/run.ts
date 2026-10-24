@@ -86,6 +86,10 @@ export const RunSchema = z.object({
   delivery: DeliverySchema,
   stops: z.array(RunStopSchema),
   handoffs: z.array(RunHandoffSchema),
+  /** Trusted participant attribution used by the notification pipeline; absent on legacy reads. */
+  buyerId: z.string().min(1).optional(),
+  runnerId: z.string().min(1).optional(),
+  sellerParticipantIds: z.array(z.string().min(1)).optional(),
   location: GeoLocationSchema.optional(),
   /** Whole-trip routed path, computed at checkout and cached here (routing is called at checkout, cached in the RunDO). */
   route: RunRouteSchema.optional(),
@@ -155,6 +159,9 @@ export const HandoffInitiatedSchema = z.object({
   counterparty: z.string().min(1),
   requestedAt: TimestampSchema,
   deadline: TimestampSchema,
+  buyerId: z.string().min(1).optional(),
+  runnerId: z.string().min(1).optional(),
+  sellerParticipantIds: z.array(z.string().min(1)).optional(),
 });
 export type HandoffInitiated = z.infer<typeof HandoffInitiatedSchema>;
 
@@ -188,5 +195,8 @@ export const HandoffConfirmedSchema = z.object({
   runId: z.string().min(1),
   confirmedAt: TimestampSchema,
   autoConfirmed: z.boolean(),
+  buyerId: z.string().min(1).optional(),
+  runnerId: z.string().min(1).optional(),
+  sellerParticipantIds: z.array(z.string().min(1)).optional(),
 });
 export type HandoffConfirmed = z.infer<typeof HandoffConfirmedSchema>;
