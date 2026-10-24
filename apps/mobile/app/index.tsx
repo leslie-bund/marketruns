@@ -112,7 +112,7 @@ export default function Launch() {
       {participant && session ? <Pill active>✓ SIGNED IN</Pill> : null}
 
       {participant && session ? (
-        <Pressable onPress={() => router.push("/notifications")}>
+        <Pressable onPress={() => router.push("/notifications" as never)}>
           <Card>
             <View style={s.row}>
               <View style={{ flex: 1 }}>

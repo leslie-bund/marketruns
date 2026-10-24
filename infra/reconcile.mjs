@@ -549,7 +549,20 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
       continue;
     }
     const localReference = d.provider_reference ?? d.idempotency_key;
-    const transfer = transferByReference.get(localReference);
+    let transfer = transferByReference.get(localReference);
+    if (!transfer) {
+      // List endpoints can be eventually consistent or paginated differently
+      // from creation. A persisted provider id is the stronger lookup: verify
+      // it directly before declaring that the provider never saw the money.
+      try {
+        const body = await get(`/v3/transfers/${encodeURIComponent(ref.slice(4))}`);
+        if (body.data && bareReference(String(body.data.reference ?? "")) === localReference) transfer = body.data;
+      } catch (error) {
+        warn(check, "payment_dispatches", d.id, { providerRef: ref },
+          `direct provider lookup was inconclusive: ${String(error.message ?? error)}`);
+        continue;
+      }
+    }
     if (!transfer) {
       fail(check, "payment_dispatches", d.id, {
         amountKobo: kobo(d.amount_kobo),

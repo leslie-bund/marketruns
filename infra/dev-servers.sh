@@ -52,11 +52,19 @@ if [ -n "${OPS_TOKEN:-}" ]; then
     --var OPS_TOKEN:"${OPS_TOKEN}" \
     --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
     --var ALLOW_HEADER_AUTH:true \
+    --var OPS_LEGACY_DEV:true \
+    --var OPS_LOCAL_DEV:true \
+    --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
+    --var NOTIFICATION_INTERNAL_TOKEN:"${NOTIFICATION_INTERNAL_TOKEN:-market-runs-dev-notification-internal}" \
     > .dev-logs/edge.log 2>&1 &
 else
   nohup npx wrangler dev --config infra/wrangler.edge.toml --port 8787 \
     --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
     --var ALLOW_HEADER_AUTH:true \
+    --var OPS_LEGACY_DEV:true \
+    --var OPS_LOCAL_DEV:true \
+    --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
+    --var NOTIFICATION_INTERNAL_TOKEN:"${NOTIFICATION_INTERNAL_TOKEN:-market-runs-dev-notification-internal}" \
     > .dev-logs/edge.log 2>&1 &
 fi
 echo $! >> "$PIDFILE"
@@ -84,6 +92,8 @@ echo "identity ready"
 wait_port_free 8790
 nohup npx wrangler dev --config infra/wrangler.payments.toml --port 8790 \
   --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+  --var ALLOW_HEADER_AUTH:true \
+  --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
   > .dev-logs/payments.log 2>&1 &
 echo $! >> "$PIDFILE"
 wait_http http://localhost:8790 || exit 1
@@ -92,6 +102,7 @@ echo "payments ready"
 wait_port_free 8791
 nohup npx wrangler dev --config infra/wrangler.notifications.toml --port 8791 \
   --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+  --var NOTIFICATION_INTERNAL_TOKEN:"${NOTIFICATION_INTERNAL_TOKEN:-market-runs-dev-notification-internal}" \
   > .dev-logs/notifications.log 2>&1 &
 echo $! >> "$PIDFILE"
 wait_http http://localhost:8791 || exit 1

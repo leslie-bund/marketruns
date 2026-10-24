@@ -10,7 +10,8 @@
     "dev:all": "bash infra/dev-all.sh",
     "dev:stop": "bash infra/dev-servers.sh --stop",
     "test": "pnpm --filter @market-runs/domain test && pnpm --filter @market-runs/proto test",
-    "test:e2e": "node infra/e2e-session.mjs"
+    "test:e2e": "node infra/e2e-session.mjs",
+    "test:stack": "node infra/rehearse-stack.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
