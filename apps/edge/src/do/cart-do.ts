@@ -259,8 +259,10 @@ export class CartDO extends DurableObject<Env> {
     // falls back to the market's static floor-rate inputs — checkout never
     // blocks on the routing service.
     const geography = this.resolveGeography(stopOrder, command, config);
-    const trip =
-      geography && this.env.OSRM_BASE_URL ? await routeTrip(this.env.OSRM_BASE_URL, geography.waypoints) : null;
+    if (!geography && this.env.ALLOW_HEADER_AUTH !== "true") {
+      return refusal("location-unresolved", "Checkout geography is unresolved. Ops must configure the market center, every exchange point, and this buyer destination; the market center is never a fallback.");
+    }
+    const trip = geography && this.env.OSRM_BASE_URL ? await routeTrip(this.env.OSRM_BASE_URL, geography.waypoints) : null;
 
     // MVP: internal runners at the floor rate only (ADR-0013).
     const floorRateKobo = floorRate({
@@ -326,16 +328,12 @@ export class CartDO extends DurableObject<Env> {
       delivery: command.delivery,
       stops,
       handoffs: [],
-      ...(trip
-        ? {
-            route: {
-              distanceMeters: trip.distanceMeters,
-              durationSeconds: trip.durationSeconds,
-              geometry: trip.geometry,
-              ...(geography ? { destination: geography.deliveryLocation } : {}),
-            },
-          }
-        : {}),
+      route: {
+        distanceMeters: trip?.distanceMeters ?? config.floorRate.distanceMeters,
+        durationSeconds: trip?.durationSeconds ?? config.floorRate.estimatedDurationMs / 1000,
+        ...(trip?.geometry ? { geometry: trip.geometry } : {}),
+        ...(geography ? { destination: geography.deliveryLocation } : {}),
+      },
     };
 
     // Production runs wait for an atomic pool claim. The explicit header-auth
@@ -529,9 +527,8 @@ export class CartDO extends DurableObject<Env> {
 
   /**
    * Resolve the trip's geography from the market config: runner start (market
-   * center) → seller stops in order → delivery. Stops and the delivery always
-   * resolve to the center as a last resort so the map and routing degrade,
-   * never fail. Returns null when the market has no geo table at all.
+   * center) → seller stops in order → delivery. Unknown names/codes fail closed:
+   * the center is a short-Plus-Code reference, never an enforcement fallback.
    */
   private resolveGeography(
     stopOrder: Array<{ sellerName: string; exchangePoint: string }>,
@@ -546,18 +543,17 @@ export class CartDO extends DurableObject<Env> {
       points.find((point) => point.name === name) ??
       points.find((point) => point.name.toLowerCase() === name.toLowerCase());
 
-    const stopLocations = stopOrder.map((stop) => findPoint(geo.exchangePoints, stop.exchangePoint) ?? center);
+    const stopLocations = stopOrder.map((stop) => findPoint(geo.exchangePoints, stop.exchangePoint));
+    if (stopLocations.some((point) => point === undefined)) return null;
 
-    let deliveryLocation: GeoPointValue;
-    if (command.delivery.kind === "muster-point") {
-      deliveryLocation = findPoint(geo.musterPoints, command.delivery.name) ?? center;
-    } else {
-      deliveryLocation = plusCodeToLocation(command.delivery.plusCode, center) ?? center;
-    }
+    const deliveryLocation = command.delivery.kind === "muster-point"
+      ? findPoint(geo.musterPoints, command.delivery.name)
+      : plusCodeToLocation(command.delivery.plusCode, center);
+    if (!deliveryLocation) return null;
 
     return {
-      waypoints: [center, ...stopLocations, deliveryLocation],
-      stopLocations,
+      waypoints: [center, ...stopLocations as GeoPointValue[], deliveryLocation],
+      stopLocations: stopLocations as GeoPointValue[],
       deliveryLocation,
     };
   }

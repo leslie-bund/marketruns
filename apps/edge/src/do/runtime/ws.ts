@@ -1,5 +1,5 @@
-import type { ServerEvent } from "@market-runs/proto";
-import { PRESENCE_TTL_MS, notificationSourceEnvelope } from "@market-runs/proto";
+import type { LocationFix, ServerEvent } from "@market-runs/proto";
+import { LocationFixSchema, PRESENCE_TTL_MS, notificationSourceEnvelope } from "@market-runs/proto";
 import { serializeEvent } from "./wire.js";
 
 interface NotificationSinkEnv {
@@ -112,6 +112,7 @@ interface WsControlMessage {
   type?: unknown;
   topics?: unknown;
   foreground?: unknown;
+  location?: unknown;
 }
 
 export interface PresenceHeartbeat {
@@ -119,13 +120,16 @@ export interface PresenceHeartbeat {
   participantId: string;
   storeId: string;
   lastSeenAt: number;
+  location?: LocationFix;
 }
+
+export interface PresenceRejection { code: string; message: string }
 
 /** Subscribe preserves identity attachments; only explicit foreground heartbeats refresh presence. */
 export async function handleWebSocketMessage(
   socket: WebSocket,
   message: string | ArrayBuffer,
-  onHeartbeat?: (heartbeat: PresenceHeartbeat) => Promise<void>,
+  onHeartbeat?: (heartbeat: PresenceHeartbeat, demoBypass: boolean) => Promise<PresenceRejection | null>,
 ): Promise<void> {
   if (typeof message !== "string") return;
   let data: WsControlMessage;
@@ -149,8 +153,18 @@ export async function handleWebSocketMessage(
     socket.serializeAttachment({ ...current, lastForegroundAt: now });
     if (onHeartbeat && current.role === "seller" && current.marketId && current.storeId &&
         (current.source === "session" || current.source === "header")) {
-      await onHeartbeat({ marketId: current.marketId, participantId: current.participantId, storeId: current.storeId, lastSeenAt: now });
-      safeSend(socket, JSON.stringify({ type: "presence", onlineUntil: now + PRESENCE_TTL_MS }));
+      const parsed = LocationFixSchema.safeParse(data.location);
+      const demoBypass = current.source === "header";
+      if (!parsed.success && !demoBypass) {
+        safeSend(socket, JSON.stringify({ type: "presence", online: false, code: "location-required", message: "Share a current GPS location to appear online." }));
+        return;
+      }
+      const rejection = await onHeartbeat({
+        marketId: current.marketId, participantId: current.participantId, storeId: current.storeId, lastSeenAt: now,
+        ...(parsed.success ? { location: parsed.data } : {}),
+      }, demoBypass);
+      if (rejection) safeSend(socket, JSON.stringify({ type: "presence", online: false, ...rejection }));
+      else safeSend(socket, JSON.stringify({ type: "presence", online: true, onlineUntil: now + PRESENCE_TTL_MS }));
     } else {
       safeSend(socket, JSON.stringify({ type: "pong" }));
     }

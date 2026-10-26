@@ -25,22 +25,35 @@ export class PostgresCoreRegistry implements CoreRegistry {
     return this.withSql(async (sql) => {
       const rows = await sql`
         SELECT m.id, m.name, m.opens_at::text AS "opensAt", m.closes_at::text AS "closesAt",
+          m.center_latitude AS "centerLatitude", m.center_longitude AS "centerLongitude",
+          m.geofence_radius_meters AS "radiusMeters",
           COUNT(DISTINCT p.participant_id)::int AS "onlineSellers"
         FROM markets m
-        LEFT JOIN seller_presence p ON p.market_id = m.id AND p.last_seen_at > ${new Date(now - PRESENCE_TTL_MS)}
-        GROUP BY m.id, m.name, m.opens_at, m.closes_at
+        LEFT JOIN seller_presence p ON p.market_id = m.id
+          AND p.last_seen_at > ${new Date(now - PRESENCE_TTL_MS)}
+          AND p.location_observed_at > ${new Date(now - 60_000)}
+        GROUP BY m.id, m.name, m.opens_at, m.closes_at, m.center_latitude, m.center_longitude, m.geofence_radius_meters
         ORDER BY m.name`;
-      return rows as unknown as Array<MarketRecord & { onlineSellers: number }>;
+      return rows.map((row) => ({
+        id: String(row.id), name: String(row.name), opensAt: String(row.opensAt), closesAt: String(row.closesAt),
+        onlineSellers: Number(row.onlineSellers),
+        ...(row.centerLatitude !== null && row.centerLongitude !== null ? {
+          geofence: { center: { latitude: Number(row.centerLatitude), longitude: Number(row.centerLongitude) }, radiusMeters: Number(row.radiusMeters) },
+        } : {}),
+      }));
     });
   }
 
   async upsertMarket(market: MarketRecord) {
     return this.withSql(async (sql) => {
       await sql`
-        INSERT INTO markets (id, name, opens_at, closes_at)
-        VALUES (${market.id}, ${market.name}, ${market.opensAt}, ${market.closesAt})
+        INSERT INTO markets (id, name, opens_at, closes_at, center_latitude, center_longitude, geofence_radius_meters)
+        VALUES (${market.id}, ${market.name}, ${market.opensAt}, ${market.closesAt},
+          ${market.geofence?.center.latitude ?? null}, ${market.geofence?.center.longitude ?? null}, ${market.geofence?.radiusMeters ?? 750})
         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, opens_at = EXCLUDED.opens_at,
-          closes_at = EXCLUDED.closes_at, updated_at = now()`;
+          closes_at = EXCLUDED.closes_at, center_latitude = EXCLUDED.center_latitude,
+          center_longitude = EXCLUDED.center_longitude, geofence_radius_meters = EXCLUDED.geofence_radius_meters,
+          updated_at = now()`;
     });
   }
 
@@ -145,9 +158,18 @@ export class PostgresCoreRegistry implements CoreRegistry {
   async heartbeat(presence: PresenceRecord) {
     return this.withSql(async (sql) => {
       await sql`
-        INSERT INTO seller_presence (market_id, participant_id, store_id, last_seen_at)
-        VALUES (${presence.marketId}, ${presence.participantId}, ${presence.storeId}, ${new Date(presence.lastSeenAt)})
-        ON CONFLICT (market_id, participant_id) DO UPDATE SET store_id = EXCLUDED.store_id, last_seen_at = EXCLUDED.last_seen_at`;
+        INSERT INTO seller_presence (market_id, participant_id, store_id, last_seen_at, latitude, longitude, accuracy_meters, location_observed_at)
+        VALUES (${presence.marketId}, ${presence.participantId}, ${presence.storeId}, ${new Date(presence.lastSeenAt)},
+          ${presence.location.latitude}, ${presence.location.longitude}, ${presence.location.accuracyMeters}, ${new Date(presence.location.observedAt)})
+        ON CONFLICT (market_id, participant_id) DO UPDATE SET store_id = EXCLUDED.store_id, last_seen_at = EXCLUDED.last_seen_at,
+          latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude, accuracy_meters = EXCLUDED.accuracy_meters,
+          location_observed_at = EXCLUDED.location_observed_at`;
+    });
+  }
+
+  async removePresence(marketId: string, participantId: string, storeId: string) {
+    return this.withSql(async (sql) => {
+      await sql`DELETE FROM seller_presence WHERE market_id = ${marketId} AND participant_id = ${participantId} AND store_id = ${storeId}`;
     });
   }
 }

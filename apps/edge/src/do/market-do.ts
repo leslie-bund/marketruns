@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { TelemetryReporter } from "./telemetry.js";
-import { INTENT_TTL_MS, marketCloseGateOk } from "@market-runs/domain";
+import { INTENT_TTL_MS, marketCloseGateOk, validateLocationWithinFence } from "@market-runs/domain";
 import type { DiscoveryResponse, Intent, IntentPosted, MarketJoined, Product, ServerEvent, Store, StoreRegistered } from "@market-runs/proto";
 import { ProductOfferedSchema } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
@@ -21,7 +21,7 @@ import {
 } from "./runtime/index.js";
 import { fetchInternal } from "./transport.js";
 import { STATE_KEY } from "./state.js";
-import { coreRegistry } from "../registry/index.js";
+import { coreRegistry, headerAuthAllowed } from "../registry/index.js";
 import {
   IntentProductRequestSchema,
   MARKET_OPEN_WINDOW_MS,
@@ -483,7 +483,17 @@ export class MarketDO extends DurableObject<Env> {
         }
       }
       if (!this.state.config) {
-        this.state.config = defaultMarketConfig(this.now());
+        const registered = marketId
+          ? (await coreRegistry(this.env).listMarkets().catch(() => [])).find((market) => market.id.toLowerCase() === marketId.toLowerCase())
+          : undefined;
+        if (registered?.geofence) {
+          this.state.config = defaultMarketConfig(this.now(), registered.geofence.center);
+          this.state.config.geo!.radiusMeters = registered.geofence.radiusMeters;
+        } else {
+          this.state.config = defaultMarketConfig(this.now());
+          // Production never invents an enforcement center for an unknown market.
+          if (!headerAuthAllowed(this.env)) delete this.state.config.geo;
+        }
         await this.ctx.storage.put(STATE_KEY, this.state);
       }
     }
@@ -542,16 +552,29 @@ export class MarketDO extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    await handleWebSocketMessage(ws, message, async (heartbeat) => {
+    await handleWebSocketMessage(ws, message, async (heartbeat, demoBypass) => {
       const store = await coreRegistry(this.env).store(heartbeat.storeId);
-      if (store?.sellerParticipantId === heartbeat.participantId && store.market === heartbeat.marketId) {
-        await coreRegistry(this.env).heartbeat(heartbeat);
+      if (store?.sellerParticipantId !== heartbeat.participantId || store.market !== heartbeat.marketId) {
+        return { code: "forbidden", message: "The connected seller does not own this store in the market." };
       }
+      this.state.marketId ??= heartbeat.marketId;
+      const config = await this.config();
+      const fence = config.geo ? { center: config.geo.center, radiusMeters: config.geo.radiusMeters } : undefined;
+      // Explicit header-auth demo only: retain the old synthetic center fix when no GPS exists.
+      const location = heartbeat.location ?? (demoBypass && fence ? { ...fence.center, accuracyMeters: 0, observedAt: heartbeat.lastSeenAt } : undefined);
+      const checked = validateLocationWithinFence(location, fence, this.now());
+      if (!checked.ok) return { code: checked.code, message: checked.message };
+      await coreRegistry(this.env).heartbeat({ ...heartbeat, location: location! });
+      return null;
     });
     this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.marketId, true);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    const attachment = ws.deserializeAttachment() as { marketId?: string; participantId?: string; storeId?: string; role?: string } | null;
+    if (attachment?.role === "seller" && attachment.marketId && attachment.participantId && attachment.storeId) {
+      await coreRegistry(this.env).removePresence(attachment.marketId, attachment.participantId, attachment.storeId).catch(() => undefined);
+    }
     handleWebSocketClose(ws, code, reason);
     this.telemetry.beat(this.env, this.ctx.id.name ?? "unknown", this.state.marketId, true);
   }

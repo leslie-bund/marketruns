@@ -6,3 +6,4 @@ export * from "./ops-health.js";
 export * from "./plus-code.js";
 export * from "./face-match.js";
 export * from "./session-token.js";
+export * from "./geofence.js";

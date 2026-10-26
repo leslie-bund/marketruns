@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { router } from "expo-router";
 import { Alert, Text } from "react-native";
-import { buyerIdForRun, claimRun, finalDelivery, initiateHandoff, locationTick, identities, newId } from "../../src/api";
+import { buyerIdForRun, claimRun, finalDelivery, getDeviceLocationFix, initiateHandoff, locationTick, identities, newId } from "../../src/api";
 import { canRunnerMutate, HandoffList, RunMap, StopList, TripSummaryCard, useRunnerLocationStream, useRunnerPool } from "../../src/features/run";
 import { useActiveMarket, useActiveParticipant } from "../../src/api";
 import { Button, Card, Page, Pill, Section, s } from "../../src/ui";
@@ -40,7 +40,8 @@ export default function RunnerHome() {
             <Button
               title={busy ? "Claiming…" : "Claim this Run"}
               onPress={act(async () => {
-                await claimRun(entry.runId);
+                const location = await getDeviceLocationFix();
+                await claimRun(entry.runId, location);
                 run.selectRun(entry.runId);
               }, "Could not claim Run")}
             />

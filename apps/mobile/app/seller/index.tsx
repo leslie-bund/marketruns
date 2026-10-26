@@ -34,7 +34,7 @@ export default function SellerHome() {
         <Pill active>STORE ACTIVE · {(store?.exchangePoint ?? "").toUpperCase()}</Pill>
         <Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Fresh demand is nearby.</Text>
         <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
-          {intents.error ? `Edge: ${intents.error}` : `Intents matching your ${store?.shopItems.length ?? 0} shop item(s).`}
+          {intents.presenceError ? `Offline: ${intents.presenceError}` : intents.error ? `Edge: ${intents.error}` : `Online with fresh GPS · intents matching your ${store?.shopItems.length ?? 0} shop item(s).`}
         </Text>
       </Card>
 

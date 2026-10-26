@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { TelemetryReporter } from "../telemetry.js";
-import { DISPUTE_WINDOW_MS, HANDOFF_AUTO_CONFIRM_MS, settle } from "@market-runs/domain";
-import type { SettlementInput } from "@market-runs/domain";
+import { DISPUTE_WINDOW_MS, HANDOFF_AUTO_CONFIRM_MS, settle, validateLocationWithinFence } from "@market-runs/domain";
+import type { GeoFence, LocationFix, SettlementInput } from "@market-runs/domain";
 import { buildSettlementInput } from "./settlement.js";
 import { buildPaymentDispatchRequest, buildPaymentRefundRequest } from "./payment-dispatch.js";
 import type { InternalHandoff, RunState } from "./state.js";
@@ -46,6 +46,7 @@ import {
   DisputeRunRequestSchema,
   HandoffRefRequestSchema,
   InitiateHandoffRequestSchema,
+  MarketConfigSchema,
   OpsSettleRequestSchema,
   SeedRunRequestSchema,
 } from "../schemas.js";
@@ -85,12 +86,13 @@ export class RunDO extends DurableObject<Env> {
       if (!parsed.ok) return parsed.response;
       return internalErrorGuard(() => this.seed(parsed.data, request.headers.get("x-request-id") ?? undefined));
     }
+    const enforceLocation = request.headers.get("x-resolved-participant-source") === "session";
     if (request.method === "POST" && path === "/claim") {
       const parsed = await parseInternal(request, ClaimRunRequestSchema);
       if (!parsed.ok) return parsed.response;
-      return internalErrorGuard(() => this.claim(parsed.data));
+      return internalErrorGuard(() => this.claim(parsed.data, enforceLocation));
     }
-    if (request.method === "POST" && request.headers.get("x-resolved-participant-source") === "session" &&
+    if (request.method === "POST" && enforceLocation &&
         (path.startsWith("/handoff/") || path === "/location" || path === "/delivery/final")) {
       if (this.state.runnerId !== request.headers.get("x-resolved-participant-id")) {
         return conflict("only the runner who claimed this run may mutate it");
@@ -105,18 +107,18 @@ export class RunDO extends DurableObject<Env> {
       const parsed = await parseClientCommand(request);
       const command = expectCommand(parsed, "handoff.challenge-scanned");
       if (command instanceof Response) return command;
-      return internalErrorGuard(() => this.scan(command));
+      return internalErrorGuard(() => this.scan(command, enforceLocation));
     }
     if (request.method === "POST" && path === "/handoff/confirm") {
       const parsed = await parseInternal(request, HandoffRefRequestSchema);
       if (!parsed.ok) return parsed.response;
-      return internalErrorGuard(() => this.confirm(parsed.data));
+      return internalErrorGuard(() => this.confirm(parsed.data, enforceLocation));
     }
     if (request.method === "POST" && path === "/handoff/photo") {
       const parsed = await parseClientCommand(request);
       const command = expectCommand(parsed, "handoff.photo-captured");
       if (command instanceof Response) return command;
-      return internalErrorGuard(() => this.photo(command));
+      return internalErrorGuard(() => this.photo(command, enforceLocation));
     }
     if (request.method === "POST" && path === "/location") {
       const parsed = await parseClientCommand(request);
@@ -125,7 +127,7 @@ export class RunDO extends DurableObject<Env> {
       return internalErrorGuard(() => this.location(command));
     }
     if (request.method === "POST" && path === "/delivery/final") {
-      return internalErrorGuard(() => this.finalDelivery());
+      return internalErrorGuard(() => this.finalDelivery(enforceLocation));
     }
     if (request.method === "POST" && path === "/dispute") {
       const parsed = await parseInternal(request, DisputeRunRequestSchema);
@@ -236,12 +238,15 @@ export class RunDO extends DurableObject<Env> {
   }
 
   /** Single-threaded DO transition: exactly one pool runner can claim an unassigned run. */
-  private async claim(data: ClaimRunRequest): Promise<Response> {
+  private async claim(data: ClaimRunRequest, enforceLocation: boolean): Promise<Response> {
     const run = this.requireRun();
     if (run instanceof Response) return run;
     if (this.state.runnerId && this.state.runnerId !== data.participantId) return conflict("run was already claimed by another runner");
     if (!this.state.runnerId && run.status !== "unassigned") return conflict(`run is ${run.status} and cannot be claimed`);
+    if (enforceLocation && !data.location) return refusal("location-required", "Share a current in-perimeter GPS fix before claiming this run.");
     this.state.runnerId = data.participantId;
+    this.state.locationRequired = enforceLocation;
+    if (data.location) run.location = data.location;
     run.status = "assigned";
     await this.ctx.storage.put(STATE_KEY, this.state);
     const started: ServerEvent = {
@@ -306,12 +311,40 @@ export class RunDO extends DurableObject<Env> {
   }
 
   /**
+   * Narrow geofence seam for the handoff/receiver integration: seller pickup
+   * targets the checkout-resolved stop; final delivery targets route.destination
+   * (the buyer destination), never the market center. The receiver branch keeps
+   * owning route.destination; this helper only consumes it.
+   */
+  private async validateActionLocation(handoff?: InternalHandoff, final = false): Promise<Response | null> {
+    const run = this.state.run;
+    if (!run) return notFound("run is unknown or retired");
+    const target = final
+      ? run.route?.destination
+      : run.stops.find((stop) => stop.exchangePoint === handoff?.exchangePointId)?.location;
+    let radiusMeters: number | undefined;
+    try {
+      const stub = this.env.MARKET_DO.get(this.env.MARKET_DO.idFromName(run.market));
+      const response = await stub.fetch(new Request("http://do/config"));
+      const config = MarketConfigSchema.safeParse(await response.json());
+      if (response.ok && config.success) radiusMeters = config.data.geo?.radiusMeters;
+    } catch { /* unresolved below; enforcement fails closed */ }
+    const stored = run.location;
+    const fix: LocationFix | undefined = stored?.accuracyMeters === undefined ? undefined : {
+      latitude: stored.latitude, longitude: stored.longitude, observedAt: stored.observedAt, accuracyMeters: stored.accuracyMeters,
+    };
+    const fence: GeoFence | undefined = target && radiusMeters ? { center: target, radiusMeters } : undefined;
+    const checked = validateLocationWithinFence(fix, fence, this.now());
+    return checked.ok ? null : refusal(checked.code, checked.message);
+  }
+
+  /**
    * The one-time challenge was scanned. Photo-required confirm (owner decision
    * amending ADR-0019): the scan records `scannedAt` but does NOT confirm —
    * a handoff confirms only once photo evidence is attached. Photoless scans
    * are persisted (the scan happened) and answered 409 `photo-required`.
    */
-  private async scan(command: HandoffChallengeScanned): Promise<Response> {
+  private async scan(command: HandoffChallengeScanned, enforceLocation: boolean): Promise<Response> {
     const handoff = this.findHandoff(command.handoffId);
     if (handoff instanceof Response) return handoff;
     const run = this.state.run;
@@ -340,6 +373,10 @@ export class RunDO extends DurableObject<Env> {
         "scan recorded, but a handoff cannot confirm without photo evidence — capture the photo to complete the handoff",
       );
     }
+    if (enforceLocation) {
+      const refused = await this.validateActionLocation(handoff);
+      if (refused) return refused;
+    }
     const confirmedAt = this.now();
     this.confirmHandoff(handoff, false, confirmedAt);
     run.handoffs = this.wireHandoffs();
@@ -363,7 +400,7 @@ export class RunDO extends DurableObject<Env> {
    * confirming twice is a no-op replay. Photo-required like every confirm path:
    * without `photoCaptureRef` this stalls with 409 `photo-required`.
    */
-  private async confirm(data: HandoffRefRequest): Promise<Response> {
+  private async confirm(data: HandoffRefRequest, enforceLocation: boolean): Promise<Response> {
     const handoff = this.findHandoff(data.handoffId);
     if (handoff instanceof Response) return handoff;
     const run = this.state.run;
@@ -383,6 +420,10 @@ export class RunDO extends DurableObject<Env> {
         "photo-required",
         "a handoff cannot confirm without photo evidence — the runner's photo is the confirm act",
       );
+    }
+    if (enforceLocation) {
+      const refused = await this.validateActionLocation(handoff);
+      if (refused) return refused;
     }
     const confirmedAt = this.now();
     this.confirmHandoff(handoff, false, confirmedAt);
@@ -408,14 +449,18 @@ export class RunDO extends DurableObject<Env> {
    * a scanned-but-unconfirmed handoff confirms it. A photo landing before the
    * scan just attaches — the scan confirms it when it arrives.
    */
-  private async photo(command: HandoffPhotoCaptured): Promise<Response> {
+  private async photo(command: HandoffPhotoCaptured, enforceLocation: boolean): Promise<Response> {
     const run = this.requireRun();
     if (run instanceof Response) return run;
     const handoff = this.findHandoff(command.handoffId);
     if (handoff instanceof Response) return handoff;
+    const confirms = handoff.status === "pending" && handoff.scannedAt !== undefined;
+    if (confirms && enforceLocation) {
+      const refused = await this.validateActionLocation(handoff);
+      if (refused) return refused;
+    }
     handoff.photoCaptureRef = command.photoCaptureRef;
     handoff.photoCapturedAt = command.capturedAt;
-    const confirms = handoff.status === "pending" && handoff.scannedAt !== undefined;
     if (confirms) this.confirmHandoff(handoff, false, this.now());
     run.handoffs = this.wireHandoffs();
     await this.ctx.storage.put(STATE_KEY, this.state);
@@ -442,10 +487,14 @@ export class RunDO extends DurableObject<Env> {
     if (command.runId !== run.id) {
       return conflict(`location update addresses run ${command.runId}, not this run`);
     }
+    if (this.env.ALLOW_HEADER_AUTH !== "true" && (command.observedAt === undefined || command.accuracyMeters === undefined)) {
+      return conflict("location update requires device accuracy and observation time");
+    }
     run.location = {
       latitude: command.latitude,
       longitude: command.longitude,
-      observedAt: command.observedAt,
+      observedAt: command.observedAt ?? this.now(),
+      ...(command.accuracyMeters !== undefined ? { accuracyMeters: command.accuracyMeters } : {}),
     };
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
@@ -454,7 +503,7 @@ export class RunDO extends DurableObject<Env> {
   }
 
   /** Final delivery to the buyer or muster point: stamp and arm the dispute window. */
-  private async finalDelivery(): Promise<Response> {
+  private async finalDelivery(enforceLocation: boolean): Promise<Response> {
     const run = this.requireRun();
     if (run instanceof Response) return run;
     if (this.state.finalDeliveryAt !== undefined) {
@@ -473,6 +522,10 @@ export class RunDO extends DurableObject<Env> {
         "photo-required",
         "every handoff must be confirmed before final delivery — a pending handoff is waiting on runner photo evidence",
       );
+    }
+    if (enforceLocation) {
+      const refused = await this.validateActionLocation(undefined, true);
+      if (refused) return refused;
     }
     const now = this.now();
     this.state.finalDeliveryAt = now;
@@ -625,6 +678,11 @@ export class RunDO extends DurableObject<Env> {
       if (handoff.photoCaptureRef === undefined) {
         handoffsChanged = true; // awaitingPhoto flips on the wire
         continue;
+      }
+      if (this.state.locationRequired) {
+        const final = !run.stops.some((stop) => stop.exchangePoint === handoff.exchangePointId);
+        const refused = await this.validateActionLocation(handoff, final);
+        if (refused) { handoffsChanged = true; continue; }
       }
       this.confirmHandoff(handoff, true, deadline);
       handoffsChanged = true;

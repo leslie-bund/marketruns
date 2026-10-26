@@ -1,12 +1,22 @@
 import { z } from "zod";
+import { GeoPointValueSchema } from "./run.js";
+import type { LocationFix } from "./primitives.js";
 
-/** CRUD-ready durable Market registry projection. Times are local wall-clock HH:MM. */
+export const MarketGeofenceSchema = z.object({
+  center: GeoPointValueSchema,
+  radiusMeters: z.number().int().positive().default(750),
+});
+export type MarketGeofence = z.infer<typeof MarketGeofenceSchema>;
+
+/** Durable Market registry projection. Times are local wall-clock HH:MM. */
 export const MarketRegistryEntrySchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   opensAt: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   closesAt: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
-  /** Distinct authenticated sellers with a registered store and fresh foreground heartbeat. */
+  /** Null/omitted means unconfigured: enforcement must fail closed, never invent a center. */
+  geofence: MarketGeofenceSchema.optional(),
+  /** Distinct connected sellers with an owned store and fresh in-perimeter fix. */
   onlineSellers: z.number().int().nonnegative(),
 });
 export type MarketRegistryEntry = z.infer<typeof MarketRegistryEntrySchema>;
@@ -24,4 +34,5 @@ export interface SellerPresence {
   participantId: string;
   storeId: string;
   lastSeenAt: number;
+  location: LocationFix;
 }

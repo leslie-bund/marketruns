@@ -3,8 +3,8 @@ import { PRESENCE_TTL_MS } from "@market-runs/proto";
 import type { CoreRegistry, MarketRecord, PresenceRecord } from "./types.js";
 
 const SEEDS: MarketRecord[] = [
-  { id: "Balogun", name: "Balogun", opensAt: "08:00", closesAt: "18:00" },
-  { id: "Computer Village", name: "Computer Village", opensAt: "08:00", closesAt: "19:00" },
+  { id: "Balogun", name: "Balogun", opensAt: "08:00", closesAt: "18:00", geofence: { center: { latitude: 6.4541, longitude: 3.3947 }, radiusMeters: 750 } },
+  { id: "Computer Village", name: "Computer Village", opensAt: "08:00", closesAt: "19:00", geofence: { center: { latitude: 6.5186, longitude: 3.375 }, radiusMeters: 750 } },
 ];
 
 interface MemoryState {
@@ -35,7 +35,7 @@ export class MemoryCoreRegistry implements CoreRegistry {
       ...market,
       onlineSellers: new Set(
         [...state.presence.values()]
-          .filter((entry) => entry.marketId === market.id && now - entry.lastSeenAt <= PRESENCE_TTL_MS)
+          .filter((entry) => entry.marketId === market.id && now - entry.lastSeenAt <= PRESENCE_TTL_MS && now - entry.location.observedAt <= 60_000)
           .map((entry) => entry.participantId),
       ).size,
     }));
@@ -72,6 +72,11 @@ export class MemoryCoreRegistry implements CoreRegistry {
   }
 
   async heartbeat(presence: PresenceRecord) {
-    state.presence.set(presenceKey(presence.marketId, presence.participantId), { ...presence });
+    state.presence.set(presenceKey(presence.marketId, presence.participantId), structuredClone(presence));
+  }
+
+  async removePresence(marketId: string, participantId: string, storeId: string) {
+    const key = presenceKey(marketId, participantId);
+    if (state.presence.get(key)?.storeId === storeId) state.presence.delete(key);
   }
 }

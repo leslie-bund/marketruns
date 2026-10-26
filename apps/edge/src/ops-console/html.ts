@@ -584,8 +584,10 @@ function renderMarketForm() {
   var c = MARKET_EDIT.config || {
     closeAt: now + 8 * 3600 * 1000, estTripMs: 20 * 60000, bufferMs: 5 * 60000,
     floorRate: { distanceMeters: 3000, estimatedDurationMs: 20 * 60000, baseKobo: 100000, perKilometerKobo: 20000, perMinuteKobo: 500 },
-    settlement: { goodsCommissionBps: 1000, deliveryMarginKobo: 10000 }
+    settlement: { goodsCommissionBps: 1000, deliveryMarginKobo: 10000 },
+    geo: { center: { latitude: 6.4541, longitude: 3.3947 }, radiusMeters: 750, exchangePoints: [], musterPoints: [] }
   };
+  var geo = c.geo || { center: { latitude: 6.4541, longitude: 3.3947 }, radiusMeters: 750, exchangePoints: [], musterPoints: [] };
   function koboToNaira(k) { return (k / 100).toString(); }
   wrap.innerHTML =
     '<div class="eyebrow">' + (creating ? "New market" : "Edit — " + esc(MARKET_EDIT.id)) + "</div>" +
@@ -594,6 +596,9 @@ function renderMarketForm() {
     '<label class="field">Closes at<input id="mktClose" type="datetime-local" value="' + esc(toLocalInput(c.closeAt)) + '"></label>' +
     '<label class="field">Est run (min)<input id="mktEst" inputmode="numeric" value="' + esc(Math.round(c.estTripMs / 60000)) + '"></label>' +
     '<label class="field">Buffer (min)<input id="mktBuffer" inputmode="numeric" value="' + esc(Math.round(c.bufferMs / 60000)) + '"></label>' +
+    '<label class="field">Center latitude<input id="mktLatitude" inputmode="decimal" value="' + esc(geo.center.latitude) + '"></label>' +
+    '<label class="field">Center longitude<input id="mktLongitude" inputmode="decimal" value="' + esc(geo.center.longitude) + '"></label>' +
+    '<label class="field">Geofence radius (m)<input id="mktRadius" inputmode="numeric" value="' + esc(geo.radiusMeters || 750) + '"></label>' +
     '<label class="field">Floor distance (m)<input id="mktDist" inputmode="numeric" value="' + esc(c.floorRate.distanceMeters) + '"></label>' +
     '<label class="field">Floor duration (min)<input id="mktDur" inputmode="numeric" value="' + esc(Math.round(c.floorRate.estimatedDurationMs / 60000)) + '"></label>' +
     '<label class="field">Floor base (₦)<input id="mktBase" inputmode="decimal" value="' + esc(koboToNaira(c.floorRate.baseKobo)) + '"></label>' +
@@ -602,13 +607,13 @@ function renderMarketForm() {
     '<label class="field">Seller goods commission deduction (%)<input id="mktCommission" inputmode="decimal" value="' + esc((c.settlement.goodsCommissionBps / 100).toString()) + '"></label>' +
     '<label class="field">Runner delivery margin deduction (₦)<input id="mktMargin" inputmode="decimal" value="' + esc(koboToNaira(c.settlement.deliveryMarginKobo)) + '"></label>' +
     "</div>" +
-    '<p class="helper">Both are deducted from participant proceeds at settlement, never added to the buyer\'s checkout bill. Changes apply only to new runs; existing runs keep their seeded configuration.</p>' +
+    '<p class="helper">The center and radius apply to new presence, claims and pickups immediately. Settlement coefficients still apply only to new runs; existing runs keep their seeded configuration.</p>' +
     '<div id="marketFormError" class="error-box" hidden></div>' +
     '<div class="form-actions">' +
     '<button type="button" id="marketFormSave">' + (creating ? "Create market" : "Save config") + "</button>" +
     '<button type="button" class="secondary" id="marketFormCancel">Cancel</button>' +
     "</div>" +
-    (creating ? "" : '<p class="helper">Only timer and coefficient values are editable here — geography (exchange and muster points) is preserved untouched.</p>');
+    (creating ? "" : '<p class="helper">Exchange and muster points are preserved untouched.</p>');
   wrap.hidden = false;
   $("marketFormSave").addEventListener("click", submitMarketForm);
   $("marketFormCancel").addEventListener("click", closeMarketForm);
@@ -632,6 +637,9 @@ function submitMarketForm() {
   var closeAt = new Date($("mktClose").value).getTime();
   var estTripMs = minutesField("mktEst");
   var bufferMs = minutesField("mktBuffer");
+  var latitude = Number($("mktLatitude").value);
+  var longitude = Number($("mktLongitude").value);
+  var radius = Number($("mktRadius").value);
   var dist = Number($("mktDist").value);
   var durMs = minutesField("mktDur");
   var base = nairaToKobo($("mktBase").value);
@@ -641,17 +649,23 @@ function submitMarketForm() {
   var margin = nairaToKobo($("mktMargin").value);
   if (!isFinite(closeAt) || estTripMs === null || bufferMs === null || !isFinite(dist) || dist < 0 ||
       durMs === null || base === null || perKm === null || perMin === null ||
+      !isFinite(latitude) || Math.abs(latitude) > 90 || !isFinite(longitude) || Math.abs(longitude) > 180 ||
+      !isFinite(radius) || radius <= 0 || Math.floor(radius) !== radius ||
       !isFinite(commissionPct) || commissionPct < 0 || commissionPct > 100 || margin === null) {
-    return marketFormError("Every field needs a valid non-negative number; commission is 0–100%.");
+    return marketFormError("Check every number: valid coordinates, a positive whole-metre radius, and commission from 0–100% are required.");
   }
+  var existingGeo = !creating && MARKET_EDIT.config && MARKET_EDIT.config.geo;
   var body = {
     closeAt: Math.round(closeAt),
     estTripMs: estTripMs,
     bufferMs: bufferMs,
     floorRate: { distanceMeters: dist, estimatedDurationMs: durMs, baseKobo: base, perKilometerKobo: perKm, perMinuteKobo: perMin },
-    settlement: { goodsCommissionBps: Math.round(commissionPct * 100), deliveryMarginKobo: margin }
+    settlement: { goodsCommissionBps: Math.round(commissionPct * 100), deliveryMarginKobo: margin },
+    geo: {
+      center: { latitude: latitude, longitude: longitude }, radiusMeters: radius,
+      exchangePoints: existingGeo ? existingGeo.exchangePoints : [], musterPoints: existingGeo ? existingGeo.musterPoints : []
+    }
   };
-  if (!creating && MARKET_EDIT.config && MARKET_EDIT.config.geo) body.geo = MARKET_EDIT.config.geo;
   if (creating) body.name = name;
   var path = creating ? "/ops/api/markets" : "/ops/api/markets/" + encodeURIComponent(name) + "/config";
   api(path, { method: "POST", body: body }).then(function () {

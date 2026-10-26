@@ -11,3 +11,4 @@ export * from "./capture";
 export * from "./cart-state";
 export * from "./payments";
 export * from "./notifications";
+export * from "./location";

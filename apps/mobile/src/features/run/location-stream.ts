@@ -27,12 +27,12 @@ export function useRunnerLocationStream(runId: string | null): { sharing: boolea
     (async () => {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) {
-        if (!cancelled) setError("Location permission refused — handoffs still work, the map just won't track you.");
+        if (!cancelled) setError("Location permission is required for claims, pickups and delivery. Enable foreground precise location.");
         return;
       }
       subscription = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: Location.Accuracy.Highest,
           timeInterval: MIN_INTERVAL_MS,
           distanceInterval: MIN_DISTANCE_M,
         },
@@ -41,7 +41,8 @@ export function useRunnerLocationStream(runId: string | null): { sharing: boolea
           if (now - lastSentAt.current < MIN_INTERVAL_MS) return; // throttle belt-and-braces
           lastSentAt.current = now;
           // Fire-and-forget: a dropped fix is fine, the next one supersedes it.
-          locationTick(runId, fix.coords.latitude, fix.coords.longitude).catch(() => undefined);
+          locationTick(runId, fix.coords.latitude, fix.coords.longitude, fix.coords.accuracy ?? Number.POSITIVE_INFINITY)
+            .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)); });
         },
       );
       if (!cancelled) {

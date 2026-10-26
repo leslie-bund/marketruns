@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { StoreSchema } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
-import { addMarketToIndex, isKnownMarket, listMarketIds } from "../config/markets.js";
+import { addMarketToIndex, isKnownMarket, listMarketIds, syncMarketGeofence } from "../config/markets.js";
 import { errorResponse, jsonResponse } from "../do/runtime/index.js";
 import { MarketConfigSchema, ModerateVocabularyRequestSchema, ModerateVocabularyResponseSchema } from "../do/schemas.js";
 import { internalPost } from "../do/transport.js";
@@ -62,11 +62,11 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
     if (written instanceof Response) return written;
 
     // The index heals on next join even when this put fails — report, don't 500.
-    const indexed = await addMarketToIndex(c.env, name);
+    const indexed = await addMarketToIndex(c.env, name, written);
     return jsonResponse({ market: { id: name }, config: written, indexed }, 201);
   });
 
-  /** Tune a zone's timer/settlement values: forward to the MarketDO config write. */
+  /** Tune a zone's timer/settlement/geofence values: new actions read the live config. */
   app.post("/markets/:market/config", async (c) => {
     const market = decodeURIComponent(c.req.param("market"));
     let raw: unknown;
@@ -85,6 +85,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
     }
     const written = await writeMarketConfig(c, market, parsed.data);
     if (written instanceof Response) return written;
+    await syncMarketGeofence(c.env, market, written);
     return jsonResponse({ market: { id: market }, config: written });
   });
 

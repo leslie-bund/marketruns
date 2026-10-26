@@ -1,4 +1,4 @@
-import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
+import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
 import { identities, EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
 import { getActiveParticipant, participantHeaders } from "./participant";
@@ -360,11 +360,11 @@ export async function listActiveRuns(scope?: { storeId?: string }): Promise<Acti
 }
 
 /** Atomically claim an unassigned run through the internal-pool guarded route. */
-export async function claimRun(runId: string): Promise<void> {
+export async function claimRun(runId: string, location: LocationFix): Promise<void> {
   await request(`/runs/${encodeURIComponent(runId)}/claim`, {
     method: "POST",
     headers: demoRunnerHeaders(),
-    body: "{}",
+    body: JSON.stringify({ location }),
   });
 }
 
@@ -417,8 +417,8 @@ export async function finalDelivery(runId: string): Promise<void> {
   await request(`/runs/${encodeURIComponent(runId)}/delivery/final`, { method: "POST", body: "{}" });
 }
 
-export async function locationTick(runId: string, latitude: number, longitude: number): Promise<void> {
-  await command({ type: "run.location-updated", runId, latitude, longitude, observedAt: Date.now() });
+export async function locationTick(runId: string, latitude: number, longitude: number, accuracyMeters = 0): Promise<void> {
+  await command({ type: "run.location-updated", runId, latitude, longitude, accuracyMeters, observedAt: Date.now() });
 }
 
 /**

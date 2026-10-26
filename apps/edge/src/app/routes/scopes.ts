@@ -1,13 +1,16 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
+import { validateLocationWithinFence } from "@market-runs/domain";
+import { LocationFixSchema } from "@market-runs/proto";
 import type { Env } from "../../config/env.js";
-import { errorResponse, expectCommand, parseClientCommand } from "../../do/runtime/index.js";
+import { errorResponse, expectCommand, parseClientCommand, refusal } from "../../do/runtime/index.js";
 import { LEGACY_REGISTRY_NAME, participantObjectName } from "../../do/participant-do.js";
 import {
   DisputeRunRequestSchema,
   HandoffRefRequestSchema,
   InitiateHandoffRequestSchema,
+  MarketConfigSchema,
 } from "../../do/schemas.js";
 import { internalPost } from "../../do/transport.js";
 import { forwardTo } from "./markets.js";
@@ -98,7 +101,18 @@ export function runsRoute(): Hono<{ Bindings: Env }> {
     if (!(await coreRegistry(c.env).isInternalRunner(market, c.get("participant").id))) {
       return errorResponse(403, "forbidden", "runner is not in this market's internal pool");
     }
-    return runStub(c).fetch(internalPost("/claim", { participantId: c.get("participant").id }, correlationHeaders(c, resolvedHeaders(c))));
+    let raw: unknown = {};
+    try { raw = await c.req.json(); } catch { return errorResponse(400, "invalid-body", "request body is not valid JSON"); }
+    const parsed = z.object({ location: LocationFixSchema.optional() }).safeParse(raw);
+    if (!parsed.success) return errorResponse(400, "invalid-body", "claim requires a valid GPS fix", { issues: parsed.error.issues });
+    if (c.get("participant").source === "session") {
+      const configResponse = await c.env.MARKET_DO.get(c.env.MARKET_DO.idFromName(market)).fetch(new Request("http://do/config", { headers: correlationHeaders(c) }));
+      const config = MarketConfigSchema.safeParse(await configResponse.json());
+      if (!configResponse.ok || !config.success) return errorResponse(502, "market-config-unreadable", "market geofence config is unavailable");
+      const checked = validateLocationWithinFence(parsed.data.location, config.data.geo, Date.now());
+      if (!checked.ok) return refusal(checked.code, checked.message);
+    }
+    return runStub(c).fetch(internalPost("/claim", { participantId: c.get("participant").id, ...parsed.data }, correlationHeaders(c, resolvedHeaders(c))));
   });
 
   app.post("/:runId/handoffs", async (c) => {

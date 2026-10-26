@@ -99,6 +99,13 @@
       "when": 1792868927316,
       "tag": "0013_ops_current_combined",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793011200000,
+      "tag": "0014_market_geofence",
+      "breakpoints": true
     }
   ]
 }

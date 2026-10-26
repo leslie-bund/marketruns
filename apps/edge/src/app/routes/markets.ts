@@ -171,7 +171,7 @@ async function authorizeSocket(c: Context<{ Bindings: Env }>, market: string): P
     const storeId = c.req.query("storeId") ?? "";
     const store = storeId ? await ownedStore(c, storeId, market) : null;
     if (!store) return errorResponse(403, "forbidden", "seller WebSocket requires an owned storeId");
-    await coreRegistry(c.env).heartbeat({ marketId: market, participantId: who.id, storeId, lastSeenAt: Date.now() });
+    // Connection alone never makes a seller online; the first valid foreground fix does.
     return storeId;
   }
   return undefined;

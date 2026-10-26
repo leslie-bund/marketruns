@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Intent, Product, Store } from "@market-runs/proto";
 import { useActiveMarket, useActiveStore } from "../../api";
 import { discoverIntentsForItems } from "../../api";
@@ -13,6 +14,7 @@ import { useSellerRun } from "../run";
  */
 export function useOpenIntents(shopItems?: string[] | null, storeId?: string) {
   const market = useActiveMarket();
+  const [presenceError, setPresenceError] = useState<string | null>(null);
   const poll = usePoll(async () => {
     if (!shopItems || shopItems.length === 0) return [] as Intent[];
     const entries = await discoverIntentsForItems(shopItems, storeId);
@@ -23,9 +25,9 @@ export function useOpenIntents(shopItems?: string[] | null, storeId?: string) {
     () => poll.refresh(),
     () => poll.refresh(),
     ["intents"],
-    { ...(storeId ? { storeId } : {}), heartbeat: Boolean(storeId) },
+    { ...(storeId ? { storeId } : {}), heartbeat: Boolean(storeId), onPresenceError: setPresenceError },
   );
-  return poll;
+  return { ...poll, presenceError };
 }
 
 /**
