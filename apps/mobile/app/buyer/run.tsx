@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Alert, Text, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { DISPUTE_WINDOW_MS } from "@market-runs/domain";
-import { ApiError, buyerIdForRun, fileDispute } from "../../src/api";
-import { HandoffPhoto, HandoffQrCard, RunMap, StopList, TripSummaryCard, useRun } from "../../src/features/run";
+import { ApiError, confirmHandoff, fileDispute, getDeliveryCode } from "../../src/api";
+import { buyerCanConfirm, deliveryReceiverLabel, HandoffPhoto, HandoffQrCard, RunMap, StopList, TripSummaryCard, useRun } from "../../src/features/run";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
 
 /** Preset dispute reasons — the optional detail field is appended when filled. */
@@ -15,11 +16,12 @@ const DISPUTE_REASONS = ["Items missing from the delivery", "Wrong items deliver
  * WebSocket; polling is the fallback.
  */
 export default function BuyerRun() {
-  const run = useRun();
+  const { runId } = useLocalSearchParams<{ runId?: string }>();
+  const run = useRun(15000, runId);
   const [now, setNow] = useState(Date.now());
   const [detail, setDetail] = useState("");
   const [busy, setBusy] = useState(false);
-  /** The filed dispute's reason, once the edge has accepted it (200, or 409 = already filed). */
+  const [deliveryCode, setDeliveryCode] = useState<string | undefined>();
   const [filed, setFiled] = useState<string | null>(null);
 
   useEffect(() => {
@@ -34,6 +36,8 @@ export default function BuyerRun() {
   useEffect(() => {
     setFiled(null);
     setDetail("");
+    setDeliveryCode(undefined);
+    if (currentId) void getDeliveryCode(currentId).then((result) => setDeliveryCode(result.code)).catch(() => setDeliveryCode(undefined));
   }, [currentId]);
 
   if (current === null) {
@@ -46,10 +50,7 @@ export default function BuyerRun() {
     );
   }
 
-  // The delivery handoff belongs to the run's actual buyer, read from the
-  // edge-issued run id — never a hardcoded identity.
-  const buyer = buyerIdForRun(current);
-  const myHandoffs = current.handoffs.filter((handoff) => handoff.counterparty === buyer);
+  const myHandoffs = current.handoffs.filter((handoff) => handoff.type === "delivery");
 
   // The filed pill is durable: it derives from run.disputed on the wire, so
   // it survives an app restart (the session-local `filed` only gives instant
@@ -98,19 +99,19 @@ export default function BuyerRun() {
         <StopList stops={current.stops} />
       </Section>
 
-      <Section title="Delivery to you">
+      <Section title={`Delivery to ${deliveryReceiverLabel(current)}`}>
         <Card>
-          <Text style={s.body}>
-            {current.delivery.kind === "plus-code" ? `Your location · ${current.delivery.plusCode}` : `Muster Point · ${current.delivery.name}`}
-          </Text>
+          <Text style={s.body}>{current.delivery.kind === "plus-code" ? `Your location · ${current.delivery.plusCode}` : `Muster Point · ${current.delivery.name}`}</Text>
+          {deliveryCode ? <Text style={{ color: colors.ink, fontWeight: "900", fontSize: 28, letterSpacing: 6 }}>Code · {deliveryCode}</Text> : null}
         </Card>
         {myHandoffs.map((handoff) => (
-          <HandoffQrCard
-            key={handoff.id}
-            handoff={handoff}
-            now={now}
-            prompt="Show this code to your runner to confirm you received everything"
-          />
+          <View key={handoff.id}>
+            <HandoffQrCard handoff={handoff} runId={current.id} challenge={deliveryCode} now={now} prompt="Share this code only with your buyer or designated receiver" />
+            {buyerCanConfirm(handoff, current) ? <Button title={busy ? "Confirming…" : "Confirm I received the delivery"} onPress={() => {
+              setBusy(true);
+              void confirmHandoff(current.id, handoff.id).then(run.refresh).catch((error: unknown) => Alert.alert("Confirmation failed", error instanceof Error ? error.message : String(error))).finally(() => setBusy(false));
+            }} /> : null}
+          </View>
         ))}
       </Section>
 
@@ -129,7 +130,7 @@ export default function BuyerRun() {
             <View style={s.row}>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>
-                  {handoff.counterparty === buyer ? "Delivery to you" : `Pickup · ${handoff.counterparty}`}
+                  {handoff.type === "delivery" ? `Delivery to ${deliveryReceiverLabel(current)}` : `Pickup · ${handoff.counterparty}`}
                 </Text>
                 <Text style={s.muted}>{handoff.exchangePoint}</Text>
               </View>

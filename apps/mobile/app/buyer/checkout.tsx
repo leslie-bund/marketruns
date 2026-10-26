@@ -14,6 +14,7 @@ import {
   usePoll,
 } from "../../src/api";
 import { estimateDeliveryKobo, FlutterwavePayButton } from "../../src/features/buyer/payment";
+import { receiverSelection } from "../../src/features/run";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, money, s } from "../../src/ui";
 
 /**
@@ -39,7 +40,9 @@ export default function Checkout() {
   // Real short code for Balogun Market (6FR5F93V+JV) so routing decodes it.
   const [code, setCode] = useState("F93V+JV Lagos");
   const [muster, setMuster] = useState("Balogun Market Partner");
-  const [accepted, setAccepted] = useState<{ runId: string; floorRateKobo: number } | null>(null);
+  const [receiverKind, setReceiverKind] = useState<"buyer" | "designated">("buyer");
+  const [receiverName, setReceiverName] = useState("");
+  const [accepted, setAccepted] = useState<{ runId: string; floorRateKobo: number; deliveryCode?: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   /* Payment state: one txRef per screen mount; the hold, once confirmed, is reused on checkout retries. */
@@ -68,6 +71,10 @@ export default function Checkout() {
       Alert.alert("Enter a Plus Code", "Delivery uses Open Location Codes only.");
       return false;
     }
+    if (receiverKind === "designated" && !receiverName.trim()) {
+      Alert.alert("Name the receiver", "Enter the person who will give the delivery code to your runner.");
+      return false;
+    }
     return true;
   };
 
@@ -75,8 +82,8 @@ export default function Checkout() {
   const finishCheckout = async (paymentRef?: string) => {
     setBusy(true);
     try {
-      const result = await checkout(delivery(), paymentRef);
-      setAccepted({ runId: result.runId, floorRateKobo: result.floorRateKobo });
+      const result = await checkout(delivery(), paymentRef, receiverSelection(receiverKind, receiverName));
+      setAccepted({ runId: result.runId, floorRateKobo: result.floorRateKobo, ...(result.deliveryCode ? { deliveryCode: result.deliveryCode } : {}) });
     } catch (error) {
       // The close gate, cart deadline and payment gate refuse clearly — surface the reason.
       Alert.alert("Checkout refused", error instanceof Error ? error.message : String(error));
@@ -148,6 +155,15 @@ export default function Checkout() {
         )}
       </Section>
 
+      <Section title="Who will receive the delivery?">
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <Pressable onPress={() => setReceiverKind("buyer")} style={{ flex: 1 }}><Card style={{ borderColor: receiverKind === "buyer" ? colors.green : colors.line }}><Text style={{ color: colors.ink, fontWeight: "800" }}>Me</Text></Card></Pressable>
+          <Pressable onPress={() => setReceiverKind("designated")} style={{ flex: 1 }}><Card style={{ borderColor: receiverKind === "designated" ? colors.green : colors.line }}><Text style={{ color: colors.ink, fontWeight: "800" }}>Someone else</Text></Card></Pressable>
+        </View>
+        {receiverKind === "designated" ? <><Label>Designated receiver's name</Label><Field value={receiverName} onChangeText={setReceiverName} placeholder="e.g. Ada Receiver" /></> : null}
+        <Text style={s.muted}>Share the 6-digit code only with the person receiving the order. They do not need an account.</Text>
+      </Section>
+
       {paymentProblem ? (
         <Card style={{ borderColor: colors.orange }}>
           <Text style={s.body}>{paymentProblem}</Text>
@@ -158,11 +174,9 @@ export default function Checkout() {
         <Card style={{ backgroundColor: "#EAF1E7" }}>
           <Pill active>RUN ASSIGNED · FLOOR RATE {money(accepted.floorRateKobo)}</Pill>
           <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 17 }}>Run confirmed</Text>
-          <Text style={s.body}>
-            Your runner is collecting from every seller. Handoffs confirm by QR scan or auto-confirm after 3 minutes;
-            a 30-minute dispute window opens after final delivery.
-          </Text>
-          <Button title="Track your Run" onPress={() => router.replace("/buyer/run")} />
+          <Text style={s.body}>Your runner is collecting from every seller. Delivery needs the code, a fresh photo, and explicit receipt confirmation.</Text>
+          {accepted.deliveryCode ? <Text style={{ color: colors.ink, fontWeight: "900", fontSize: 28, letterSpacing: 6 }}>Delivery code · {accepted.deliveryCode}</Text> : null}
+          <Button title="Track your Run" onPress={() => router.replace({ pathname: "/buyer/run", params: { runId: accepted.runId } })} />
           <Button title="Back to start" secondary onPress={() => router.replace("/")} />
         </Card>
       ) : (

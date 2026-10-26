@@ -263,6 +263,7 @@ export async function getCart(): Promise<Cart | null> {
 export async function checkout(
   delivery: { kind: "plus-code"; plusCode: string } | { kind: "muster-point"; name: string },
   paymentRef?: string,
+  receiver: { kind: "buyer" } | { kind: "designated"; name: string } = { kind: "buyer" },
 ): Promise<CheckoutAccepted> {
   const market = getActiveMarket();
   const cartId = getStoredCartId(market);
@@ -272,6 +273,7 @@ export async function checkout(
     cartId,
     ...buyerAttribution(),
     delivery,
+    receiver,
     // The confirmed hold's txRef — required only when the edge runs with
     // PAYMENTS_REQUIRED on; absent keeps the unpaid dev checkout working.
     ...(paymentRef ? { paymentRef } : {}),
@@ -326,6 +328,7 @@ export async function offerProduct(input: {
       market: getActiveMarket(),
       ...(store ? { storeId: store.id } : {}),
       sellerName,
+      sellerParticipantId: getActiveParticipant()?.id ?? identities.seller.id,
       exchangePoint,
     }),
   });
@@ -350,12 +353,12 @@ export async function sellerOffer(productId: string, priceKobo: number): Promise
  * seller retains its legacy name fallback. Transport failures stay visible to
  * the caller so an unavailable index is never presented as "no runs".
  */
-export async function listActiveRuns(scope?: { storeId?: string }): Promise<ActiveRunsResponse> {
+export async function listActiveRuns(scope?: { storeId?: string; buyer?: boolean }): Promise<ActiveRunsResponse> {
   const storeId = scope?.storeId;
   const query = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
   return request<ActiveRunsResponse>(
     `/markets/${encodeURIComponent(getActiveMarket())}/runs/active${query}`,
-    { headers: storeId ? demoSellerHeaders() : demoRunnerHeaders() },
+    { headers: storeId ? demoSellerHeaders() : scope?.buyer ? demoBuyerHeaders() : demoRunnerHeaders() },
   );
 }
 
@@ -396,20 +399,31 @@ export function buyerIdForRun(run: Run): string | null {
   return run.id.startsWith(prefix) ? run.id.slice(prefix.length) : null;
 }
 
-export async function initiateHandoff(runId: string, input: { handoffId: string; exchangePointId: string; counterparty: string }): Promise<void> {
+export async function initiateHandoff(runId: string, input: { handoffId: string; handoffType: "pickup" | "delivery"; exchangePointId: string; counterparty: string }): Promise<void> {
   await request(`/runs/${encodeURIComponent(runId)}/handoffs`, { method: "POST", body: JSON.stringify(input) });
 }
 
-/** The runner scanned the one-time QR challenge at the exchange point. */
-export async function scanChallenge(runId: string, handoffId: string): Promise<void> {
-  await command({ type: "handoff.challenge-scanned", handoffId, runId, scannedAt: Date.now() });
+export async function scanChallenge(runId: string, handoffId: string, challenge: string): Promise<void> {
+  await command({ type: "handoff.challenge-scanned", handoffId, runId, challenge });
 }
 
-/** Photo evidence: the signed R2 reference is what the RunDO stores. */
+export async function getDeliveryCode(runId: string): Promise<{ code: string; expiresAt: number }> {
+  return request(`/runs/${encodeURIComponent(runId)}/delivery-code`, { headers: demoBuyerHeaders() });
+}
+
+export async function getHandoffChallenge(runId: string, handoffId: string): Promise<string> {
+  const body = await request<{ challenge: string }>(`/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoffId)}/challenge`, { headers: demoSellerHeaders() });
+  return body.challenge;
+}
+
+export async function confirmHandoff(runId: string, handoffId: string): Promise<void> {
+  await request(`/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoffId)}/confirm`, { method: "POST", body: "{}" });
+}
+
 export async function attachPhoto(runId: string, handoffId: string, photoCaptureRef: string): Promise<void> {
   await request(`/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoffId)}/photo`, {
     method: "POST",
-    body: JSON.stringify({ type: "handoff.photo-captured", handoffId, photoCaptureRef, capturedAt: Date.now() }),
+    body: JSON.stringify({ type: "handoff.photo-captured", handoffId, photoCaptureRef }),
   });
 }
 
@@ -449,11 +463,11 @@ export async function fileDispute(
  * Upload camera bytes to the capture endpoint; returns the signed reference
  * the domain stores (never bytes) plus a read-back URL for previews.
  */
-export async function uploadCapture(localUri: string): Promise<{ ref: string; url: string }> {
+export async function uploadCapture(localUri: string, runId?: string): Promise<{ ref: string; url: string }> {
   const blob = await (await fetch(localUri)).blob();
   const response = await fetch(`${EDGE_URL}/captures`, {
     method: "POST",
-    headers: { "content-type": blob.type || "image/jpeg", ...participantHeaders() },
+    headers: { "content-type": blob.type || "image/jpeg", ...sessionHeaders(), ...participantHeaders(), ...(runId ? { "x-run-id": runId } : {}) },
     body: blob,
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;

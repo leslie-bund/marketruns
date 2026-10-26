@@ -75,7 +75,7 @@ const run = {
     { sellerName: "Amina's Fresh Store", exchangePoint: "Balogun Market, Stall B14", shopItems: ["Tomatoes"], status: "next" },
   ],
   handoffs: [
-    { id: "handoff-1", exchangePoint: "Balogun Market, Stall B14", counterparty: "Amina's Fresh Store", status: "pending", requestedAt: now - 40_000 },
+    { id: "handoff-1", type: "pickup", exchangePoint: "Balogun Market, Stall B14", counterparty: "Amina's Fresh Store", status: "pending", requestedAt: now - 40_000 },
   ],
 };
 

@@ -326,6 +326,8 @@ export class CartDO extends DurableObject<Env> {
       status: (this.env.ALLOW_HEADER_AUTH === "true" ? "assigned" : "unassigned") as "assigned" | "unassigned",
       floorRateKobo,
       delivery: command.delivery,
+      receiver: command.receiver,
+      delegatedByParticipantId: buyerId,
       stops,
       handoffs: [],
       route: {
@@ -358,6 +360,10 @@ export class CartDO extends DurableObject<Env> {
     );
     if (!seeded.ok) {
       return new Response(await seeded.text(), { status: 502, headers: { "content-type": "application/json" } });
+    }
+    const seedReceipt = await seeded.json() as { deliveryCode?: string; deliveryCodeExpiresAt?: number };
+    if (!seedReceipt.deliveryCode || seedReceipt.deliveryCodeExpiresAt === undefined) {
+      return errorResponse(502, "bad-run-response", "run did not issue a delivery code");
     }
 
     // Bind the hold to the run (gated checkouts only): the refund rail finds
@@ -398,9 +404,11 @@ export class CartDO extends DurableObject<Env> {
       runId,
       floorRateKobo,
       delivery: command.delivery,
+      receiver: command.receiver,
       buyerId,
       runnerId,
     };
+    // The broadcast and notification pipeline never carry the raw delivery code.
     broadcast(this.ctx, this.env, accepted);
 
     // Retirement: every product is sold; the cart is checked out. Archive
@@ -441,7 +449,11 @@ export class CartDO extends DurableObject<Env> {
     const tombstone: CartTombstone = { retired: true, cartId: state.cartId, runId, retiredAt };
     await this.ctx.storage.put(TOMBSTONE_KEY, tombstone);
     this.tombstone = tombstone;
-    return jsonResponse(accepted);
+    return jsonResponse({
+      ...accepted,
+      deliveryCode: seedReceipt.deliveryCode,
+      deliveryCodeExpiresAt: seedReceipt.deliveryCodeExpiresAt,
+    });
   }
 
   private async marketConfig(

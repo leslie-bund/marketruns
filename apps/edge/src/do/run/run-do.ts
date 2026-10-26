@@ -4,6 +4,14 @@ import { DISPUTE_WINDOW_MS, HANDOFF_AUTO_CONFIRM_MS, settle, validateLocationWit
 import type { GeoFence, LocationFix, SettlementInput } from "@market-runs/domain";
 import { buildSettlementInput } from "./settlement.js";
 import { buildPaymentDispatchRequest, buildPaymentRefundRequest } from "./payment-dispatch.js";
+import {
+  DELIVERY_CODE_MAX_ATTEMPTS,
+  DELIVERY_CODE_TTL_MS,
+  hashDeliveryCode,
+  issueDeliveryCode,
+  pickupChallenge,
+  secretsEqual,
+} from "./delivery-security.js";
 import type { InternalHandoff, RunState } from "./state.js";
 import type {
   HandoffChallengeScanned,
@@ -94,8 +102,12 @@ export class RunDO extends DurableObject<Env> {
     }
     if (request.method === "POST" && enforceLocation &&
         (path.startsWith("/handoff/") || path === "/location" || path === "/delivery/final")) {
-      if (this.state.runnerId !== request.headers.get("x-resolved-participant-id")) {
-        return conflict("only the runner who claimed this run may mutate it");
+      const participantId = request.headers.get("x-resolved-participant-id");
+      const role = request.headers.get("x-resolved-participant-role");
+      if (path === "/handoff/confirm" && role === "buyer" && this.state.buyerId === participantId) {
+        // The buyer may explicitly confirm their own typed delivery handoff.
+      } else if (role !== "runner" || this.state.runnerId !== participantId) {
+        return conflict("only the assigned runner or receiving buyer may mutate this handoff");
       }
     }
     if (request.method === "POST" && path === "/handoff/initiate") {
@@ -138,6 +150,13 @@ export class RunDO extends DurableObject<Env> {
       const parsed = await parseInternal(request, OpsSettleRequestSchema);
       if (!parsed.ok) return parsed.response;
       return internalErrorGuard(() => this.opsSettle(parsed.data));
+    }
+    if (request.method === "GET" && path === "/delivery-code") {
+      return internalErrorGuard(() => this.deliveryCode());
+    }
+    if (request.method === "GET" && path === "/handoff/challenge") {
+      const handoffId = url.searchParams.get("handoffId") ?? "";
+      return internalErrorGuard(() => this.handoffChallenge(handoffId));
     }
     if (request.method === "GET" && path === "/") {
       const run = this.state.run;
@@ -208,16 +227,20 @@ export class RunDO extends DurableObject<Env> {
   /** CartDO seeds the run at checkout: stops, settlement legs, coefficients. */
   private async seed(data: SeedRunRequest, requestId?: string): Promise<Response> {
     if (this.state.run) {
-      // Idempotent re-seed of the same run.
       const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-      return jsonResponse(event);
+      const issued = await issueDeliveryCode(this.env, this.state.run.id, this.state.deliveryCodeIssuedAt ?? this.state.startedAt ?? this.now());
+      return jsonResponse({ ...event, deliveryCode: issued.code, deliveryCodeExpiresAt: this.state.deliveryCodeExpiresAt });
     }
+    const issuedAt = this.now();
+    const issued = await issueDeliveryCode(this.env, data.run.id, issuedAt);
     const run: Run = {
       id: data.run.id,
       market: data.run.market,
       status: data.run.status,
       floorRateKobo: data.run.floorRateKobo,
       delivery: data.run.delivery,
+      receiver: data.run.receiver,
+      ...(data.run.delegatedByParticipantId ? { delegatedByParticipantId: data.run.delegatedByParticipantId } : {}),
       stops: data.run.stops,
       handoffs: [],
       ...(data.run.route !== undefined ? { route: data.run.route } : {}),
@@ -227,14 +250,17 @@ export class RunDO extends DurableObject<Env> {
     this.state.settlementConfig = data.settlement;
     this.state.buyerId = data.buyerId;
     this.state.runnerId = data.runnerId;
-    this.state.startedAt = this.now();
+    this.state.startedAt = issuedAt;
+    this.state.deliveryCodeIssuedAt = issuedAt;
+    this.state.deliveryCodeExpiresAt = issuedAt + DELIVERY_CODE_TTL_MS;
+    this.state.deliveryCodeHash = issued.hash;
     this.state.storeIds = [...new Set(run.stops.map((stop) => stop.storeId ?? stop.sellerName))];
     if (data.sellerParticipantIds !== undefined) this.state.sellerParticipantIds = data.sellerParticipantIds;
     if (requestId !== undefined) this.state.requestId = requestId;
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, this.env,event);
-    return jsonResponse(event);
+    broadcast(this.ctx, this.env, event);
+    return jsonResponse({ ...event, deliveryCode: issued.code, deliveryCodeExpiresAt: this.state.deliveryCodeExpiresAt });
   }
 
   /** Single-threaded DO transition: exactly one pool runner can claim an unassigned run. */
@@ -275,38 +301,49 @@ export class RunDO extends DurableObject<Env> {
   private async initiate(data: InitiateHandoffRequest): Promise<Response> {
     const run = this.requireRun();
     if (run instanceof Response) return run;
-    if (run.status === "closed" || run.status === "aborted") {
+    if (run.status === "closed" || run.status === "aborted" || run.status === "delivered") {
       return conflict(`run is ${run.status}; no new handoffs`);
     }
     if (this.state.handoffs.some((handoff) => handoff.id === data.handoffId)) {
       return conflict(`handoff ${data.handoffId} already exists`);
     }
+    if (data.handoffType === "pickup") {
+      if (!run.stops.some((stop) => stop.exchangePoint === data.exchangePointId && stop.status !== "completed")) {
+        return conflict("pickup handoff must address an incomplete seller stop");
+      }
+    } else {
+      const destination = run.delivery.kind === "plus-code" ? run.delivery.plusCode : run.delivery.name;
+      if (data.exchangePointId !== destination) return conflict("delivery handoff must address the run destination");
+      if (!run.stops.every((stop) => stop.status === "completed")) return conflict("every seller stop must complete before delivery");
+      if (this.state.handoffs.some((handoff) => handoff.type === "delivery")) return conflict("this run already has a delivery handoff");
+    }
     const now = this.now();
     this.state.handoffs.push({
       id: data.handoffId,
+      type: data.handoffType,
       exchangePointId: data.exchangePointId,
       counterparty: data.counterparty,
       status: "pending",
       requestedAt: now,
     });
-    if (run.status === "assigned") run.status = "collecting";
+    if (data.handoffType === "pickup" && run.status === "assigned") run.status = "collecting";
     run.handoffs = this.wireHandoffs();
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
 
-    const deadline = now + HANDOFF_AUTO_CONFIRM_MS;
     const event: ServerEvent = {
       type: "handoff.initiated",
       handoffId: data.handoffId,
+      handoffType: data.handoffType,
       runId: run.id,
       exchangePointId: data.exchangePointId,
       counterparty: data.counterparty,
       requestedAt: now,
-      deadline,
+      deadline: now + HANDOFF_AUTO_CONFIRM_MS,
       ...this.participantAttribution(),
     };
-    broadcast(this.ctx, this.env,event);
-    broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
+    broadcast(this.ctx, this.env, event);
+    broadcast(this.ctx, this.env, { type: "run.updated", run: this.wireRun() });
     return jsonResponse(event);
   }
 
@@ -349,49 +386,46 @@ export class RunDO extends DurableObject<Env> {
     if (handoff instanceof Response) return handoff;
     const run = this.state.run;
     if (!run) return notFound("run is unknown or retired");
-    if (handoff.status === "confirmed") {
-      // Idempotent: a confirmed handoff re-confirms to the same result.
-      const event: ServerEvent = {
-        type: "handoff.confirmed",
-        handoffId: handoff.id,
-        runId: run.id,
-        confirmedAt: handoff.confirmedAt ?? this.now(),
-        autoConfirmed: handoff.autoConfirmed ?? false,
-      };
-      return jsonResponse(event);
+    if (command.runId !== run.id) return conflict("challenge addresses a different run");
+    if (handoff.status === "confirmed") return this.confirmedEvent(handoff);
+    const now = this.now();
+
+    if (handoff.type === "delivery") {
+      if (handoff.codeVerifiedAt !== undefined) return jsonResponse({ type: "handoff.challenge-verified", handoffId: handoff.id, runId: run.id, scannedAt: handoff.scannedAt });
+      if ((handoff.failedCodeAttempts ?? 0) >= DELIVERY_CODE_MAX_ATTEMPTS) return refusal("code-attempt-limit", "delivery code is locked after too many failed attempts");
+      if (this.state.deliveryCodeExpiresAt === undefined || now >= this.state.deliveryCodeExpiresAt) return refusal("code-expired", "delivery code has expired");
+      const suppliedHash = await hashDeliveryCode(this.env, run.id, command.challenge);
+      if (!this.state.deliveryCodeHash || !secretsEqual(suppliedHash, this.state.deliveryCodeHash)) {
+        handoff.failedCodeAttempts = (handoff.failedCodeAttempts ?? 0) + 1;
+        await this.ctx.storage.put(STATE_KEY, this.state);
+        return refusal("invalid-code", `delivery code is incorrect (${DELIVERY_CODE_MAX_ATTEMPTS - handoff.failedCodeAttempts} attempts remaining)`);
+      }
+      handoff.codeVerifiedAt = now;
+    } else {
+      const expected = await pickupChallenge(this.env, run.id, handoff);
+      if (!secretsEqual(command.challenge, expected)) return refusal("invalid-challenge", "QR challenge is not valid for this handoff");
     }
-    // The one-time challenge is scanned once: the first scan's stamp stands.
-    if (handoff.scannedAt === undefined) handoff.scannedAt = command.scannedAt;
-    if (handoff.photoCaptureRef === undefined) {
-      // Scanned but no evidence yet: pending → scanned, waiting on the photo.
+
+    handoff.scannedAt = now;
+    if (handoff.type === "delivery" || handoff.photoCaptureRef === undefined) {
       run.handoffs = this.wireHandoffs();
       await this.ctx.storage.put(STATE_KEY, this.state);
       await this.scheduleAlarm();
-      broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
-      return refusal(
-        "photo-required",
-        "scan recorded, but a handoff cannot confirm without photo evidence — capture the photo to complete the handoff",
-      );
+      broadcast(this.ctx, this.env, { type: "run.updated", run: this.wireRun() });
+      if (handoff.type === "delivery") return jsonResponse({ type: "handoff.challenge-verified", handoffId: handoff.id, runId: run.id, scannedAt: now });
+      return refusal("photo-required", "scan recorded; capture photo evidence to complete the pickup");
     }
     if (enforceLocation) {
       const refused = await this.validateActionLocation(handoff);
       if (refused) return refused;
     }
-    const confirmedAt = this.now();
-    this.confirmHandoff(handoff, false, confirmedAt);
+    this.confirmHandoff(handoff, false, now, this.state.runnerId ?? "runner");
     run.handoffs = this.wireHandoffs();
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
-    const event: ServerEvent = {
-      type: "handoff.confirmed",
-      handoffId: handoff.id,
-      runId: run.id,
-      confirmedAt,
-      autoConfirmed: false,
-      ...this.participantAttribution(),
-    };
-    broadcast(this.ctx, this.env,event);
-    broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
+    const event = this.handoffConfirmed(handoff);
+    broadcast(this.ctx, this.env, event);
+    broadcast(this.ctx, this.env, { type: "run.updated", run: this.wireRun() });
     return jsonResponse(event);
   }
 
@@ -405,41 +439,28 @@ export class RunDO extends DurableObject<Env> {
     if (handoff instanceof Response) return handoff;
     const run = this.state.run;
     if (!run) return notFound("run is unknown or retired");
-    if (handoff.status === "confirmed") {
-      const event: ServerEvent = {
-        type: "handoff.confirmed",
-        handoffId: handoff.id,
-        runId: run.id,
-        confirmedAt: handoff.confirmedAt ?? this.now(),
-        autoConfirmed: handoff.autoConfirmed ?? false,
-      };
-      return jsonResponse(event);
-    }
-    if (handoff.photoCaptureRef === undefined) {
-      return refusal(
-        "photo-required",
-        "a handoff cannot confirm without photo evidence — the runner's photo is the confirm act",
-      );
+    if (handoff.status === "confirmed") return this.confirmedEvent(handoff);
+    if (handoff.photoCaptureRef === undefined || handoff.photoCapturedAt === undefined) return refusal("photo-required", "photo evidence is required before confirmation");
+    if (handoff.type === "delivery") {
+      if (handoff.codeVerifiedAt === undefined) return refusal("code-required", "the buyer or receiver must verify the delivery code first");
+      if (handoff.photoCapturedAt < handoff.codeVerifiedAt) return refusal("fresh-photo-required", "capture a new photo after delivery code verification");
+      const expectedConfirmer = run.receiver?.kind === "designated" ? "receiver" : this.state.buyerId;
+      if (data.confirmedBy !== expectedConfirmer) return conflict("delivery must be explicitly confirmed by the selected buyer or designated receiver");
+    } else if (data.confirmedBy !== this.state.runnerId) {
+      return conflict("only the assigned runner may confirm a pickup handoff");
     }
     if (enforceLocation) {
       const refused = await this.validateActionLocation(handoff);
       if (refused) return refused;
     }
     const confirmedAt = this.now();
-    this.confirmHandoff(handoff, false, confirmedAt);
+    this.confirmHandoff(handoff, false, confirmedAt, data.confirmedBy);
     run.handoffs = this.wireHandoffs();
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
-    const event: ServerEvent = {
-      type: "handoff.confirmed",
-      handoffId: handoff.id,
-      runId: run.id,
-      confirmedAt,
-      autoConfirmed: false,
-      ...this.participantAttribution(),
-    };
-    broadcast(this.ctx, this.env,event);
-    broadcast(this.ctx, this.env,{ type: "run.updated", run: this.wireRun() });
+    const event = this.handoffConfirmed(handoff);
+    broadcast(this.ctx, this.env, event);
+    broadcast(this.ctx, this.env, { type: "run.updated", run: this.wireRun() });
     return jsonResponse(event);
   }
 
@@ -454,29 +475,21 @@ export class RunDO extends DurableObject<Env> {
     if (run instanceof Response) return run;
     const handoff = this.findHandoff(command.handoffId);
     if (handoff instanceof Response) return handoff;
-    const confirms = handoff.status === "pending" && handoff.scannedAt !== undefined;
+    if (handoff.status === "confirmed") return conflict("confirmed handoff evidence is immutable");
+    const confirms = handoff.type === "pickup" && handoff.scannedAt !== undefined;
     if (confirms && enforceLocation) {
       const refused = await this.validateActionLocation(handoff);
       if (refused) return refused;
     }
     handoff.photoCaptureRef = command.photoCaptureRef;
-    handoff.photoCapturedAt = command.capturedAt;
-    if (confirms) this.confirmHandoff(handoff, false, this.now());
+    handoff.photoCapturedAt = this.now();
+    if (confirms) this.confirmHandoff(handoff, false, this.now(), this.state.runnerId ?? "runner");
     run.handoffs = this.wireHandoffs();
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.scheduleAlarm();
-    if (confirms) {
-      broadcast(this.ctx, this.env,{
-        type: "handoff.confirmed",
-        handoffId: handoff.id,
-        runId: run.id,
-        confirmedAt: handoff.confirmedAt ?? this.now(),
-        autoConfirmed: false,
-      ...this.participantAttribution(),
-      });
-    }
+    if (confirms) broadcast(this.ctx, this.env, this.handoffConfirmed(handoff));
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, this.env,event);
+    broadcast(this.ctx, this.env, event);
     return jsonResponse(event);
   }
 
@@ -498,7 +511,8 @@ export class RunDO extends DurableObject<Env> {
     };
     await this.ctx.storage.put(STATE_KEY, this.state);
     const event: ServerEvent = { type: "run.updated", run: this.wireRun() };
-    broadcast(this.ctx, this.env,event);
+    // Live sockets receive the throttled fix; durable notifications do not flood on GPS updates.
+    broadcast(this.ctx, event);
     return jsonResponse(event);
   }
 
@@ -514,14 +528,14 @@ export class RunDO extends DurableObject<Env> {
     if (!run.stops.every((stop) => stop.status === "completed")) {
       return conflict("every seller stop must be confirmed before final delivery");
     }
-    // Photo-required confirm (ADR-0019 as amended): a run cannot reach final
-    // delivery — and therefore settlement release — with a handoff still
-    // waiting on photo evidence.
     if (this.state.handoffs.some((handoff) => handoff.status !== "confirmed")) {
-      return refusal(
-        "photo-required",
-        "every handoff must be confirmed before final delivery — a pending handoff is waiting on runner photo evidence",
-      );
+      return refusal("handoff-required", "every pickup and delivery handoff must be confirmed before final delivery");
+    }
+    const delivery = this.state.handoffs.find((handoff) => handoff.type === "delivery");
+    if (!delivery || delivery.status !== "confirmed" || delivery.autoConfirmed === true ||
+        delivery.codeVerifiedAt === undefined || delivery.confirmedBy === undefined ||
+        delivery.photoCapturedAt === undefined || delivery.photoCapturedAt < delivery.codeVerifiedAt) {
+      return refusal("delivery-confirmation-required", "final delivery requires a code-verified, freshly photographed, explicitly confirmed delivery handoff");
     }
     if (enforceLocation) {
       const refused = await this.validateActionLocation(undefined, true);
@@ -603,13 +617,51 @@ export class RunDO extends DurableObject<Env> {
     return handoff;
   }
 
-  /** Mark the handoff confirmed, complete its stop, promote the next one. */
-  private confirmHandoff(handoff: InternalHandoff, auto: boolean, at: number): void {
+  private async deliveryCode(): Promise<Response> {
+    const run = this.requireRun();
+    if (run instanceof Response) return run;
+    const issuedAt = this.state.deliveryCodeIssuedAt;
+    const expiresAt = this.state.deliveryCodeExpiresAt;
+    if (issuedAt === undefined || expiresAt === undefined) return notFound("delivery code is unavailable");
+    if (this.now() >= expiresAt) return refusal("code-expired", "delivery code has expired");
+    const issued = await issueDeliveryCode(this.env, run.id, issuedAt);
+    return jsonResponse({ code: issued.code, expiresAt });
+  }
+
+  private async handoffChallenge(handoffId: string): Promise<Response> {
+    const run = this.requireRun();
+    if (run instanceof Response) return run;
+    const handoff = this.findHandoff(handoffId);
+    if (handoff instanceof Response) return handoff;
+    if (handoff.type !== "pickup") return conflict("delivery uses the buyer-only delivery code endpoint");
+    return jsonResponse({ challenge: await pickupChallenge(this.env, run.id, handoff) });
+  }
+
+  private handoffConfirmed(handoff: InternalHandoff): ServerEvent {
+    return {
+      type: "handoff.confirmed",
+      handoffId: handoff.id,
+      runId: this.state.run?.id ?? "unknown",
+      confirmedAt: handoff.confirmedAt ?? this.now(),
+      ...(handoff.confirmedBy ? { confirmedBy: handoff.confirmedBy } : {}),
+      autoConfirmed: handoff.autoConfirmed ?? false,
+      ...this.participantAttribution(),
+    };
+  }
+
+  private confirmedEvent(handoff: InternalHandoff): Response {
+    return jsonResponse(this.handoffConfirmed(handoff));
+  }
+
+  /** Mark the handoff confirmed; only pickup handoffs complete seller stops. */
+  private confirmHandoff(handoff: InternalHandoff, auto: boolean, at: number, confirmedBy: string): void {
     const run = this.state.run;
     if (!run) return;
     handoff.status = "confirmed";
     handoff.autoConfirmed = auto;
     handoff.confirmedAt = at;
+    handoff.confirmedBy = confirmedBy;
+    if (handoff.type === "delivery") return;
 
     const stop = run.stops.find(
       (candidate) => candidate.exchangePoint === handoff.exchangePointId && candidate.status !== "completed",
@@ -635,7 +687,7 @@ export class RunDO extends DurableObject<Env> {
     const now = this.now();
     const candidates: number[] = [];
     for (const handoff of this.state.handoffs) {
-      if (handoff.status === "pending") {
+      if (handoff.type === "pickup" && handoff.status === "pending") {
         const deadline = handoff.requestedAt + HANDOFF_AUTO_CONFIRM_MS;
         // Photoless past the deadline: auto-confirm never fires without
         // evidence — re-arm a short clock so the awaiting-photo state is
@@ -666,34 +718,24 @@ export class RunDO extends DurableObject<Env> {
     }
     const now = this.now();
 
-    // Buyer silence = consent — but never photoless (ADR-0019 as amended):
-    // auto-confirm fires only when the runner's photo evidence is attached.
-    // A photoless handoff past its deadline stays pending, is marked
-    // `awaitingPhoto` on the wire, and the alarm re-arms (scheduleAlarm below).
+    // Pickup silence may auto-confirm with evidence. Delivery never does:
+    // it always needs code verification, fresh evidence, and explicit receipt.
     let handoffsChanged = false;
     for (const handoff of this.state.handoffs) {
-      if (handoff.status !== "pending") continue;
+      if (handoff.type !== "pickup" || handoff.status !== "pending") continue;
       const deadline = handoff.requestedAt + HANDOFF_AUTO_CONFIRM_MS;
       if (now < deadline) continue;
       if (handoff.photoCaptureRef === undefined) {
-        handoffsChanged = true; // awaitingPhoto flips on the wire
+        handoffsChanged = true;
         continue;
       }
       if (this.state.locationRequired) {
-        const final = !run.stops.some((stop) => stop.exchangePoint === handoff.exchangePointId);
-        const refused = await this.validateActionLocation(handoff, final);
+        const refused = await this.validateActionLocation(handoff);
         if (refused) { handoffsChanged = true; continue; }
       }
-      this.confirmHandoff(handoff, true, deadline);
+      this.confirmHandoff(handoff, true, deadline, "pickup-auto-confirm");
       handoffsChanged = true;
-      broadcast(this.ctx, this.env,{
-        type: "handoff.confirmed",
-        handoffId: handoff.id,
-        runId: run.id,
-        confirmedAt: deadline,
-        autoConfirmed: true,
-        ...this.participantAttribution(),
-      });
+      broadcast(this.ctx, this.env, this.handoffConfirmed(handoff));
     }
     if (handoffsChanged) {
       run.handoffs = this.wireHandoffs();
@@ -838,6 +880,7 @@ export class RunDO extends DurableObject<Env> {
     const now = this.now();
     return this.state.handoffs.map((handoff) => ({
       id: handoff.id,
+      type: handoff.type,
       exchangePoint: handoff.exchangePointId,
       counterparty: handoff.counterparty,
       status: handoff.status,
@@ -846,8 +889,10 @@ export class RunDO extends DurableObject<Env> {
       ...(handoff.photoCapturedAt !== undefined ? { photoCapturedAt: handoff.photoCapturedAt } : {}),
       ...(handoff.scannedAt !== undefined ? { scannedAt: handoff.scannedAt } : {}),
       ...(handoff.confirmedAt !== undefined ? { confirmedAt: handoff.confirmedAt } : {}),
+      ...(handoff.confirmedBy !== undefined ? { confirmedBy: handoff.confirmedBy } : {}),
       ...(handoff.autoConfirmed !== undefined ? { autoConfirmed: handoff.autoConfirmed } : {}),
-      ...(handoff.status === "pending" &&
+      ...(handoff.type === "delivery" && this.state.deliveryCodeExpiresAt !== undefined ? { codeExpiresAt: this.state.deliveryCodeExpiresAt } : {}),
+      ...(handoff.type === "pickup" && handoff.status === "pending" &&
       handoff.photoCaptureRef === undefined &&
       now >= handoff.requestedAt + HANDOFF_AUTO_CONFIRM_MS
         ? { awaitingPhoto: true }

@@ -7,6 +7,8 @@ import {
   buyerOffer,
   checkout,
   finalDelivery,
+  confirmHandoff,
+  getHandoffChallenge,
   getRun,
   initiateHandoff,
   listIntentProducts,
@@ -92,7 +94,7 @@ async function run(): Promise<void> {
   // 4 — Checkout at the floor rate.
   router.replace("/buyer/checkout");
   await wait(3500);
-  const accepted = await checkout({ kind: "plus-code", plusCode: "6FR5+8X Lagos" });
+  const accepted = await checkout({ kind: "plus-code", plusCode: "6FR5+8X Lagos" }, undefined, { kind: "designated", name: "Receiver" });
   await wait(4500);
 
   // 5 — Runner: handoff, scan, evidence, delivery.
@@ -103,19 +105,22 @@ async function run(): Promise<void> {
   if (run && nextStop) {
     const handoffId = newId("handoff");
     await initiateHandoff(run.id, {
-      handoffId,
+      handoffId, handoffType: "pickup",
       exchangePointId: nextStop.exchangePoint,
       counterparty: nextStop.sellerName,
     });
     await wait(1500);
-    router.replace({ pathname: "/runner/handoff", params: { handoffId } });
-    await wait(4000);
+    router.replace({ pathname: "/runner/handoff", params: { handoffId, runId: run.id } });
+    const challenge = await getHandoffChallenge(run.id, handoffId);
+    await scanChallenge(run.id, handoffId, challenge);
     await attachPhoto(run.id, handoffId, `r2://archive/captures/${handoffId}.jpg`);
-    await wait(2500);
-    await scanChallenge(run.id, handoffId); // idempotent if auto-confirm won the race
     await wait(3000);
-    router.replace("/runner");
-    await wait(4000);
+    const deliveryId = newId("handoff");
+    const deliveryLabel = run.delivery.kind === "plus-code" ? run.delivery.plusCode : run.delivery.name;
+    await initiateHandoff(run.id, { handoffId: deliveryId, handoffType: "delivery", exchangePointId: deliveryLabel, counterparty: "Receiver" });
+    await scanChallenge(run.id, deliveryId, accepted.deliveryCode!);
+    await attachPhoto(run.id, deliveryId, `r2://archive/captures/${deliveryId}.jpg`);
+    await confirmHandoff(run.id, deliveryId);
     await finalDelivery(run.id);
     await wait(4000);
     router.replace("/runner");

@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 import { Text } from "react-native";
-import { useActiveStore } from "../../src/api";
+import { getHandoffChallenge, useActiveStore } from "../../src/api";
+import type { RunHandoff } from "@market-runs/proto";
 import { HandoffQrCard, RunMap, StopList, TripSummaryCard, useSellerRun } from "../../src/features/run";
-import { Card, Page, Section, s } from "../../src/ui";
+import { Button, Card, Page, Section, s } from "../../src/ui";
+
+function SellerPickupQr({ runId, handoff, now }: { runId: string; handoff: RunHandoff; now: number }) {
+  const [challenge, setChallenge] = useState<string>();
+  useEffect(() => {
+    setChallenge(undefined);
+    void getHandoffChallenge(runId, handoff.id).then(setChallenge).catch(() => setChallenge(undefined));
+  }, [runId, handoff.id]);
+  return <HandoffQrCard handoff={handoff} runId={runId} challenge={challenge} now={now} prompt="Show this signed QR when the runner arrives" />;
+}
 
 /**
  * The seller's trip view: the live run through this store's lens. Opened from
@@ -12,11 +22,9 @@ import { Card, Page, Section, s } from "../../src/ui";
  * exchange point. The pending handoff shows the one-time QR the runner scans.
  */
 export default function SellerTrip() {
-  const { exchangePoint } = useLocalSearchParams<{ exchangePoint?: string }>();
+  const { exchangePoint, runId } = useLocalSearchParams<{ exchangePoint?: string; runId?: string }>();
   const { store } = useActiveStore();
-  // Discovery over the live_runs index finds the trip carrying this store's
-  // products — a seller device never has a stored run id of its own.
-  const run = useSellerRun(store);
+  const run = useSellerRun(store, 15000, runId);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -43,6 +51,7 @@ export default function SellerTrip() {
 
   return (
     <Page eyebrow={`${scope.toUpperCase()} · ${run.live ? "LIVE" : "POLLING"}`} title="Trip">
+      {run.runs.length > 1 ? <Section title="Active trips">{run.runs.map((entry) => <Button key={entry.runId} title={current.id === entry.runId ? `Selected · ${entry.runId}` : entry.runId} secondary={current.id !== entry.runId} onPress={() => run.selectRun(entry.runId)} />)}</Section> : null}
       <RunMap run={current} onlyExchangePoint={scope} />
       <TripSummaryCard run={current} />
 
@@ -53,14 +62,7 @@ export default function SellerTrip() {
 
       <Section title="Pickup handoff">
         {handoffs.length === 0 ? <Card><Text style={s.muted}>No runner at your stall right now.</Text></Card> : null}
-        {handoffs.map((handoff) => (
-          <HandoffQrCard
-            key={handoff.id}
-            handoff={handoff}
-            now={now}
-            prompt={`Show this code to ${handoff.counterparty} when the runner arrives`}
-          />
-        ))}
+        {handoffs.map((handoff) => <SellerPickupQr key={handoff.id} runId={current.id} handoff={handoff} now={now} />)}
       </Section>
     </Page>
   );
