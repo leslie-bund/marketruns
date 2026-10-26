@@ -95,6 +95,8 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     const degraded = (warning: string) => c.json(ActiveRunsResponseSchema.parse({ runs: [], warning }));
     let sellerStoreId = "";
     let includeUnassigned = false;
+    const buyerScope = who.role === "buyer";
+    if (who.role !== "buyer" && who.role !== "seller" && who.role !== "runner") return errorResponse(403, "forbidden", "invalid participant role");
     if (who.role === "seller") {
       sellerStoreId = c.req.query("storeId") ?? "";
       if (!sellerStoreId) return errorResponse(400, "invalid-query", "seller run discovery requires storeId");
@@ -109,7 +111,7 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     const target = new URL("/admin/runs", c.env.OPS_ARCHIVE_URL);
     target.searchParams.set("market", market);
     if (sellerStoreId) target.searchParams.set("storeId", sellerStoreId);
-    else if (!includeUnassigned) target.searchParams.set("runnerId", who.id);
+    else if (!includeUnassigned && !buyerScope) target.searchParams.set("runnerId", who.id);
     target.searchParams.set("kind", "live");
     target.searchParams.set("limit", "200");
     let upstream: Response;
@@ -122,7 +124,7 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     if (!parsed.success) return degraded("live run discovery is unavailable: the live_runs index returned an unexpected shape");
     const runs: ActiveRun[] = parsed.data.items
       .filter((entry): entry is LiveRun => entry.kind === "live" && entry.retiredAt === null &&
-        (sellerStoreId ? entry.storeIds.includes(sellerStoreId) : entry.runnerId === who.id || (includeUnassigned && entry.runnerId === null)))
+        (sellerStoreId ? entry.storeIds.includes(sellerStoreId) : buyerScope ? entry.buyerId === who.id : entry.runnerId === who.id || (includeUnassigned && entry.runnerId === null)))
       .map((entry) => ({ runId: entry.runId, market: entry.market, status: entry.status, buyerId: entry.buyerId, startedAt: entry.startedAt, stopCount: entry.stopCount }))
       .sort((a, b) => b.startedAt - a.startedAt);
     return c.json(ActiveRunsResponseSchema.parse({ runs }));

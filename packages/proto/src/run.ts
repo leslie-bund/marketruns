@@ -53,8 +53,18 @@ export const RunRouteSchema = z.object({
 });
 export type RunRoute = z.infer<typeof RunRouteSchema>;
 
+export const HandoffTypeSchema = z.enum(["pickup", "delivery"]);
+export type HandoffType = z.infer<typeof HandoffTypeSchema>;
+
+export const DeliveryReceiverSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("buyer") }),
+  z.object({ kind: z.literal("designated"), name: z.string().trim().min(1).max(100) }),
+]);
+export type DeliveryReceiver = z.infer<typeof DeliveryReceiverSchema>;
+
 export const RunHandoffSchema = z.object({
   id: z.string().min(1),
+  type: HandoffTypeSchema,
   exchangePoint: z.string().min(1),
   counterparty: z.string().min(1),
   status: z.enum(["pending", "confirmed"]),
@@ -69,15 +79,11 @@ export const RunHandoffSchema = z.object({
   photoCapturedAt: TimestampSchema.optional(),
   scannedAt: TimestampSchema.optional(),
   confirmedAt: TimestampSchema.optional(),
+  /** Server attribution: buyer participant id, or "receiver" for account-less delegated receipt. */
+  confirmedBy: z.string().min(1).optional(),
   autoConfirmed: z.boolean().optional(),
-  /**
-   * Photo-required confirm (owner decision amending ADR-0019): a handoff
-   * never confirms without `photoCaptureRef`. TRUE while a pending handoff is
-   * past its auto-confirm deadline with no photo attached — auto-confirm is
-   * paused and every screen should show "waiting for runner photo evidence".
-   * Additive/optional; computed at emission, never stored.
-   */
   awaitingPhoto: z.boolean().optional(),
+  codeExpiresAt: TimestampSchema.optional(),
 });
 export type RunHandoff = z.infer<typeof RunHandoffSchema>;
 
@@ -87,33 +93,21 @@ export const RunSchema = z.object({
   status: RunStatusSchema,
   floorRateKobo: KoboSchema,
   delivery: DeliverySchema,
+  receiver: DeliveryReceiverSchema.optional(),
+  delegatedByParticipantId: z.string().min(1).optional(),
   stops: z.array(RunStopSchema),
   handoffs: z.array(RunHandoffSchema),
-  /** Trusted participant attribution used by the notification pipeline; absent on legacy reads. */
   buyerId: z.string().min(1).optional(),
   runnerId: z.string().min(1).optional(),
   sellerParticipantIds: z.array(z.string().min(1)).optional(),
   location: GeoLocationSchema.optional(),
-  /** Whole-trip routed path, computed at checkout and cached here (routing is called at checkout, cached in the RunDO). */
   route: RunRouteSchema.optional(),
-  /**
-   * Durable dispute state, surfaced on every run.updated once the RunDO has
-   * it. Additive/optional so older clients keep parsing (they simply never
-   * see the fields). NULL raiser = disputed before attribution existed, or an
-   * anonymous dispute.
-   */
   disputed: z.boolean().optional(),
   disputeRaisedByParticipantId: z.string().min(1).nullable().optional(),
-  /** Final-delivery stamp; clients compute the 30-minute dispute-window countdown from it. NULL until delivered. */
   finalDeliveryAt: TimestampSchema.nullable().optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
-/**
- * Client-safe projection of one live run, served by the edge's runner
- * run-discovery endpoint (GET /markets/:market/runs/active) from the
- * live_runs index — never by listing DOs (ADR-0017).
- */
 export const ActiveRunSchema = z.object({
   runId: z.string().min(1),
   market: z.string().min(1),
@@ -124,39 +118,29 @@ export const ActiveRunSchema = z.object({
 });
 export type ActiveRun = z.infer<typeof ActiveRunSchema>;
 
-/**
- * GET /markets/:market/runs/active response. The live_runs index is an
- * oversight index, not doctrine: when it is unreachable the edge degrades to
- * an empty list with `warning` set rather than breaking the runner screen.
- */
 export const ActiveRunsResponseSchema = z.object({
   runs: z.array(ActiveRunSchema),
-  /** Set when the list is empty because the index was unavailable, not because no runs are live. */
   warning: z.string().optional(),
 });
 export type ActiveRunsResponse = z.infer<typeof ActiveRunsResponseSchema>;
 
-/** Edge → participants: Run state after any transition or Handoff. */
-export const RunUpdatedSchema = z.object({
-  type: z.literal("run.updated"),
-  run: RunSchema,
-});
+export const RunUpdatedSchema = z.object({ type: z.literal("run.updated"), run: RunSchema });
 export type RunUpdated = z.infer<typeof RunUpdatedSchema>;
 
-/** Runner → edge: throttled fire-and-forget location stream. */
+/** observedAt is accepted for wire compatibility but ignored; the server stamps receipt. */
 export const RunnerLocationUpdatedSchema = z.object({
   type: z.literal("run.location-updated"),
   runId: z.string().min(1),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
-  observedAt: TimestampSchema,
+  observedAt: TimestampSchema.optional(),
 });
 export type RunnerLocationUpdated = z.infer<typeof RunnerLocationUpdatedSchema>;
 
-/** Edge → participants: a Handoff opened; the 3-min auto-confirm clock starts. */
 export const HandoffInitiatedSchema = z.object({
   type: z.literal("handoff.initiated"),
   handoffId: z.string().min(1),
+  handoffType: HandoffTypeSchema,
   runId: z.string().min(1),
   exchangePointId: z.string().min(1),
   counterparty: z.string().min(1),
@@ -168,38 +152,39 @@ export const HandoffInitiatedSchema = z.object({
 });
 export type HandoffInitiated = z.infer<typeof HandoffInitiatedSchema>;
 
-/** Runner → edge: the one-time QR challenge at the Exchange Point was scanned. */
+/** The payload came from a server-issued QR; a bare handoff id is never sufficient. */
 export const HandoffChallengeScannedSchema = z.object({
   type: z.literal("handoff.challenge-scanned"),
   handoffId: z.string().min(1),
   runId: z.string().min(1),
-  scannedAt: TimestampSchema,
+  challenge: z.string().min(6).max(1000),
 });
 export type HandoffChallengeScanned = z.infer<typeof HandoffChallengeScannedSchema>;
 
-/** Runner → edge: photo evidence captured; `photoCaptureRef` is the signed R2 reference. */
+/** capturedAt is accepted for compatibility but ignored; the server stamps evidence. */
 export const HandoffPhotoCapturedSchema = z.object({
   type: z.literal("handoff.photo-captured"),
   handoffId: z.string().min(1),
   photoCaptureRef: z.string().min(1),
-  capturedAt: TimestampSchema,
+  capturedAt: TimestampSchema.optional(),
 });
 export type HandoffPhotoCaptured = z.infer<typeof HandoffPhotoCapturedSchema>;
 
-/**
- * Edge → participants: the Handoff is confirmed — explicitly, or
- * auto-confirmed after 3 minutes of buyer silence (buyer silence = consent).
- * Either way a photo is attached first: confirms are never photoless (owner
- * decision amending ADR-0019).
- */
 export const HandoffConfirmedSchema = z.object({
   type: z.literal("handoff.confirmed"),
   handoffId: z.string().min(1),
   runId: z.string().min(1),
   confirmedAt: TimestampSchema,
+  confirmedBy: z.string().min(1).optional(),
   autoConfirmed: z.boolean(),
   buyerId: z.string().min(1).optional(),
   runnerId: z.string().min(1).optional(),
   sellerParticipantIds: z.array(z.string().min(1)).optional(),
 });
 export type HandoffConfirmed = z.infer<typeof HandoffConfirmedSchema>;
+
+export const DeliveryCodeSchema = z.object({
+  code: z.string().regex(/^\d{6}$/),
+  expiresAt: TimestampSchema,
+});
+export type DeliveryCode = z.infer<typeof DeliveryCodeSchema>;

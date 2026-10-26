@@ -1,6 +1,16 @@
 import { SELF, runDurableObjectAlarm } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { readJson, runStub, shiftTime } from "./helpers.js";
+import {
+  RUNNER,
+  SELLER,
+  completePickup,
+  confirm,
+  identity,
+  openDelivery,
+  photo,
+  scan,
+} from "./handoff-helpers.js";
 
 /**
  * Functional integration tests: the whole MVP flow over the PUBLIC HTTP
@@ -13,10 +23,10 @@ import { readJson, runStub, shiftTime } from "./helpers.js";
 
 const BASE = "http://edge";
 
-async function postJson(path: string, body: unknown): Promise<Response> {
+async function postJson(path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
   return SELF.fetch(new Request(`${BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   }));
 }
@@ -49,50 +59,42 @@ async function attachRunSocket(runId: string): Promise<{ events: Array<Record<st
 }
 
 /** Drive a market from intent to a live run; returns the run id. */
-async function driveToRun(market: string, buyerId: string): Promise<{ runId: string; productId: string }> {
+async function driveToRun(market: string, buyerId: string): Promise<{ runId: string; productId: string; code: string }> {
   const intentId = `e2e-intent-${market}`;
   const productId = `e2e-product-${market}`;
-
+  const buyer = identity(buyerId, "buyer");
   const posted = await postJson("/command", {
     type: "intent.posted", intentId, shopItem: "Tomatoes", quantity: 2, unit: "kg",
-    priceBand: { minKobo: 120_000, maxKobo: 180_000 }, note: "firm and ripe", market, buyerId,
-  });
+    priceBand: { minKobo: 120_000, maxKobo: 180_000 }, note: "firm and ripe", market,
+  }, buyer);
   expect(posted.status).toBe(200);
   expect((await readJson(posted)).type).toBe("intent.recorded");
-
   const offered = await postJson(`/markets/${market}/offers`, {
     productId, intentId, market, shopItem: "Tomatoes", quantity: 2, unit: "kg",
-    priceKobo: 165_000, sellerName: "Amina's Fresh Store", exchangePoint: `${market} Market, Stall B14`,
+    priceKobo: 165_000, sellerName: "Amina's Fresh Store", sellerParticipantId: SELLER, exchangePoint: `${market} Market, Stall B14`,
   });
   expect(offered.status).toBe(200);
-
   const negotiated = await postJson("/command", {
     type: "negotiation.price-adjusted", productId, by: "buyer", priceKobo: 160_000, at: Date.now(),
-  });
+  }, buyer);
   expect(negotiated.status).toBe(200);
-
-  const accepted = await postJson("/command", { type: "product.accepted", productId });
+  const accepted = await postJson("/command", { type: "product.accepted", productId }, buyer);
   expect(accepted.status).toBe(200);
   const acceptedEvent = await readJson(accepted);
-  expect(acceptedEvent.type).toBe("cart.updated");
-  // The edge is authoritative for the cart id: the client learns it from the
-  // accept response (cart:<market>:<buyerId>) rather than deriving it.
   const cartId = String((acceptedEvent.cart as { id: string }).id);
-
   const checkoutResponse = await postJson("/command", {
-    type: "checkout.requested", cartId, buyerId,
-    delivery: { kind: "plus-code", plusCode: "6FR5+8X Lagos" },
-  });
+    type: "checkout.requested", cartId,
+    delivery: { kind: "plus-code", plusCode: "6FR5+8X Lagos" }, receiver: { kind: "designated", name: "Receiver" },
+  }, buyer);
   expect(checkoutResponse.status, await checkoutResponse.clone().text()).toBe(200);
   const checkoutEvent = await readJson(checkoutResponse);
-  expect(checkoutEvent.type).toBe("checkout.accepted");
   expect(checkoutEvent.floorRateKobo).toBe(170_000);
-  return { runId: String(checkoutEvent.runId), productId };
+  return { runId: String(checkoutEvent.runId), productId, code: String(checkoutEvent.deliveryCode) };
 }
 
 describe("end-to-end over the public HTTP surface", () => {
   it("intent → offer → negotiate → accept → checkout → handoff → delivery → settlement", async () => {
-    const { runId } = await driveToRun("e2e", "buyer:e2e");
+    const { runId, code } = await driveToRun("e2e", "buyer:e2e");
     expect(runId).toBe("run:cart:e2e:buyer:e2e");
 
     // The ops console sees the live run and the market overview (per-buyer
@@ -105,31 +107,16 @@ describe("end-to-end over the public HTTP surface", () => {
 
     const { waitFor } = await attachRunSocket(runId);
 
-    const handoffId = "e2e-handoff-1";
-    const initiated = await postJson(`/runs/${runId}/handoffs`, {
-      handoffId, exchangePointId: "e2e Market, Stall B14", counterparty: "Amina's Fresh Store",
-    });
-    expect(initiated.status).toBe(200);
-    expect((await readJson(initiated)).type).toBe("handoff.initiated");
-
-    const photo = await postJson(`/runs/${runId}/handoffs/${handoffId}/photo`, {
-      type: "handoff.photo-captured", handoffId,
-      photoCaptureRef: "r2://archive/captures/e2e-handoff-1.jpg", capturedAt: Date.now(),
-    });
-    expect(photo.status).toBe(200);
-
-    const scan = await postJson("/command", {
-      type: "handoff.challenge-scanned", handoffId, runId, scannedAt: Date.now(),
-    });
-    expect(scan.status).toBe(200);
-    expect((await readJson(scan)).type).toBe("handoff.confirmed");
-
+    await completePickup(runId, "e2e", "e2e-handoff-1");
     const location = await postJson("/command", {
-      type: "run.location-updated", runId, latitude: 6.4541, longitude: 3.3947, observedAt: Date.now(),
-    });
+      type: "run.location-updated", runId, latitude: 6.4541, longitude: 3.3947, observedAt: 1,
+    }, identity(RUNNER, "runner"));
     expect(location.status).toBe(200);
-
-    const final = await postJson(`/runs/${runId}/delivery/final`, {});
+    await openDelivery(runId, "buyer:e2e", "e2e-delivery", "Receiver");
+    await scan(runId, "e2e-delivery", code);
+    await photo(runId, "e2e-delivery");
+    expect((await confirm(runId, "e2e-delivery")).status).toBe(200);
+    const final = await postJson(`/runs/${runId}/delivery/final`, {}, identity(RUNNER, "runner"));
     expect(final.status).toBe(200);
     expect(((await readJson(final)).run as { status: string }).status).toBe("delivered");
 
@@ -143,13 +130,13 @@ describe("end-to-end over the public HTTP surface", () => {
     expect(released.mode).toBe("completed");
     expect(released.buyerId).toBe("buyer:e2e");
     expect(released.runnerId).toBe("runner:internal");
-    expect(released.sellers).toEqual([{ sellerId: "Amina's Fresh Store", amountKobo: 144_000 }]);
+    expect(released.sellers).toEqual([{ sellerId: SELLER, amountKobo: 144_000 }]);
     expect(released.runnerKobo).toBe(160_000);
     expect(released.platformKobo).toBe(26_000); // 16_000 seller commission + 10_000 runner margin deduction
     expect(released.buyerRefundKobo).toBe(0);
     expect(released.inputs).toMatchObject({
       mode: "completed",
-      sellers: [{ sellerId: "Amina's Fresh Store", amountKobo: 160_000, stopCompleted: true }],
+      sellers: [{ sellerId: SELLER, amountKobo: 160_000, stopCompleted: true }],
     });
 
     const retired = await waitFor("run.retired");

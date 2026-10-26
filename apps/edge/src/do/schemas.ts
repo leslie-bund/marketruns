@@ -7,6 +7,7 @@ import {
   ProductRetirementReasonSchema,
   ProductSchema,
   RunRouteSchema,
+  DeliveryReceiverSchema,
   TimestampSchema,
 } from "@market-runs/proto";
 
@@ -202,6 +203,7 @@ export type RetireProductRequest = z.infer<typeof RetireProductRequestSchema>;
 
 export const InitiateHandoffRequestSchema = HandoffInitiatedSchema.pick({
   handoffId: true,
+  handoffType: true,
   exchangePointId: true,
   counterparty: true,
 });
@@ -209,6 +211,8 @@ export type InitiateHandoffRequest = z.infer<typeof InitiateHandoffRequestSchema
 
 export const HandoffRefRequestSchema = z.object({
   handoffId: z.string().min(1),
+  /** Edge-resolved attribution; never accepted from a client body. */
+  confirmedBy: z.string().min(1),
 });
 export type HandoffRefRequest = z.infer<typeof HandoffRefRequestSchema>;
 
@@ -223,6 +227,8 @@ export const SeedRunRequestSchema = z.object({
       z.object({ kind: z.literal("plus-code"), plusCode: z.string().min(1) }),
       z.object({ kind: z.literal("muster-point"), name: z.string().min(1) }),
     ]),
+    receiver: DeliveryReceiverSchema.default({ kind: "buyer" }),
+    delegatedByParticipantId: z.string().min(1).optional(),
     stops: z.array(z.object({
       sellerName: z.string().min(1),
       storeId: z.string().min(1).optional(),

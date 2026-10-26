@@ -14,6 +14,7 @@ import { forwardTo } from "./markets.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 import { coreRegistry } from "../../registry/index.js";
 import { requireTransactionRole } from "../middleware/participant.js";
+import { runForParticipant } from "../run-access.js";
 
 /**
  * The per-object scopes: /products/:productId, /carts/:cartId, /runs/:runId.
@@ -101,25 +102,60 @@ export function runsRoute(): Hono<{ Bindings: Env }> {
     return runStub(c).fetch(internalPost("/claim", { participantId: c.get("participant").id }, correlationHeaders(c, resolvedHeaders(c))));
   });
 
+  app.get("/:runId/delivery-code", async (c) => {
+    const who = c.get("participant");
+    if (who.role !== "buyer") return errorResponse(403, "forbidden", "only the buyer may read the delivery code");
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), who);
+    if ("denied" in access) return access.denied;
+    return runStub(c).fetch(new Request("http://do/delivery-code", { headers: correlationHeaders(c) }));
+  });
+  app.get("/:runId/handoffs/:handoffId/challenge", async (c) => {
+    const who = c.get("participant");
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), who);
+    if ("denied" in access) return access.denied;
+    const handoffId = decodeURIComponent(c.req.param("handoffId"));
+    const handoff = access.run.handoffs.find((candidate) => candidate.id === handoffId && candidate.type === "pickup");
+    if (!handoff || who.role !== "seller") return errorResponse(403, "forbidden", "only the pickup seller may read this QR challenge");
+    const target = new URL("http://do/handoff/challenge");
+    target.searchParams.set("handoffId", handoffId);
+    return runStub(c).fetch(new Request(target, { headers: correlationHeaders(c) }));
+  });
   app.post("/:runId/handoffs", async (c) => {
     const denied = await requireRunnerForSession(c);
-    return denied ?? forwardValidated(c, "/handoff/initiate", InitiateHandoffRequestSchema);
+    if (denied) return denied;
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), c.get("participant"));
+    if ("denied" in access) return access.denied;
+    return forwardValidated(c, "/handoff/initiate", InitiateHandoffRequestSchema);
   });
   app.post("/:runId/handoffs/:handoffId/confirm", async (c) => {
-    const denied = await requireRunnerForSession(c);
-    if (denied) return denied;
-    const body = { handoffId: decodeURIComponent(c.req.param("handoffId")) };
+    const who = c.get("participant");
+    if (who.role !== "buyer" && who.role !== "runner") return errorResponse(403, "forbidden", "only the runner or receiving buyer may confirm");
+    if (who.source === "session" || who.source === "unauthenticated") {
+      const denied = await requireTransactionRole(c, who.role);
+      if (denied) return denied;
+    }
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), who);
+    if ("denied" in access) return access.denied;
+    const body = {
+      handoffId: decodeURIComponent(c.req.param("handoffId")),
+      confirmedBy: who.role === "buyer" ? who.id : access.run.receiver?.kind === "designated" ? "receiver" : who.id,
+    };
     const check = HandoffRefRequestSchema.safeParse(body);
-    if (!check.success) return errorResponse(400, "invalid-body", "bad handoff id", { issues: check.error.issues });
+    if (!check.success) return errorResponse(400, "invalid-body", "bad handoff confirmation", { issues: check.error.issues });
     return runStub(c).fetch(internalPost("/handoff/confirm", check.data, correlationHeaders(c, resolvedHeaders(c))));
   });
   app.post("/:runId/handoffs/:handoffId/photo", async (c) => {
     const denied = await requireRunnerForSession(c);
-    return denied ?? forwardPhoto(c, decodeURIComponent(c.req.param("handoffId")));
+    if (denied) return denied;
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), c.get("participant"));
+    if ("denied" in access) return access.denied;
+    return forwardPhoto(c, decodeURIComponent(c.req.param("handoffId")));
   });
   app.post("/:runId/delivery/final", async (c) => {
     const denied = await requireRunnerForSession(c);
     if (denied) return denied;
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), c.get("participant"));
+    if ("denied" in access) return access.denied;
     return runStub(c).fetch(internalPost("/delivery/final", {}, correlationHeaders(c, resolvedHeaders(c))));
   });
   app.post("/:runId/dispute", async (c) => {
@@ -130,6 +166,8 @@ export function runsRoute(): Hono<{ Bindings: Env }> {
       const denied = await requireTransactionRole(c, who.role);
       if (denied) return denied;
     }
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), who);
+    if ("denied" in access) return access.denied;
     let raw: unknown;
     try { raw = await c.req.json(); } catch { return errorResponse(400, "invalid-body", "request body is not valid JSON"); }
     const parsed = DisputeRunRequestSchema.safeParse(raw);
@@ -149,8 +187,16 @@ export function runsRoute(): Hono<{ Bindings: Env }> {
   app.all("/:runId/ops", (c) => errorResponse(404, "not-found", `no route: ${c.req.method} ${new URL(c.req.url).pathname}`));
   app.all("/:runId/ops/*", (c) => errorResponse(404, "not-found", `no route: ${c.req.method} ${new URL(c.req.url).pathname}`));
 
-  app.all("/:runId", (c) => forwardTo(c, runStub(c), "/"));
-  app.all("/:runId/*", (c) => forwardTo(c, runStub(c), scopeRest(c, 2)));
+  app.all("/:runId", async (c) => {
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), c.get("participant"));
+    if ("denied" in access) return access.denied;
+    return forwardTo(c, runStub(c), "/");
+  });
+  app.all("/:runId/*", async (c) => {
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), c.get("participant"));
+    if ("denied" in access) return access.denied;
+    return forwardTo(c, runStub(c), scopeRest(c, 2));
+  });
 
   return app;
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Text } from "react-native";
 import { buyerIdForRun, claimRun, finalDelivery, initiateHandoff, locationTick, identities, newId } from "../../src/api";
 import { canRunnerMutate, HandoffList, RunMap, StopList, TripSummaryCard, useRunnerLocationStream, useRunnerPool } from "../../src/features/run";
@@ -7,7 +7,8 @@ import { useActiveMarket, useActiveParticipant } from "../../src/api";
 import { Button, Card, Page, Pill, Section, s } from "../../src/ui";
 
 export default function RunnerHome() {
-  const run = useRunnerPool();
+  const { runId } = useLocalSearchParams<{ runId?: string }>();
+  const run = useRunnerPool(8000, runId);
   const [busy, setBusy] = useState(false);
   const [gpsWanted, setGpsWanted] = useState(false);
   const market = useActiveMarket();
@@ -81,7 +82,8 @@ export default function RunnerHome() {
   const allCollected = current.stops.every((stop) => stop.status === "completed");
   const deliveryLabel = current.delivery.kind === "plus-code" ? current.delivery.plusCode : current.delivery.name;
   const buyer = buyerIdForRun(current);
-  const deliveryHandoff = buyer === null ? undefined : current.handoffs.find((handoff) => handoff.counterparty === buyer);
+  const receiverName = current.receiver?.kind === "designated" ? current.receiver.name : buyer;
+  const deliveryHandoff = current.handoffs.find((handoff) => handoff.type === "delivery");
   const anyPending = current.handoffs.some((handoff) => handoff.status === "pending");
 
   return (
@@ -98,12 +100,12 @@ export default function RunnerHome() {
       </Section>
       {nextStop && !anyPending ? (
         <Button title={busy ? "Working…" : `Open Handoff at ${nextStop.sellerName}`} onPress={act(() => initiateHandoff(current.id, {
-          handoffId: newId("handoff"), exchangePointId: nextStop.exchangePoint, counterparty: nextStop.sellerName,
+          handoffId: newId("handoff"), handoffType: "pickup", exchangePointId: nextStop.exchangePoint, counterparty: nextStop.sellerName,
         }), "Could not initiate handoff")} />
       ) : null}
-      {allCollected && buyer !== null && !deliveryHandoff && current.status !== "delivered" ? (
-        <Button title={busy ? "Working…" : "Open delivery handoff with the buyer"} onPress={act(() => initiateHandoff(current.id, {
-          handoffId: newId("handoff"), exchangePointId: deliveryLabel, counterparty: buyer,
+      {allCollected && receiverName && !deliveryHandoff && current.status !== "delivered" ? (
+        <Button title={busy ? "Working…" : `Open delivery handoff with ${receiverName}`} onPress={act(() => initiateHandoff(current.id, {
+          handoffId: newId("handoff"), handoffType: "delivery", exchangePointId: deliveryLabel, counterparty: receiverName,
         }), "Could not initiate delivery handoff")} />
       ) : null}
       {deliveryHandoff?.status === "pending" ? (

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DeliverySchema, KoboSchema, TimestampSchema } from "./primitives.js";
 import { ProductSchema } from "./negotiation.js";
+import { DeliveryReceiverSchema } from "./run.js";
 
 /**
  * The Cart's single shared lap-timer deadline (ADR-0003): 30 min from the
@@ -55,19 +56,20 @@ export const CheckoutRequestedSchema = z.object({
    * covering the checkout total. Absent → unpaid dev checkout (dev default).
    */
   paymentRef: z.string().min(1).optional(),
+  receiver: DeliveryReceiverSchema.default({ kind: "buyer" }),
 });
 export type CheckoutRequested = z.infer<typeof CheckoutRequestedSchema>;
 
-/**
- * Edge → buyer: checkout accepted at the Floor Rate (MVP: internal runners at
- * floor rate only, ADR-0013). The Run takes over from here.
- */
+/** The delivery code is returned only on the buyer's authenticated checkout/read response, never broadcast. */
 export const CheckoutAcceptedSchema = z.object({
   type: z.literal("checkout.accepted"),
   cartId: z.string().min(1),
   runId: z.string().min(1),
   floorRateKobo: KoboSchema,
   delivery: DeliverySchema,
+  receiver: DeliveryReceiverSchema.optional(),
+  deliveryCode: z.string().regex(/^\d{6}$/).optional(),
+  deliveryCodeExpiresAt: TimestampSchema.optional(),
   buyerId: z.string().min(1).optional(),
   runnerId: z.string().min(1).nullable().optional(),
 });
