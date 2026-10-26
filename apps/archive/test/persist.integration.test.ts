@@ -62,8 +62,8 @@ describe("archive consumer against real Postgres", () => {
         delivery: { kind: "plus-code", plusCode: "6FR5+8X Lagos" },
         stops: [],
         mode: "completed",
-        settlementLegs: [{ sellerId: "itest-seller", amountKobo: 165_000 }],
-        runnerKobo: 170_000,
+        settlementLegs: [{ sellerId: "itest-seller", amountKobo: 148_500 }],
+        runnerKobo: 160_000,
         platformKobo: 26_500,
         buyerRefundKobo: 0,
         platformLossKobo: 0,
@@ -80,8 +80,8 @@ describe("archive consumer against real Postgres", () => {
         buyerId: "itest-buyer",
         runnerId: "runner:internal",
         mode: "completed",
-        sellers: [{ sellerId: "itest-seller", amountKobo: 165_000 }],
-        runnerKobo: 170_000,
+        sellers: [{ sellerId: "itest-seller", amountKobo: 148_500 }],
+        runnerKobo: 160_000,
         platformKobo: 26_500,
         buyerRefundKobo: 0,
         platformLossKobo: 0,
@@ -144,7 +144,7 @@ describe("archive consumer against real Postgres", () => {
     const debited = legs.reduce((sum, leg) => sum + Number(leg.debitKobo), 0);
     const credited = legs.reduce((sum, leg) => sum + Number(leg.creditKobo), 0);
     expect(debited).toBe(credited);
-    expect(debited).toBe(361_500);
+    expect(debited).toBe(335_000);
 
     const [product] = await db.select().from(archivedProducts).where(eq(archivedProducts.id, "itest-product-1"));
     expect(product?.retirementReason).toBe("accepted");

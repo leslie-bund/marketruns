@@ -3,10 +3,11 @@
 #
 #   1. Postgres in docker (starts or reuses the market-runs-postgres container)
 #   2. Drizzle migrations against it
-#   3. Edge (:8787) + archive (:8788) + identity (:8789) + payments (:8790)
+#   3. Core market rows (idempotent; required before any store registration)
+#   4. Edge (:8787) + archive (:8788) + identity (:8789) + payments (:8790)
 #      + notifications (:8791) via infra/dev-servers.sh
-#   4. Demo seed (2 Balogun stores + 1 Computer Village store) — idempotent
-#   5. Optional Cloudflare quick tunnel so friends' phones can reach the edge
+#   5. Demo seed (2 Balogun stores + 1 Computer Village store) — idempotent
+#   6. Optional Cloudflare quick tunnel so friends' phones can reach the edge
 #
 # Usage:
 #   infra/dev-all.sh [--tunnel] [--seed|--no-seed]
@@ -122,7 +123,13 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. OPS_TOKEN policy — decided BEFORE the edge starts so dev-servers.sh
+# 3. Core markets — AFTER migrations and BEFORE demo stores. Idempotent upserts
+#    also repair an existing dev DB; coreRegistry.saveStore requires these rows.
+# --------------------------------------------------------------------------
+node infra/seed-core.mjs
+
+# --------------------------------------------------------------------------
+# 4. OPS_TOKEN policy — decided BEFORE the edge starts so dev-servers.sh
 #    can pass it through as a wrangler var.
 # --------------------------------------------------------------------------
 TOKEN_GENERATED=0
@@ -146,7 +153,7 @@ if [ "$TUNNEL" = 1 ]; then
 fi
 
 # --------------------------------------------------------------------------
-# 4. Edge + archive + identity + payments + notifications (dev-servers.sh owns
+# 5. Edge + archive + identity + payments + notifications (dev-servers.sh owns
 #    the wrangler processes, health checks, and the pidfile; it reads OPS_TOKEN
 #    from the environment when set and passes DATABASE_URL through to all four
 #    Postgres-backed workers).
@@ -155,14 +162,14 @@ SERVERS_STARTED=1
 infra/dev-servers.sh
 
 # --------------------------------------------------------------------------
-# 5. Demo seed (default on; --no-seed skips). Idempotent — safe every run.
+# 6. Demo seed (default on; --no-seed skips). Idempotent — safe every run.
 # --------------------------------------------------------------------------
 if [ "$SEED" = 1 ]; then
   node infra/seed-demo.mjs --edge http://localhost:8787
 fi
 
 # --------------------------------------------------------------------------
-# 6. Optional Cloudflare quick tunnel → http://localhost:8787
+# 7. Optional Cloudflare quick tunnel → http://localhost:8787
 # --------------------------------------------------------------------------
 TUNNEL_URL=""
 if [ "$TUNNEL" = 1 ]; then

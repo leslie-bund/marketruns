@@ -16,9 +16,10 @@ npx pnpm@9.15.4 dev:all -- --no-seed  # skip the demo seed
 
 1. **Postgres** — starts the `market-runs-postgres` docker container (`postgres:16-alpine` on `:54322`) if needed, reuses it if already running, and waits for `pg_isready`.
 2. **Migrations** — `drizzle-kit migrate` in `infra/drizzle` with `DATABASE_URL` (default `postgres://postgres:postgres@localhost:54322/market_runs`). Logs to `.dev-logs/migrate.log`.
-3. **Edge + archive + identity + payments + notifications** — delegates to `infra/dev-servers.sh` (edge on `:8787`, archive on `:8788`, identity on `:8789`, payments on `:8790`, notifications on `:8791`, health checks, logs in `.dev-logs/`). The edge receives explicit local `DATABASE_URL` and `ALLOW_HEADER_AUTH=true` values.
-4. **Demo seed** (default on) — `infra/seed-demo.mjs` registers two Balogun stores (Amina's Fresh Store, Mama Ngozi Provisions) and one Computer Village store (Emeka Phones & Accessories) over the real `POST /command` wire, so a fresh backend has a market vocabulary buyers can post intents against. It uses deterministic store ids — re-running is a no-op.
-5. **`--tunnel`** — runs `cloudflared tunnel --url http://localhost:8787`, captures the `*.trycloudflare.com` URL, and prints a summary box: the tunnel URL, the exact `EXPO_PUBLIC_EDGE_URL=…` line for `apps/mobile/.env`, the guarded `/ops?token=…` console link, and the friend-side step (`npx expo start --tunnel`, which needs `@expo/ngrok`). Without `cloudflared` installed it prints `brew install cloudflared` and continues LAN-only.
+3. **Core markets** — `node infra/seed-core.mjs` upserts Balogun and Computer Village immediately after migrations. This is required before store registration and repairs an existing dev database without deleting data; it runs even with `--no-seed`.
+4. **Edge + archive + identity + payments + notifications** — delegates to `infra/dev-servers.sh` (edge on `:8787`, archive on `:8788`, identity on `:8789`, payments on `:8790`, notifications on `:8791`, health checks, logs in `.dev-logs/`). The edge receives explicit local `DATABASE_URL` and `ALLOW_HEADER_AUTH=true` values.
+5. **Demo seed** (default on) — `infra/seed-demo.mjs` registers two Balogun stores (Amina's Fresh Store, Mama Ngozi Provisions) and one Computer Village store (Emeka Phones & Accessories) over the real `POST /command` wire, so a fresh backend has a market vocabulary buyers can post intents against. It uses deterministic store ids — re-running is a no-op.
+6. **`--tunnel`** — runs `cloudflared tunnel --url http://localhost:8787`, captures the `*.trycloudflare.com` URL, and prints a summary box: the tunnel URL, the exact `EXPO_PUBLIC_EDGE_URL=…` line for `apps/mobile/.env`, the guarded `/ops?token=…` console link, and the friend-side step (`npx expo start --tunnel`, which needs `@expo/ngrok`). Without `cloudflared` installed it prints `brew install cloudflared` and continues LAN-only.
 
 Ctrl-C stops everything the script started — the tunnel, all worker processes, and the Postgres container **only if the script started it** (a container you left running stays running; container data persists either way).
 
@@ -91,7 +92,7 @@ What each check proves:
 
 | Check | Proves |
 | --- | --- |
-| `ledger-balance` | Per settlement_record, debits == credits and the `buyer_capture` debit equals the captured total (outcome sellers + runner + platform + refund − loss). The ledger agrees with the settlement function's kobo. |
+| `ledger-balance` | Per settlement_record, debits == credits and the `buyer_capture` debit equals the captured total (outcome sellers + runner + net platform + refund). Dispute loss is already deducted from platform revenue, not external funding; legacy rows subtract only an actual `platform_loss` debit for backward-compatible reconciliation. The ledger agrees with the settlement function's kobo. |
 | `hold-conservation` | Every collected kobo is accounted: `hold amount == (capture − buyerRefund) + effective refunds`. A `released` hold must have a settlement for its run; refund rows never exceed the hold. |
 | `dispatch-completeness` | Every settlement payout leg (sellers → runner → platform, from the stored outcome) has exactly one `payment_dispatches` row keyed `settlement:<recordId>:leg:<n>` with the exact amount/account/party — no missing, extra, or drifted legs. A terminal (`failure_retryable=false`) failure is a FAIL immediately; a retryable failure WARNs until its attempt budget is exhausted. |
 | `refund-rail` | Every refund ties to a real hold and to a settlement with `buyer_refund_kobo == amount_kobo`; a settlement that decided a refund has a refund row when a hold exists. `refund-manual` rows are REPORTED (ops must act), not discrepancies. |
@@ -115,26 +116,29 @@ docker run -d --name market-runs-postgres -e POSTGRES_PASSWORD=postgres \
 export DATABASE_URL="postgres://postgres:postgres@localhost:54322/market_runs"
 (cd infra/drizzle && npx drizzle-kit migrate)
 
-# 2. Edge worker (DOs, WS gateways, ops console) on :8787
+# 2. Core market rows (required before store registration; idempotent)
+node infra/seed-core.mjs
+
+# 3. Edge worker (DOs, WS gateways, ops console) on :8787
 npx wrangler dev --config infra/wrangler.edge.toml --port 8787
 
-# 3. Archive consumer (queue → Postgres/R2, reputation API) on :8788
+# 4. Archive consumer (queue → Postgres/R2, reputation API) on :8788
 npx wrangler dev --config infra/wrangler.archive.toml --port 8788 \
   --var DATABASE_URL:"$DATABASE_URL"
 
-# 4. Identity worker (face/device-key/sessions) on :8789
+# 5. Identity worker (face/device-key/sessions) on :8789
 npx wrangler dev --config infra/wrangler.identity.toml --port 8789 \
   --var DATABASE_URL:"$DATABASE_URL"
 
-# 5. Payments worker (payment-dispatch queue consumer + /dispatches) on :8790
+# 6. Payments worker (payment-dispatch queue consumer + /dispatches) on :8790
 npx wrangler dev --config infra/wrangler.payments.toml --port 8790 \
   --var DATABASE_URL:"$DATABASE_URL"
 
-# 6. Optional: seed demo stores (idempotent)
+# 7. Optional: seed demo stores (idempotent)
 node infra/seed-demo.mjs
 ```
 
-Or just `infra/dev-servers.sh` for steps 2–5 together (`infra/dev-servers.sh --stop` tears them down). It forwards `OPS_TOKEN` to the edge when that variable is set in the environment.
+Or just `infra/dev-servers.sh` for steps 3–6 together (`infra/dev-servers.sh --stop` tears them down). It forwards `OPS_TOKEN` to the edge when that variable is set in the environment.
 
 Wrangler's dev registry connects the edge's `ARCHIVE_QUEUE` producer to the archive consumer (and `PAYMENT_QUEUE` to the payments consumer) automatically when the dev servers run, so a settled run lands in Postgres — and its payout legs in `payment_dispatches` — without any deploy. The ops console is at `http://localhost:8787/ops`; its reputation panel proxies to `OPS_ARCHIVE_URL` and its Payments tab to `PAYMENTS_URL` (`[vars]` entries, dev-only), while `/auth/*` proxies to `IDENTITY_URL`.
 

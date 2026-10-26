@@ -143,9 +143,9 @@ describe("end-to-end over the public HTTP surface", () => {
     expect(released.mode).toBe("completed");
     expect(released.buyerId).toBe("buyer:e2e");
     expect(released.runnerId).toBe("runner:internal");
-    expect(released.sellers).toEqual([{ sellerId: "Amina's Fresh Store", amountKobo: 160_000 }]);
-    expect(released.runnerKobo).toBe(170_000);
-    expect(released.platformKobo).toBe(26_000); // 10% of 160_000 + 10_000 margin
+    expect(released.sellers).toEqual([{ sellerId: "Amina's Fresh Store", amountKobo: 144_000 }]);
+    expect(released.runnerKobo).toBe(160_000);
+    expect(released.platformKobo).toBe(26_000); // 16_000 seller commission + 10_000 runner margin deduction
     expect(released.buyerRefundKobo).toBe(0);
     expect(released.inputs).toMatchObject({
       mode: "completed",
@@ -178,14 +178,14 @@ describe("end-to-end over the public HTTP surface", () => {
     const settlement = adjustment.settlement as Record<string, unknown>;
     expect(settlement.mode).toBe("aborted");
     expect(settlement.buyerId).toBe("buyer:e2eb");
-    // Capture: goods 160_000 + delivery 170_000 + margin 10_000 = 340_000.
-    // Runner disruption 25% of delivery = 42_500; platform fee 10% = 17_000.
-    expect(settlement.runnerKobo).toBe(42_500);
-    expect(settlement.platformKobo).toBe(17_000);
-    expect(settlement.buyerRefundKobo).toBe(280_500); // 340_000 − 42_500 − 17_000
+    // Capture: goods 160_000 + delivery 170_000 = 330_000. Gross disruption
+    // is 42_500, less 10_000 runner margin; platform fee is 17_000 plus margin.
+    expect(settlement.runnerKobo).toBe(32_500);
+    expect(settlement.platformKobo).toBe(27_000);
+    expect(settlement.buyerRefundKobo).toBe(270_500); // 330_000 − 42_500 − 17_000
     // ADR-0008: the buyer is not made whole — the refund alone is less than
     // the capture, and the runner/platform keep their disruption/fee shares.
-    expect(settlement.buyerRefundKobo as number).toBeLessThan(340_000);
+    expect(settlement.buyerRefundKobo as number).toBeLessThan(330_000);
     expect((settlement.runnerKobo as number) + (settlement.platformKobo as number)).toBeGreaterThan(0);
     expect((settlement.inputs as { abortSplit: unknown }).abortSplit).toBeDefined();
 

@@ -49,7 +49,10 @@ export const SettlementReleasedSchema = z.object({
       .object({
         disruptionCompensationBps: z.number().int().min(0).max(10_000),
         platformFeeBps: z.number().int().min(0).max(10_000),
-        ambiguousLossCapKobo: KoboSchema,
+        ambiguousLossCapKobo: KoboSchema.max(Number.MAX_SAFE_INTEGER),
+      })
+      .refine((split) => split.disruptionCompensationBps + split.platformFeeBps <= 10_000, {
+        message: "disruptionCompensationBps + platformFeeBps must be <= 10000",
       })
       .optional(),
     dispute: z

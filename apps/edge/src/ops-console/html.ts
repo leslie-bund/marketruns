@@ -599,9 +599,10 @@ function renderMarketForm() {
     '<label class="field">Floor base (₦)<input id="mktBase" inputmode="decimal" value="' + esc(koboToNaira(c.floorRate.baseKobo)) + '"></label>' +
     '<label class="field">Per km (₦)<input id="mktPerKm" inputmode="decimal" value="' + esc(koboToNaira(c.floorRate.perKilometerKobo)) + '"></label>' +
     '<label class="field">Per min (₦)<input id="mktPerMin" inputmode="decimal" value="' + esc(koboToNaira(c.floorRate.perMinuteKobo)) + '"></label>' +
-    '<label class="field">Goods commission (%)<input id="mktCommission" inputmode="decimal" value="' + esc((c.settlement.goodsCommissionBps / 100).toString()) + '"></label>' +
-    '<label class="field">Delivery margin (₦)<input id="mktMargin" inputmode="decimal" value="' + esc(koboToNaira(c.settlement.deliveryMarginKobo)) + '"></label>' +
+    '<label class="field">Seller goods commission deduction (%)<input id="mktCommission" inputmode="decimal" value="' + esc((c.settlement.goodsCommissionBps / 100).toString()) + '"></label>' +
+    '<label class="field">Runner delivery margin deduction (₦)<input id="mktMargin" inputmode="decimal" value="' + esc(koboToNaira(c.settlement.deliveryMarginKobo)) + '"></label>' +
     "</div>" +
+    '<p class="helper">Both are deducted from participant proceeds at settlement, never added to the buyer\'s checkout bill. Changes apply only to new runs; existing runs keep their seeded configuration.</p>' +
     '<div id="marketFormError" class="error-box" hidden></div>' +
     '<div class="form-actions">' +
     '<button type="button" id="marketFormSave">' + (creating ? "Create market" : "Save config") + "</button>" +
@@ -900,8 +901,8 @@ function renderOverview() {
     (gateOpen ? '<span class="pill active">checkout open</span>' : '<span class="pill bad">gate closed</span>') + "</span></div>";
   html += '<div class="kv"><span class="k">Closes at</span><span class="v">' + esc(dateTime(cfg.closeAt)) + "</span></div>";
   html += '<div class="kv"><span class="k">Est run / buffer</span><span class="v">' + esc(duration(cfg.estTripMs)) + " / " + esc(duration(cfg.bufferMs)) + "</span></div>";
-  html += '<div class="kv"><span class="k">Settlement</span><span class="v">commission ' + esc(bps(st.goodsCommissionBps)) +
-    ' + margin <span class="money">' + esc(money(st.deliveryMarginKobo)) + "</span></span></div>";
+  html += '<div class="kv"><span class="k">Settlement deductions</span><span class="v">seller commission ' + esc(bps(st.goodsCommissionBps)) +
+    ' · runner margin <span class="money">' + esc(money(st.deliveryMarginKobo)) + "</span> (not buyer surcharges)</span></div>";
   html += '<div class="kv"><span class="k">Open intents</span><span class="v">' + intents.length + "</span></div>";
   intents.forEach(function (intent) {
     var tail = intent.id && intent.id.length > 10 ? "…" + intent.id.slice(-8) : intent.id;

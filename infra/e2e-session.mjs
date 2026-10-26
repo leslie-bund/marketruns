@@ -177,48 +177,63 @@ async function capturePhoto(edge, label) {
 
 /* --------------------------------------------- settlement oracle (test-only) */
 
-const BPS = 10_000;
+const BPS = 10_000n;
 
 /**
  * Independent re-derivation of packages/domain/src/settlement.ts for the two
  * modes this script exercises (disputed, aborted). This is an oracle: if it
  * ever drifts from the domain function, the mismatch it reports IS the
- * finding — do not "fix" the oracle to match a bug.
+ * finding — do not "fix" the oracle to match a bug. All intermediate money
+ * arithmetic is exact bigint, independently of the domain implementation.
  */
 function expectedOutcome(inputs) {
-  const goodsTotal = inputs.sellers.reduce((sum, s) => sum + s.amountKobo, 0);
+  const delivery = BigInt(inputs.deliveryPriceKobo);
+  const marginCap = BigInt(inputs.deliveryMarginKobo);
   const completed = inputs.sellers.filter((s) => s.stopCompleted);
-  const completedTotal = completed.reduce((sum, s) => sum + s.amountKobo, 0);
-  const sellers = inputs.sellers.map((s) => ({ sellerId: s.sellerId, amountKobo: s.stopCompleted ? s.amountKobo : 0 }));
+  const goodsTotal = inputs.sellers.reduce((sum, s) => sum + BigInt(s.amountKobo), 0n);
+  const completedTotal = completed.reduce((sum, s) => sum + BigInt(s.amountKobo), 0n);
+  const goodsCommission = completed.reduce((sum, s) => sum + (BigInt(s.amountKobo) * BigInt(inputs.goodsCommissionBps)) / BPS, 0n);
+  const sellers = inputs.sellers.map((s) => ({
+    sellerId: s.sellerId,
+    amountKobo: s.stopCompleted
+      ? Number(BigInt(s.amountKobo) - (BigInt(s.amountKobo) * BigInt(inputs.goodsCommissionBps)) / BPS)
+      : 0,
+  }));
 
   if (inputs.mode === "aborted") {
     const policy = inputs.abortSplit ?? { disruptionCompensationBps: 2_500, platformFeeBps: 1_000, ambiguousLossCapKobo: 5_000 };
-    const disruption = Math.floor((inputs.deliveryPriceKobo * policy.disruptionCompensationBps) / BPS);
-    const platformFee = Math.floor((inputs.deliveryPriceKobo * policy.platformFeeBps) / BPS);
+    const disruption = (delivery * BigInt(policy.disruptionCompensationBps)) / BPS;
+    const platformFee = (delivery * BigInt(policy.platformFeeBps)) / BPS;
+    const deliveryMargin = marginCap < disruption ? marginCap : disruption;
     return {
       sellers,
-      runnerKobo: disruption,
-      platformKobo: platformFee,
-      buyerRefundKobo: goodsTotal - completedTotal + inputs.deliveryPriceKobo - disruption - platformFee + inputs.deliveryMarginKobo,
+      runnerKobo: Number(disruption - deliveryMargin),
+      platformKobo: Number(goodsCommission + platformFee + deliveryMargin),
+      buyerRefundKobo: Number(goodsTotal - completedTotal + delivery - disruption - platformFee),
       platformLossKobo: 0,
     };
   }
 
-  // disputed: confirmed exchange points settle; the buyer recovers the
-  // residual; the platform retains its delivery margin and absorbs a capped
-  // loss only when the evidence is ambiguous (ADR-0007).
-  const fraction = inputs.sellers.length === 0 ? 0 : completed.length / inputs.sellers.length;
-  const runnerPayout = Math.floor(inputs.deliveryPriceKobo * fraction);
-  const buyersPool = goodsTotal - completedTotal + inputs.deliveryPriceKobo - runnerPayout;
+  // disputed: confirmed exchange points settle less commission; the buyer
+  // recovers the residual plus loss funded out of available platform revenue.
+  const grossRunnerPayout = inputs.sellers.length === 0
+    ? 0n
+    : (delivery * BigInt(completed.length)) / BigInt(inputs.sellers.length);
+  const deliveryMargin = marginCap < grossRunnerPayout ? marginCap : grossRunnerPayout;
+  const buyersPool = goodsTotal - completedTotal + delivery - grossRunnerPayout;
+  const platformRevenue = goodsCommission + deliveryMargin;
   const dispute = inputs.dispute ?? { ambiguous: true };
-  const cap = inputs.abortSplit?.ambiguousLossCapKobo ?? 5_000;
-  const platformLoss = dispute.ambiguous ? Math.min(dispute.requestedPlatformLossKobo ?? 0, cap) : 0;
+  const requested = BigInt(dispute.requestedPlatformLossKobo ?? 0);
+  const policyCap = BigInt(inputs.abortSplit?.ambiguousLossCapKobo ?? 5_000);
+  const platformLoss = dispute.ambiguous
+    ? [requested, policyCap, buyersPool, platformRevenue].reduce((min, value) => value < min ? value : min)
+    : 0n;
   return {
     sellers,
-    runnerKobo: runnerPayout,
-    platformKobo: inputs.deliveryMarginKobo,
-    buyerRefundKobo: buyersPool + platformLoss,
-    platformLossKobo: platformLoss,
+    runnerKobo: Number(grossRunnerPayout - deliveryMargin),
+    platformKobo: Number(platformRevenue - platformLoss),
+    buyerRefundKobo: Number(buyersPool + platformLoss),
+    platformLossKobo: Number(platformLoss),
   };
 }
 
@@ -227,9 +242,9 @@ function sameSellers(actual, expected) {
   return JSON.stringify(norm(actual)) === JSON.stringify(norm(expected));
 }
 
-/** What the captured total is for a settlement: goods + delivery + platform margin (ADR-0008's yardstick). */
+/** The buyer capture is goods + delivery; both platform deductions come out of participant proceeds. */
 function capturedTotalKobo(inputs) {
-  return inputs.sellers.reduce((sum, s) => sum + s.amountKobo, 0) + inputs.deliveryPriceKobo + inputs.deliveryMarginKobo;
+  return Number(inputs.sellers.reduce((sum, s) => sum + BigInt(s.amountKobo), 0n) + BigInt(inputs.deliveryPriceKobo));
 }
 
 /** Mirrors apps/archive/src/settlement-legs.ts: the ledger identity every settlement must write. */
@@ -241,10 +256,7 @@ function expectedLedgerLegs(outcome, ids) {
   if (outcome.runnerKobo > 0) legs.push({ account: "runner_payable", party_id: ids.runnerId, debit_kobo: 0, credit_kobo: outcome.runnerKobo });
   if (outcome.platformKobo > 0) legs.push({ account: "platform_revenue", party_id: null, debit_kobo: 0, credit_kobo: outcome.platformKobo });
   if (outcome.buyerRefundKobo > 0) legs.push({ account: "buyer_refund", party_id: ids.buyerId, debit_kobo: 0, credit_kobo: outcome.buyerRefundKobo });
-  if (outcome.platformLossKobo > 0) legs.push({ account: "platform_loss", party_id: null, debit_kobo: outcome.platformLossKobo, credit_kobo: 0 });
-  const credited = legs.reduce((sum, l) => sum + l.credit_kobo, 0);
-  const debited = legs.reduce((sum, l) => sum + l.debit_kobo, 0);
-  const capture = credited - debited;
+  const capture = legs.reduce((sum, l) => sum + l.credit_kobo, 0);
   if (capture > 0) legs.push({ account: "buyer_capture", party_id: ids.buyerId, debit_kobo: capture, credit_kobo: 0 });
   return legs;
 }
@@ -486,9 +498,18 @@ async function playOpsSettle(label, edge, runId, buyerId, settleRequest) {
   );
 
   const capture = capturedTotalKobo(inputs);
+  const totalOutflows = outcome.sellers.reduce((sum, seller) => sum + seller.amountKobo, 0) +
+    outcome.runnerKobo + outcome.platformKobo + outcome.buyerRefundKobo;
   check(
-    `${label}: buyer refund strictly less than capture (ADR-0008: ${settlement.buyerRefundKobo} < ${capture})`,
-    settlement.buyerRefundKobo > 0 && settlement.buyerRefundKobo < capture,
+    `${label}: total outflows equal capture without external loss funding (${totalOutflows} == ${capture})`,
+    totalOutflows === capture,
+    `outflows ${totalOutflows} vs capture ${capture}`,
+  );
+  const refundConserved = settlement.buyerRefundKobo < capture &&
+    (settleRequest.mode === "aborted" ? settlement.buyerRefundKobo > 0 : settlement.buyerRefundKobo >= 0);
+  check(
+    `${label}: buyer refund conserved below capture (${settlement.buyerRefundKobo} < ${capture})`,
+    refundConserved,
     `refund ${settlement.buyerRefundKobo} vs capture ${capture}`,
   );
 

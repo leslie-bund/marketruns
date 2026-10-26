@@ -36,8 +36,8 @@ const runRetired: RunRetired = {
     },
   ],
   mode: "completed",
-  settlementLegs: [{ sellerId: "Amina's Fresh Store", amountKobo: 165_000 }],
-  runnerKobo: 170_000,
+  settlementLegs: [{ sellerId: "Amina's Fresh Store", amountKobo: 148_500 }],
+  runnerKobo: 160_000,
   platformKobo: 26_500,
   buyerRefundKobo: 0,
   platformLossKobo: 0,
@@ -50,8 +50,8 @@ const released: SettlementReleased = {
   buyerId: "buyer-1",
   runnerId: "runner:internal",
   mode: "completed",
-  sellers: [{ sellerId: "Amina's Fresh Store", amountKobo: 165_000 }],
-  runnerKobo: 170_000,
+  sellers: [{ sellerId: "Amina's Fresh Store", amountKobo: 148_500 }],
+  runnerKobo: 160_000,
   platformKobo: 26_500,
   buyerRefundKobo: 0,
   platformLossKobo: 0,
@@ -133,7 +133,7 @@ describe("archive row mappings", () => {
     const debited = rows.reduce((sum, row) => sum + row.debitKobo, 0);
     const credited = rows.reduce((sum, row) => sum + row.creditKobo, 0);
     expect(debited).toBe(credited);
-    expect(rows.find((row) => row.account === "buyer_capture")?.debitKobo).toBe(361_500);
+    expect(rows.find((row) => row.account === "buyer_capture")?.debitKobo).toBe(335_000);
     expect(rows.find((row) => row.account === "runner_payable")?.partyId).toBe("runner:internal");
   });
 
@@ -142,9 +142,9 @@ describe("archive row mappings", () => {
       ...released,
       mode: "aborted" as const,
       sellers: [{ sellerId: "Amina's Fresh Store", amountKobo: 0 }],
-      runnerKobo: 42_500,
-      platformKobo: 17_000,
-      buyerRefundKobo: 285_500,
+      runnerKobo: 32_500,
+      platformKobo: 27_000,
+      buyerRefundKobo: 275_500,
       inputs: {
         ...released.inputs,
         mode: "aborted" as const,
@@ -156,7 +156,7 @@ describe("archive row mappings", () => {
     const debited = rows.reduce((sum, row) => sum + row.debitKobo, 0);
     const credited = rows.reduce((sum, row) => sum + row.creditKobo, 0);
     expect(debited).toBe(credited);
-    expect(rows.find((row) => row.account === "buyer_refund")?.creditKobo).toBe(285_500);
+    expect(rows.find((row) => row.account === "buyer_refund")?.creditKobo).toBe(275_500);
   });
 
   it("maps product.retired reasons to the schema vocabulary and defaults unknown market", () => {

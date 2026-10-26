@@ -23,12 +23,10 @@ export function settlementLegs(
   add("runner_payable", outcome.runnerKobo, "Runner settlement", capture.runnerId);
   add("platform_revenue", outcome.platformKobo, "Platform settlement");
   add("buyer_refund", outcome.buyerRefundKobo, "Buyer settlement refund", capture.buyerId);
-  add("platform_loss", outcome.platformLossKobo, "Capped ambiguous dispute loss", undefined, "debit");
-  const credited = legs.reduce((sum, leg) => sum + leg.creditKobo, 0);
-  const debited = legs.reduce((sum, leg) => sum + leg.debitKobo, 0);
-  // The capture is the balancing source for all released value, excluding the
-  // separately recorded platform loss (which is a debit).
-  const captureKobo = credited - debited;
+  const captureKobo = legs.reduce((sum, leg) => sum + leg.creditKobo, 0);
+  // Dispute loss is already deducted from platform revenue in the outcome; it
+  // is disclosure, not an external funding leg. All credited value comes from
+  // the buyer capture, so total outflows cannot exceed that capture.
   if (captureKobo > 0) add("buyer_capture", captureKobo, "Buyer capture", capture.buyerId, "debit");
   return legs;
 }

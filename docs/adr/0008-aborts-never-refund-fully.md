@@ -7,4 +7,7 @@ The reason is anti-abuse, not revenue: full refunds on abort let a seller with f
 ## Consequences
 
 - The settlement function needs an abort mode with the partial-split rules encoded, not a full-refund shortcut.
+- Only completed seller legs pay goods commission; failed legs pay zero. The runner's gross disruption compensation is reduced by the actual delivery margin, capped at that gross amount, and the platform receives actual commissions, the policy fee, and actual margin.
+- The buyer refund is the residual of the goods-plus-delivery capture after gross seller proceeds, gross runner disruption, and the policy fee. Neither platform deduction is an extra buyer charge or refund component.
+- Abort policy shares are nonnegative integer basis points and disruption compensation plus platform fee must not exceed 10,000 bps. This guarantees a nonnegative delivery residual for every accepted policy.
 - Dispute outcomes that find the platform or a participant at fault can override the friction fee through the normal settlement path.
