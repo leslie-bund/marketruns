@@ -19,19 +19,19 @@ export class SmileIdFaceVerifier implements AsyncFaceVerifier {
   }
   async pollJob(id: string): Promise<FaceJobVerdict> {
     const result = await this.client.getJobStatus(id);
-    return verdictFromStatus(result.status, result.message, result.verifiedLegalName, result.providerImage);
+    return verdictFromStatus(result.status, result.message, result.verifiedLegalName);
   }
   async handleCallback(request: Request): Promise<FaceCallbackVerdict | null> {
     const payload = await this.client.parseCallback(request); if (!payload) return null;
-    const verdict = verdictFromStatus(payload.status, payload.message, payload.verifiedLegalName, payload.providerImage);
+    const verdict = verdictFromStatus(payload.status, payload.message, payload.verifiedLegalName);
     return { providerJobId: payload.providerJobId, userRef: payload.userId, passed: verdict.outcome === "passed",
       reason: verdict.outcome === "failed" ? (payload.reason ?? verdict.reason) : null,
-      verifiedLegalName: payload.verifiedLegalName, providerImage: payload.providerImage };
+      verifiedLegalName: payload.verifiedLegalName };
   }
 }
 function splitName(name: string) { const [givenNames, ...rest] = name.split(" "); return { givenNames: givenNames ?? "Market", lastName: rest.join(" ") || "Participant" }; }
-function verdictFromStatus(status: SmileIdJobStatus, message: string, verifiedLegalName: string | null = null, providerImage: Uint8Array | null = null): FaceJobVerdict {
-  if (status === "clear") return { outcome: "passed", verifiedLegalName, providerImage };
+function verdictFromStatus(status: SmileIdJobStatus, message: string, verifiedLegalName: string | null = null): FaceJobVerdict {
+  if (status === "clear") return { outcome: "passed", verifiedLegalName };
   if (status === "processing" || status === "not_found") return { outcome: "pending" };
   return { outcome: "failed", reason: message || status };
 }

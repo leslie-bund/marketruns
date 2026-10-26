@@ -2,13 +2,13 @@ import { z } from "zod";
 import { TimestampSchema } from "./primitives.js";
 import { ParticipantRoleSchema } from "./participant.js";
 
-/** Identity wire contracts. Raw captures are transit-only base64 JPEG. */
+/** Identity wire contracts. Captures use base64 JPEG; only approved enrollment selfies are retained. */
 const ImagePayloadSchema = z.string().min(1).max(12_000_000);
 const CaptureFramesSchema = z.array(ImagePayloadSchema).min(6).max(8);
 const ParticipantIdSchema = z.string().min(1).max(128);
 const ProofSchema = z.string().min(32).max(256);
 
-export const BIOMETRIC_CONSENT_VERSION = "biometric-capture-v1";
+export const BIOMETRIC_CONSENT_VERSION = "biometric-capture-v2";
 export const BiometricConsentSchema = z.object({
   version: z.literal(BIOMETRIC_CONSENT_VERSION),
   granted: z.literal(true),

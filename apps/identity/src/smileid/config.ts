@@ -30,14 +30,14 @@ export interface SmileIdConfig {
 export const DEV_PRIVACY_NOTICE_URL = "https://example.com/market-runs-dev-privacy-notice";
 
 /**
- * Resolve config, or throw with an honest message when FACE_VERIFIER=smileid
+ * Resolve config, or throw with an honest message when FACE_VERIFIER=smileid/hybrid
  * is selected without credentials — a silent fallback to the stub here would
  * be the fake-verify bug class ADR-0022 refuses to repeat.
  */
 export function smileIdConfig(env: Env): SmileIdConfig {
   if (!env.SMILEID_PARTNER_ID || !env.SMILEID_API_KEY) {
     throw new Error(
-      "FACE_VERIFIER=smileid requires SMILEID_PARTNER_ID and SMILEID_API_KEY (Smile ID Dashboard → Developer Settings); no dev default exists — set them in infra/.dev.vars",
+      "FACE_VERIFIER=smileid/hybrid requires SMILEID_PARTNER_ID and SMILEID_API_KEY (Smile ID Dashboard → Developer Settings); no dev default exists — set them in infra/.dev.vars",
     );
   }
   const environment = env.SMILEID_ENV === "production" ? "production" : "sandbox";

@@ -62,12 +62,14 @@
 # Local Postgres (dev) — the payments/archive/identity workers read this:
 # DATABASE_URL=postgres://postgres:postgres@localhost:54322/market_runs
 
-# ── Identity worker: Smile ID face vendor (ADR-0009/0022) ───────────────────
-# Uncomment to switch the face verifier from the dev stub to Smile ID
-# SmartSelfie™ (vendor-held biometric reference; enrollment/verify become
-# async jobs — submit → 202 pending → poll GET /auth/face/job/:jobId or
-# webhook) — only together with REAL sandbox keys below:
-# FACE_VERIFIER=smileid
+# ── Identity worker: hybrid Smile ID Biometric KYC (ADR-0028) ───────────────
+# Enrollment becomes an async vendor job; ordinary login/recovery remains
+# private local liveness + 1:1. Requires REAL sandbox keys, the private Node
+# biometrics service/model, and the IDENTITY_CAPTURES R2 binding from
+# infra/wrangler.identity.toml. No native Smile ID mobile package is used.
+# FACE_VERIFIER=hybrid
+# BIOMETRICS_SERVICE_URL=http://127.0.0.1:8792
+# BIOMETRICS_SERVICE_TOKEN=replace-with-a-long-random-private-token
 
 # Smile ID SANDBOX keys (Dashboard → Developer Settings; sandbox and
 # production keys are NOT interchangeable). Uncomment and replace the

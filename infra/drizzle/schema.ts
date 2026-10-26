@@ -781,6 +781,12 @@ export const faceEnrollments = pgTable("face_enrollments", {
   modelVersion: text("model_version").notNull(),
   /** Provider-side enrollment reference when the biometric is vendor-held; NULL for self-held embeddings. */
   providerRef: text("provider_ref"),
+  /** Opaque private R2 key and binding for exactly one current enrollment selfie; never exposed on wire/ops reads. */
+  captureObjectKey: text("capture_object_key"),
+  captureSha256: text("capture_sha256"),
+  captureConsentVersion: text("capture_consent_version"),
+  captureConsentGrantedAt: timestamp("capture_consent_granted_at", { withTimezone: true }),
+  captureRetainedAt: timestamp("capture_retained_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
 });
@@ -816,6 +822,11 @@ export const faceAuthJobs = pgTable(
     pendingEmbeddingIv: bytea("pending_embedding_iv"),
     pendingEmbeddingAuthTag: bytea("pending_embedding_auth_tag"),
     pendingModelVersion: text("pending_model_version"),
+    /** Pending private capture binding; all four fields clear on every terminal job transition. */
+    pendingCaptureObjectKey: text("pending_capture_object_key"),
+    pendingCaptureSha256: text("pending_capture_sha256"),
+    pendingCaptureConsentVersion: text("pending_capture_consent_version"),
+    pendingCaptureConsentGrantedAt: timestamp("pending_capture_consent_granted_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),

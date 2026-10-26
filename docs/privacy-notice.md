@@ -29,7 +29,7 @@ The data we handle depends on a participant's role and actions.
 | Payment and payout data | Charge and transaction references, amount, currency, payment method, hold/refund/payout status, seller bank and payout-account details, and settlement records | Confirm payment holds, calculate settlement, execute or record refunds and payouts, reconcile accounts, and investigate fraud or disputes. Payment providers process card or bank credentials under their own notices; we do not need full card numbers to operate settlement records |
 | Location and run data | Delivery or collection address, muster point, pickup and drop-off coordinates, route estimates, runner location stream, timestamps, and run status | Route and price runs, coordinate collection and delivery, show run progress, protect participants, and investigate incidents |
 | Handoff and dispute evidence | One-time QR challenge/scan records, handoff photographs, capture references, scan/confirmation timestamps, dispute reasons, and supporting records | Confirm exchange points, establish chain of custody, resolve disputes, and protect against fraudulent claims |
-| Biometric data | Multi-frame selfie/face capture, liveness results, an encrypted face embedding (biometric template), comparison outcomes, and provider job references | Bind a verified identity to an account, authenticate the participant, support face-based recovery, and detect spoofing or impersonation |
+| Biometric data | Multi-frame selfie/face capture, one current approved enrollment selfie and private object reference/content hash, liveness results, an encrypted face embedding (biometric template), capture consent/model metadata, comparison outcomes, and provider job references | Bind a verified identity to an account, authenticate the participant, support face-based recovery, and detect spoofing or impersonation |
 | Device, technical, and operations data | IP address, device/app and session information, logs, security events, notification records, operational actions, and service telemetry | Deliver the app and notifications, diagnose faults, secure the service, and audit operations activity |
 
 We use this data to perform the participant contract, comply with applicable law, protect the service and participants, and pursue legitimate interests such as fraud prevention and service security, balanced against participant rights. Where the law requires consent—particularly for biometric processing—we will request it separately and prominently. [OWNER INPUT/LEGAL REVIEW: confirm the lawful basis for each processing activity and any required consent wording.]
@@ -50,19 +50,19 @@ We use email for receipts, security notices, service communications, and support
 
 ## 3. Face capture, liveness, and identity verification
 
-Enrollment and authentication may capture **multiple face frames** and perform liveness checks to help establish that a live person is present and to reduce spoofing. Market Runs uses **Smile ID** for identity verification and related liveness/identity-binding services.
+Enrollment and authentication may capture **multiple face frames** and perform liveness checks to help establish that a live person is present and to reduce spoofing. Market Runs uses **Smile ID** for enrollment identity verification and related liveness/identity-binding services.
 
-Our production design is hybrid:
+Our production design is hybrid and cost-conscious:
 
-- Smile ID performs the applicable verification and returns a provider reference and verification results.
-- We may temporarily retrieve the submitted selfie from Smile ID to compute **our own face embedding using the same model** used for later comparisons.
-- The temporary selfie copy is deleted after that processing step, subject to confirmed job-completion and failure-cleanup behavior. [OWNER INPUT: confirm the maximum temporary-retention period and cleanup/audit implementation.]
-- We store our embedding encrypted in our biometric service/database and associate it with one participant. Verification is **1:1**: a newly captured face is compared with that participant's enrolled template. We do **not** use the embedding for 1:N identification or to search a population to discover who someone is.
+- At enrollment or re-enrollment, Smile ID Biometric KYC performs vendor liveness and identity matching and returns a provider reference and verification result.
+- Our private biometric service re-encodes the recent device selfie without EXIF metadata and computes **our own face embedding using the same model** used for later comparisons. Provider-returned images are not used to create or replace an embedding.
+- After vendor approval, we retain **exactly one current enrollment selfie** in private Cloudflare R2 storage, bound to the participant, content hash, capture consent, and model version. It is retained until a successful replacement or account deletion, subject to applicable law. It is not available through a public URL, profile, or operations view. A replacement deletes the previous selfie after the new enrollment commits.
+- Pending enrollment captures are deleted when the job fails, is rejected, expires, or is abandoned. The job expires after two minutes and scheduled cleanup removes abandoned expired captures. Provider-side deletion follows the provider's supported processes and retention obligations. [OWNER INPUT: confirm provider rejection-retention terms and deletion procedure.]
+- Ordinary face login and current face-based recovery use our private liveness and **1:1** comparison without sending those captures to Smile ID. Login and recovery captures are **transit-only** and are not retained as images or rolling templates. New-device/high-risk vendor step-up, if introduced, will require separate notice and security-policy implementation.
+- We store our current embedding encrypted in our biometric database and associate it with one participant. Verification is **1:1**: a newly captured face is compared with that participant's enrolled template. We do **not** use the embedding for 1:N identification or to search a population to discover who someone is.
 - Similarity and liveness outcomes are used for access and security decisions. Authentication and anti-spoofing controls are risk-reduction measures, not guarantees that every impersonation attempt will be detected.
 
-Rejected, failed, abandoned, or invalid captures must be **promptly deleted** from our temporary processing storage once no longer needed to return the result or secure the transaction. They are not enrolled as reusable templates. Provider-side deletion follows the provider's supported processes and retention obligations. [OWNER INPUT: define “prompt” operationally for each storage location and confirm provider rejection-retention terms.]
-
-Biometric templates are retained until account deletion unless a shorter period applies or applicable law requires a different retention period. Withdrawal of consent or deletion may mean that face login and face-based recovery can no longer be provided.
+Biometric templates and the current enrollment selfie are retained until replacement or account deletion unless a shorter period applies or applicable law requires a different retention period. Withdrawal of consent or deletion may mean that face login and face-based recovery can no longer be provided.
 
 ## 4. Location, routing, and runner streams
 
@@ -89,7 +89,7 @@ We do not sell personal data. We disclose only what is reasonably needed to rele
 - **Other participants:** for example, a buyer, seller, runner, or muster-point participant may receive the display name, run details, contact/coordination information, location, and handoff status necessary for their transaction. We limit access to relevant transactions and roles.
 - **Cloudflare:** application hosting, edge compute, queues, storage, security, and related infrastructure.
 - **Neon:** hosted Postgres database services for account, marketplace, settlement, and encrypted biometric records, as applicable.
-- **Smile ID:** identity verification, liveness, BVN/NIN submission where enabled, provider references, and temporary selfie retrieval for our embedding workflow.
+- **Smile ID:** enrollment identity verification, enrollment liveness, BVN/NIN submission where enabled, and provider references. Ordinary login and current recovery captures are not sent to Smile ID.
 - **Flutterwave and other payment providers, if enabled:** payment collection, verification, refunds, transfers, payout-account resolution, and related fraud/compliance checks.
 - **Resend:** transactional email delivery.
 - **Routing, professional, regulatory, and safety recipients:** the confirmed routing host; auditors, lawyers, and advisers under confidentiality duties; and regulators, courts, law enforcement, or other parties where legally required or necessary to protect rights and safety.
@@ -100,8 +100,8 @@ Processor contracts, locations, and subprocessors must be checked before publica
 
 We keep different records only for as long as needed for the purposes described above, including account operation, dispute resolution, security, tax/accounting, fraud prevention, and legal compliance. Retention periods may therefore differ by record.
 
-- Biometric templates are generally retained until account deletion, subject to applicable law and any approved shorter schedule.
-- Rejected, failed, abandoned, or invalid captures are promptly deleted as described in section 3.
+- The current biometric template and one current approved enrollment selfie are retained until replacement or account deletion, subject to applicable law and any approved shorter schedule.
+- Login and recovery captures are transit-only. Rejected, failed, abandoned, expired, or invalid pending enrollment captures are promptly deleted as described in section 3.
 - Run, payment, settlement, refund, payout, and dispute records may need to remain after account deletion for lawful financial, fraud-prevention, or legal purposes.
 - Expired operational logs, temporary files, and cached copies are removed under their applicable schedules.
 

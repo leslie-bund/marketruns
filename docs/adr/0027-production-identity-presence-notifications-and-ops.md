@@ -10,13 +10,13 @@ This ADR records a set of owner decisions made together before production launch
 
 ## Hybrid face custody and comparison
 
-**Decision:** production uses a hybrid biometric design. Smile ID performs identity verification and liveness/identity binding and supplies a `providerRef`. We temporarily retrieve the provider-held selfie where supported, compute our own embedding with the **same model** used for subsequent comparisons, and store that embedding encrypted in our own biometric service/Postgres record. The temporary selfie is deleted after recomputation; rejected or failed captures are promptly deleted rather than enrolled.
+**Decision:** production uses a hybrid biometric design. Smile ID Biometric KYC performs enrollment liveness and identity binding and supplies a `providerRef`. We compute our own embedding with the **same model** used for subsequent comparisons solely from the recent submitted device selfie, store that embedding encrypted in our own Postgres record, and retain exactly one current approved enrollment selfie in identity-owned private R2 until replacement or account deletion. Provider-returned images never create embeddings. Rejected, failed, or expired pending captures are promptly deleted rather than enrolled.
 
 Authentication is participant-keyed **1:1** comparison against the enrolled encrypted embedding. We do not perform **1:N** identification or population search. The provider reference supports verification lifecycle and vendor operations; it does not replace our local template. Encryption at rest, access controls, consent, retention, and deletion propagation apply to the template as sensitive personal data.
 
 **Rationale:** the owner chooses local control of repeat authentication while retaining vendor identity verification and liveness. Same-model recomputation avoids treating embeddings from different models as interchangeable. This decision supersedes the vendor-held-only posture in ADR-0022's amendment; ADR-0022 remains unchanged as history.
 
-**Constraints:** temporary retrieval must have bounded failure cleanup and a defined retention limit. Matching thresholds and liveness performance still require production benchmarking. No claim is made that liveness or matching is infallible.
+**Constraints:** pending capture retention is bounded by terminal cleanup, two-minute job expiry, and scheduled sweeping. Routine login/recovery stays local; vendor SmartSelfie Authentication is reserved for a separately implemented high-risk step-up policy. Matching thresholds and liveness performance still require production benchmarking. No claim is made that liveness or matching is infallible.
 
 ## Internal runner pool claims atomically
 
@@ -65,8 +65,8 @@ Operations privileges do not permit arbitrary mutation of money or evidence. Set
 ## Consequences
 
 - Production authorization must treat `preverified` as insufficient, while staging configuration and test fixtures must label that bypass explicitly.
-- ADR-0022's amended vendor-held-only biometric posture is superseded by the hybrid local encrypted embedding + `providerRef`/temporary-selfie recomputation design. The launch blockers recorded there still require closure or an explicit new owner decision.
-- Privacy copy, consent capture, deletion workflows, and vendor contracts must reflect temporary selfie handling, 1:1-only matching, and biometric retention through account deletion subject to law.
+- ADR-0022's amended vendor-held-only biometric posture is superseded by the hybrid local encrypted embedding + `providerRef` design. The launch blockers recorded there still require closure or an explicit new owner decision.
+- Privacy copy, consent capture, deletion workflows, and vendor contracts must reflect one-current-selfie retention, transit-only login/recovery, 1:1-only matching, and biometric retention through replacement or account deletion subject to law. Account-deletion propagation remains an implementation requirement recorded in ADR-0028.
 - Runner assignment, seller presence, market administration, notification delivery, and recovery need tests for retries, duplicate delivery, expiry, and wrong-participant access.
 - Initial market seeding does not decide the open launch-market name in ADR-0013.
 - Better Auth credentials are operations credentials; participant authorization remains behind `resolveParticipant` and the identity worker.

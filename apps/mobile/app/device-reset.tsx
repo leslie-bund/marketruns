@@ -36,7 +36,7 @@ export default function DeviceReset() {
       <Section title="Participant"><Label>Participant id</Label>
         <Field value={participantId} onChangeText={setParticipantId} autoCapitalize="none" placeholder="participant-…" /></Section>
       <Section title="Consent and capture">
-        <Text style={s.muted}>Consent biometric-capture-v1: fresh frames are sent to the private identity service for liveness and comparison with your enrolled face. Images are transit-only; no 1:N search occurs.</Text>
+        <Text style={s.muted}>Consent biometric-capture-v2: fresh frames are sent to the private identity service for liveness and comparison with your enrolled face. Recovery images are transit-only, are not sent to Smile ID, and no 1:N search occurs.</Text>
         <Button title={consented ? "✓ Consent recorded for this capture" : "I consent to this biometric recovery"} secondary onPress={() => setConsented(true)} />
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 220, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>

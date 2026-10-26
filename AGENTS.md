@@ -77,7 +77,7 @@ Dev-stage test rig: `pnpm dev:all` brings up the whole stack with a demo seed, a
 ## Open inputs (ask the human, do not guess)
 
 - Launch market name
-- Credentials: Neon connection string, KYC vendor keys (never commit; use wrangler secrets). PSP keys: Flutterwave test key lives in gitignored `infra/.dev.vars` (never committed), production keys via wrangler secrets; `PAYMENT_DISPATCHER=flutterwave` switches it on (ADR-0024). Smile ID sandbox keys (`SMILEID_PARTNER_ID` / `SMILEID_API_KEY` / `SMILEID_CALLBACK_URL` / `SMILEID_PRIVACY_NOTICE_URL`) — owner to supply; `FACE_VERIFIER=smileid` without them throws at startup (ADR-0022, amended)
+- Credentials/resources: Neon connection string, KYC vendor keys (never commit; use wrangler secrets). PSP keys: Flutterwave test key lives in gitignored `infra/.dev.vars` (never committed), production keys via wrangler secrets; `PAYMENT_DISPATCHER=flutterwave` switches it on (ADR-0024). Hybrid identity needs Smile ID keys (`SMILEID_PARTNER_ID` / `SMILEID_API_KEY` / `SMILEID_CALLBACK_URL` / `SMILEID_PRIVACY_NOTICE_URL`), private biometrics URL/token and face/liveness models, and the private `IDENTITY_CAPTURES` R2 bucket; `FACE_VERIFIER=hybrid` without vendor/service configuration fails at startup (ADR-0028). Account-deletion propagation for the retained enrollment selfie remains an explicit implementation requirement.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

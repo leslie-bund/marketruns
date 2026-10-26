@@ -15,7 +15,10 @@ import { encryptionKeyBase64, faceMatchThreshold, fidoUpsertEnabled, isProductio
 import { BiometricServiceError, isAsyncFaceVerifier, type AsyncFaceVerifier, type FaceCallbackVerdict, type FaceVerifier } from "./face-verifier.js";
 import type { PasskeyVerifier } from "./passkey-verifier.js";
 import type { FaceAuthJobRow, IdentityAccessProofRow, IdentityStore } from "./store.js";
-import { base64ToBytes, decryptEmbedding, encryptEmbedding, sha256Hex } from "./crypto.js";
+import { base64ToBytes, decryptEmbedding, encryptEmbedding, sha256CaptureHex, sha256Hex } from "./crypto.js";
+import {
+  createR2CaptureStore, currentCaptureKey, pendingCaptureKey, type IdentityCaptureStore,
+} from "./capture-store.js";
 
 const PROOF_TTL_MS = 15 * 60_000;
 const JOB_TTL_MS = 2 * 60_000;
@@ -25,6 +28,7 @@ export interface IdentityDeps {
   store: IdentityStore;
   faceVerifier: FaceVerifier | AsyncFaceVerifier;
   localFaceVerifier?: FaceVerifier;
+  captureStore?: IdentityCaptureStore;
   passkeyVerifier: PasskeyVerifier | null;
   now?: () => Date;
 }
@@ -99,39 +103,67 @@ async function checkAttempts(store: IdentityStore, participantId: string, now: D
 async function audit(store: IdentityStore, participantId: string, pass: boolean, bucket: "low" | "medium" | "high" | null, now: Date) {
   await store.insertFaceAuthAttempt({ id: crypto.randomUUID(), participantId, outcome: pass ? "pass" : "fail", similarityBucket: bucket, createdAt: now });
 }
-function pendingJob(participantId: string, role: string, providerJobId: string, now: Date,
-  pending?: { ciphertext: Uint8Array; iv: Uint8Array; authTag: Uint8Array }, modelVersion?: string): FaceAuthJobRow {
-  return { id: crypto.randomUUID(), providerJobId, participantId, role, kind: "enrollment", status: "pending",
-    failureReason: null, sessionTokenId: null, pendingEmbeddingEncrypted: pending?.ciphertext ?? null,
-    pendingEmbeddingIv: pending?.iv ?? null, pendingEmbeddingAuthTag: pending?.authTag ?? null,
-    pendingModelVersion: modelVersion ?? null, createdAt: now, expiresAt: new Date(now.getTime() + JOB_TTL_MS), completedAt: null };
+function pendingJob(id: string, participantId: string, role: string, providerJobId: string, now: Date,
+  pending: { ciphertext: Uint8Array; iv: Uint8Array; authTag: Uint8Array }, modelVersion: string,
+  capture: { key: string; sha256: string; consent: BiometricConsent }): FaceAuthJobRow {
+  return { id, providerJobId, participantId, role, kind: "enrollment", status: "pending",
+    failureReason: null, sessionTokenId: null, pendingEmbeddingEncrypted: pending.ciphertext,
+    pendingEmbeddingIv: pending.iv, pendingEmbeddingAuthTag: pending.authTag, pendingModelVersion: modelVersion,
+    pendingCaptureObjectKey: capture.key, pendingCaptureSha256: capture.sha256,
+    pendingCaptureConsentVersion: capture.consent.version, pendingCaptureConsentGrantedAt: new Date(capture.consent.grantedAt),
+    createdAt: now, expiresAt: new Date(now.getTime() + JOB_TTL_MS), completedAt: null };
 }
-async function finalizeEnrollment(store: IdentityStore, local: FaceVerifier, env: Env, job: FaceAuthJobRow,
+async function failEnrollment(store: IdentityStore, captures: IdentityCaptureStore | null, job: FaceAuthJobRow,
+  reason: string, now: Date): Promise<FaceAuthJobRow> {
+  const pendingKey = job.pendingCaptureObjectKey;
+  const completed = job.status === "pending" && await store.completeFaceAuthJob(job.id, "failed", reason, now);
+  if (completed && pendingKey) await captures?.delete(pendingKey).catch(() => undefined);
+  return (await store.getFaceAuthJob(job.id)) ?? { ...job, status: "failed", failureReason: reason, completedAt: now };
+}
+export async function cleanupExpiredEnrollmentCaptures(store: IdentityStore, captures: IdentityCaptureStore, now: Date): Promise<number> {
+  const jobs = await store.listExpiredPendingFaceAuthJobs(now);
+  for (const job of jobs) await failEnrollment(store, captures, job, "expired", now);
+  return jobs.length;
+}
+async function finalizeEnrollment(store: IdentityStore, captures: IdentityCaptureStore | null, env: Env, job: FaceAuthJobRow,
   verdict: FaceCallbackVerdict, now: Date): Promise<FaceAuthJobRow> {
-  if (now >= job.expiresAt || job.status !== "pending") {
-    await store.completeFaceAuthJob(job.id, "failed", "expired", now); return (await store.getFaceAuthJob(job.id)) ?? job;
-  }
+  if (now >= job.expiresAt || job.status !== "pending") return failEnrollment(store, captures, job, "expired", now);
   if (!verdict.passed || verdict.userRef !== job.participantId) {
-    await store.completeFaceAuthJob(job.id, "failed", verdict.userRef !== job.participantId ? "participant-mismatch" : verdict.reason, now);
-    return (await store.getFaceAuthJob(job.id)) ?? job;
+    return failEnrollment(store, captures, job, verdict.userRef !== job.participantId ? "participant-mismatch" : verdict.reason ?? "provider-rejected", now);
   }
-  let encrypted = job.pendingEmbeddingEncrypted && job.pendingEmbeddingIv && job.pendingEmbeddingAuthTag ? {
+  const encrypted = job.pendingEmbeddingEncrypted && job.pendingEmbeddingIv && job.pendingEmbeddingAuthTag ? {
     ciphertext: job.pendingEmbeddingEncrypted, iv: job.pendingEmbeddingIv, authTag: job.pendingEmbeddingAuthTag,
   } : null;
-  let modelVersion = job.pendingModelVersion;
-  // A provider callback image is an authorized temporary selfie fallback. It is never persisted.
-  if (!encrypted && verdict.providerImage) {
-    const embedding = await local.embed(verdict.providerImage);
-    encrypted = await encryptEmbedding(embedding, encryptionKeyBase64(env)); modelVersion = local.modelVersion;
+  const modelVersion = job.pendingModelVersion;
+  const pendingKey = job.pendingCaptureObjectKey;
+  if (!encrypted || !modelVersion || !captures || !pendingKey || !job.pendingCaptureSha256 ||
+      !job.pendingCaptureConsentVersion || !job.pendingCaptureConsentGrantedAt) {
+    return failEnrollment(store, captures, job, "missing-pending-enrollment-artifact", now);
   }
-  if (!encrypted || !modelVersion) {
-    await store.completeFaceAuthJob(job.id, "failed", "missing-pending-embedding", now);
-    return (await store.getFaceAuthJob(job.id)) ?? job;
+  const previous = await store.getFaceEnrollment(job.participantId);
+  const retainedKey = currentCaptureKey(job.id);
+  try {
+    await captures.promote(pendingKey, retainedKey, job.pendingCaptureSha256);
+  } catch {
+    return failEnrollment(store, captures, job, "pending-capture-unavailable", now);
   }
-  await store.completeIdentityKyc(job.participantId, verdict.verifiedLegalName ?? null, now);
-  await store.upsertFaceEnrollment({ participantId: job.participantId, role: job.role, embeddingEncrypted: encrypted.ciphertext,
-    iv: encrypted.iv, authTag: encrypted.authTag, modelVersion, providerRef: job.participantId, createdAt: now, lastVerifiedAt: null });
-  await store.completeFaceAuthJob(job.id, "passed", null, now);
+  let enrolled = false;
+  try {
+    await store.completeIdentityKyc(job.participantId, verdict.verifiedLegalName ?? null, now);
+    await store.upsertFaceEnrollment({ participantId: job.participantId, role: job.role, embeddingEncrypted: encrypted.ciphertext,
+      iv: encrypted.iv, authTag: encrypted.authTag, modelVersion, providerRef: job.participantId,
+      captureObjectKey: retainedKey, captureSha256: job.pendingCaptureSha256,
+      captureConsentVersion: job.pendingCaptureConsentVersion, captureConsentGrantedAt: job.pendingCaptureConsentGrantedAt,
+      captureRetainedAt: now, createdAt: now, lastVerifiedAt: null });
+    enrolled = true;
+    await store.completeFaceAuthJob(job.id, "passed", null, now);
+  } catch (cause) {
+    if (!enrolled) await captures.delete(retainedKey).catch(() => undefined);
+    throw cause;
+  }
+  if (previous?.captureObjectKey && previous.captureObjectKey !== retainedKey) {
+    await captures.delete(previous.captureObjectKey).catch(() => undefined);
+  }
   return (await store.getFaceAuthJob(job.id)) ?? { ...job, status: "passed", completedAt: now };
 }
 
@@ -169,24 +201,38 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
       if (!profile || (isProduction(c.env) && profile.kycStatus !== "verified")) return error(c, 403, "kyc-required", "verified participant proof required");
       await recordConsent(store, participantId, "enrollment", consent, now());
       const imageBytes = base64ToBytes(image); if (!imageBytes?.length) return error(c, 400, "invalid-request", "invalid image");
-      const analysis = await analyze(local, imageBytes, decodeFrames(parsed.data.livenessImages));
       if (isAsyncFaceVerifier(faceVerifier)) {
         if (!parsed.data.identityDocument) return error(c, 400, "invalid-request", "Biometric KYC document required");
-        const encrypted = await encryptEmbedding(analysis.embedding, encryptionKeyBase64(c.env));
+        const captures = deps.captureStore ?? (c.env.IDENTITY_CAPTURES ? createR2CaptureStore(c.env.IDENTITY_CAPTURES) : null);
+        if (!captures) return error(c, 503, "identity-unavailable", "private enrollment capture storage is not configured");
+        // Smile ID owns enrollment liveness + identity match. The private service only prepares
+        // a finite embedding and a normalized copy of this same submitted device selfie.
+        const prepared = await local.prepareEnrollment(imageBytes);
+        const captureSha256 = await sha256CaptureHex(prepared.image);
+        const encrypted = await encryptEmbedding(prepared.embedding, encryptionKeyBase64(c.env));
+        const jobId = crypto.randomUUID(); const pendingKey = pendingCaptureKey(jobId); const submittedAt = now();
+        await captures.putPending(pendingKey, prepared.image, captureSha256);
         let providerJobId: string;
-        try { ({ providerJobId } = await faceVerifier.submitEnrollment({ participantId, selfie: imageBytes,
+        try { ({ providerJobId } = await faceVerifier.submitEnrollment({ participantId, selfie: prepared.image,
           livenessImages: decodeFrames(parsed.data.livenessImages), userDetails: parsed.data.userDetails,
           identityDocument: parsed.data.identityDocument, consent })); }
-        catch { return error(c, 502, "identity-unavailable", "KYC provider rejected submission"); }
-        const job = pendingJob(participantId, profile.role, providerJobId, now(), encrypted, analysis.modelVersion);
-        await store.insertFaceAuthJob(job);
+        catch {
+          await captures.delete(pendingKey).catch(() => undefined);
+          return error(c, 502, "identity-unavailable", "KYC provider rejected submission");
+        }
+        const job = pendingJob(jobId, participantId, profile.role, providerJobId, submittedAt, encrypted, prepared.modelVersion,
+          { key: pendingKey, sha256: captureSha256, consent });
+        try { await store.insertFaceAuthJob(job); }
+        catch (cause) { await captures.delete(pendingKey).catch(() => undefined); throw cause; }
         return c.json({ participantId, kind: "enrollment", status: "pending", jobId: job.id,
           submittedAt: job.createdAt.getTime(), expiresAt: job.expiresAt.getTime() }, 202);
       }
+      const analysis = await analyze(local, imageBytes, decodeFrames(parsed.data.livenessImages));
       const at = now(); const encrypted = await encryptEmbedding(analysis.embedding, encryptionKeyBase64(c.env));
       await store.upsertFaceEnrollment({ participantId, role: profile.role,
         embeddingEncrypted: encrypted.ciphertext, iv: encrypted.iv, authTag: encrypted.authTag,
-        modelVersion: analysis.modelVersion, providerRef: null, createdAt: at, lastVerifiedAt: null });
+        modelVersion: analysis.modelVersion, providerRef: null, captureObjectKey: null, captureSha256: null,
+        captureConsentVersion: null, captureConsentGrantedAt: null, captureRetainedAt: null, createdAt: at, lastVerifiedAt: null });
       const session = await issueSession(store, c.env, participantId, profile.role, at);
       return c.json({ participantId, enrolled: true, modelVersion: analysis.modelVersion, enrolledAt: at.getTime(), session });
     } catch (cause) {
@@ -221,18 +267,18 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
 
   app.get("/auth/face/job/:jobId", async (c) => {
     let job = await store.getFaceAuthJob(c.req.param("jobId")); if (!job) return error(c, 404, "job-not-found", "unknown job");
+    const captures = deps.captureStore ?? (c.env.IDENTITY_CAPTURES ? createR2CaptureStore(c.env.IDENTITY_CAPTURES) : null);
     if (job.status === "pending" && now() >= job.expiresAt) {
-      await store.completeFaceAuthJob(job.id, "failed", "expired", now());
+      await failEnrollment(store, captures, job, "expired", now());
       return error(c, 410, "job-expired", "face job expired", { jobId: job.id });
     }
     if (job.status === "pending" && isAsyncFaceVerifier(faceVerifier) && local) {
       try {
         const verdict = await faceVerifier.pollJob(job.providerJobId);
-        if (verdict.outcome !== "pending") job = await finalizeEnrollment(store, local, c.env, job, {
+        if (verdict.outcome !== "pending") job = await finalizeEnrollment(store, captures, c.env, job, {
           providerJobId: job.providerJobId, userRef: job.participantId, passed: verdict.outcome === "passed",
           reason: verdict.outcome === "failed" ? verdict.reason : null,
           verifiedLegalName: verdict.outcome === "passed" ? verdict.verifiedLegalName ?? null : null,
-          providerImage: verdict.outcome === "passed" ? verdict.providerImage ?? null : null,
         }, now());
       } catch { /* remain pending while the provider is temporarily unavailable */ }
     }
@@ -255,8 +301,12 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
     if (!verdict) return error(c, 401, "callback-invalid", "invalid callback signature");
     const job = await store.getFaceAuthJobByProviderId(verdict.providerJobId); if (!job) return c.json({ ok: false, reason: "unknown-job" });
     if (job.status !== "pending") return c.json({ ok: true, jobId: job.id, status: job.status });
-    if (now() >= job.expiresAt) return error(c, 410, "job-expired", "face job expired");
-    const completed = await finalizeEnrollment(store, local, c.env, job, verdict, now());
+    const captures = deps.captureStore ?? (c.env.IDENTITY_CAPTURES ? createR2CaptureStore(c.env.IDENTITY_CAPTURES) : null);
+    if (now() >= job.expiresAt) {
+      await failEnrollment(store, captures, job, "expired", now());
+      return error(c, 410, "job-expired", "face job expired");
+    }
+    const completed = await finalizeEnrollment(store, captures, c.env, job, verdict, now());
     return c.json({ ok: completed.status === "passed", jobId: completed.id, status: completed.status });
   });
 
