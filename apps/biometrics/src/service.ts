@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
+import sharp from "sharp";
 
 export interface LivenessVerdict { live: boolean; confidence: number; reason: string | null }
 export interface BiometricModel {
@@ -43,9 +44,12 @@ export function createBiometricHandler(model: BiometricModel, internalToken: str
       if (req.url === "/v1/face/embed") {
         const input = z.object({ image: z.string().min(1) }).safeParse(inputBody);
         if (!input.success) return response(res, 400, { error: "invalid-request" });
-        const embedding = await model.embed(decode(input.data.image));
-        if (embedding.length !== 512) return response(res, 502, { error: "invalid-model-output" });
-        return response(res, 200, { embedding: Array.from(embedding), modelVersion: model.modelVersion });
+        // Re-encode without metadata, then embed and return those exact bytes. Identity binds
+        // the returned image hash to the vendor submission and the single retained enrollment selfie.
+        const normalized = await sharp(decode(input.data.image)).rotate().jpeg({ quality: 90 }).toBuffer();
+        const embedding = await model.embed(normalized);
+        if (embedding.length !== 512 || [...embedding].some((v) => !Number.isFinite(v))) return response(res, 502, { error: "invalid-model-output" });
+        return response(res, 200, { embedding: Array.from(embedding), modelVersion: model.modelVersion, image: normalized.toString("base64") });
       }
       const parsed = AnalyzeSchema.safeParse(inputBody);
       if (!parsed.success) return response(res, 400, { error: "invalid-request", issues: parsed.error.issues });

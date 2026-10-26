@@ -74,6 +74,12 @@ export async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Content binding for a retained capture; only the digest crosses the storage boundary. */
+export async function sha256CaptureHex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function base64ToBytes(base64: string): Uint8Array | null {
   try {
     const binary = atob(base64);

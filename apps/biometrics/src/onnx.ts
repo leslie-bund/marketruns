@@ -23,20 +23,25 @@ function softmax(logits: Float32Array): number[] {
   const sum = exps.reduce((a, b) => a + b, 0); return exps.map((v) => v / sum);
 }
 
-export interface OnnxConfig { faceModelPath: string; livenessModelPath: string; livenessThreshold: number }
+export interface OnnxConfig { faceModelPath: string; livenessModelPath?: string; livenessThreshold: number }
 export class OnnxBiometricModel implements BiometricModel {
   readonly modelVersion = "arcface-w600k-r50+minifasnet-v2";
   private faceSession: import("onnxruntime-node").InferenceSession | null = null;
   private liveSession: import("onnxruntime-node").InferenceSession | null = null;
   constructor(private readonly config: OnnxConfig) {}
-  private async sessions() {
+  private async face() {
     const ort = await import("onnxruntime-node");
     this.faceSession ??= await ort.InferenceSession.create(this.config.faceModelPath, { executionProviders: ["cpu"], graphOptimizationLevel: "all" });
+    return { ort, face: this.faceSession };
+  }
+  private async livenessSession() {
+    if (!this.config.livenessModelPath) throw new Error("LIVENESS_MODEL_PATH is required for local liveness");
+    const ort = await import("onnxruntime-node");
     this.liveSession ??= await ort.InferenceSession.create(this.config.livenessModelPath, { executionProviders: ["cpu"], graphOptimizationLevel: "all" });
-    return { ort, face: this.faceSession, live: this.liveSession };
+    return { ort, live: this.liveSession };
   }
   async embed(image: Buffer): Promise<Float32Array> {
-    const { ort, face } = await this.sessions();
+    const { ort, face } = await this.face();
     const input = new ort.Tensor("float32", await pixels(image, 112, false), [1, 3, 112, 112]);
     const result = await face.run({ [face.inputNames[0]!]: input });
     const output = result[face.outputNames[0]!]!.data as Float32Array;
@@ -44,7 +49,7 @@ export class OnnxBiometricModel implements BiometricModel {
     return normalize(output);
   }
   async liveness(frames: Buffer[]): Promise<LivenessVerdict> {
-    const { ort, live } = await this.sessions(); const scores: number[] = [];
+    const { ort, live } = await this.livenessSession(); const scores: number[] = [];
     for (const frame of frames) {
       const input = new ort.Tensor("float32", await pixels(frame, 80, true), [1, 3, 80, 80]);
       const result = await live.run({ [live.inputNames[0]!]: input });

@@ -10,6 +10,7 @@ export interface Env extends DatabaseEnv {
   BIOMETRICS_SERVICE_URL?: string;
   BIOMETRICS_SERVICE_TOKEN?: string;
   BIOMETRICS_TIMEOUT_MS?: string;
+  IDENTITY_CAPTURES?: R2Bucket;
   SMILEID_PARTNER_ID?: string;
   SMILEID_API_KEY?: string;
   SMILEID_ENV?: string;

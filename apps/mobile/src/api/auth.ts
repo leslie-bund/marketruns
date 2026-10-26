@@ -249,9 +249,9 @@ export interface FaceEnrollResponse {
 }
 
 /**
- * Async mode (vendor-held verifier, e.g. SmileID): enroll/verify answer 202
- * with a job handle instead of the sync 200; the verdict arrives via
- * GET /auth/face/job/:jobId. Stub/self-held mode keeps answering sync 200.
+ * Async hybrid enrollment answers 202 with a job handle; the vendor verdict
+ * arrives via GET /auth/face/job/:jobId. Routine verify and recovery stay
+ * synchronous, private liveness + participant 1:1 with no vendor job.
  */
 export interface FaceJobPending {
   participantId: string;
@@ -277,7 +277,7 @@ export function isFaceJobPending(body: unknown): body is FaceJobPending {
  * async mode this resolves to the 202 job handle; the caller polls
  * awaitFaceJob for the verdict.
  */
-export const BIOMETRIC_CONSENT_VERSION = "biometric-capture-v1";
+export const BIOMETRIC_CONSENT_VERSION = "biometric-capture-v2";
 export function freshBiometricConsent() {
   return { version: BIOMETRIC_CONSENT_VERSION, granted: true as const, grantedAt: Date.now() };
 }
@@ -300,8 +300,8 @@ export interface FaceVerifyResponse {
 /** Face sign-in: verify against the enrolled template and adopt the session. */
 export async function verifyFace(input: FaceCaptureInput & { participantId: string }): Promise<FaceVerifyResponse | FaceJobPending> {
   const body = await authRequest<FaceVerifyResponse | FaceJobPending>("/auth/face/verify", { ...input, consent: freshBiometricConsent() });
-  // Sync mode (stub verifier): the session rides the 200. Async mode: the
-  // session is issued at job collection — awaitFaceJob caches it.
+  // Routine verification is local and synchronous; the union keeps compatibility
+  // with older dev deployments while async enrollment uses awaitFaceJob.
   if (!isFaceJobPending(body)) await setSessionCache(body.session);
   return body;
 }

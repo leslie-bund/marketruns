@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   authSessions, biometricConsentReceipts, deviceCredentials, deviceResetRequests, faceAuthAttempts,
@@ -20,6 +20,8 @@ export interface BiometricConsentRow {
 export interface FaceEnrollmentRow {
   participantId: string; role: string; embeddingEncrypted: Uint8Array | null; iv: Uint8Array | null;
   authTag: Uint8Array | null; modelVersion: string; providerRef: string | null;
+  captureObjectKey: string | null; captureSha256: string | null;
+  captureConsentVersion: string | null; captureConsentGrantedAt: Date | null; captureRetainedAt: Date | null;
   createdAt: Date; lastVerifiedAt: Date | null;
 }
 export interface FaceAuthJobRow {
@@ -28,6 +30,8 @@ export interface FaceAuthJobRow {
   failureReason: string | null; sessionTokenId: string | null;
   pendingEmbeddingEncrypted: Uint8Array | null; pendingEmbeddingIv: Uint8Array | null;
   pendingEmbeddingAuthTag: Uint8Array | null; pendingModelVersion: string | null;
+  pendingCaptureObjectKey: string | null; pendingCaptureSha256: string | null;
+  pendingCaptureConsentVersion: string | null; pendingCaptureConsentGrantedAt: Date | null;
   expiresAt: Date; createdAt: Date; completedAt: Date | null;
 }
 export interface DeviceCredentialRow {
@@ -74,6 +78,7 @@ export interface IdentityStore {
   insertFaceAuthJob(row: FaceAuthJobRow): Promise<void>;
   getFaceAuthJob(id: string): Promise<FaceAuthJobRow | null>;
   getFaceAuthJobByProviderId(id: string): Promise<FaceAuthJobRow | null>;
+  listExpiredPendingFaceAuthJobs(now: Date): Promise<FaceAuthJobRow[]>;
   completeFaceAuthJob(id: string, status: "passed" | "failed", reason: string | null, at: Date): Promise<boolean>;
   setFaceAuthJobSession(id: string, tokenId: string): Promise<void>;
 }
@@ -117,7 +122,10 @@ export function createDrizzleStore(db: Db): IdentityStore {
       await db.insert(faceEnrollments).values(row).onConflictDoUpdate({
         target: faceEnrollments.participantId,
         set: { role: row.role, embeddingEncrypted: row.embeddingEncrypted, iv: row.iv, authTag: row.authTag,
-          modelVersion: row.modelVersion, providerRef: row.providerRef, createdAt: row.createdAt, lastVerifiedAt: null },
+          modelVersion: row.modelVersion, providerRef: row.providerRef,
+          captureObjectKey: row.captureObjectKey, captureSha256: row.captureSha256,
+          captureConsentVersion: row.captureConsentVersion, captureConsentGrantedAt: row.captureConsentGrantedAt,
+          captureRetainedAt: row.captureRetainedAt, createdAt: row.createdAt, lastVerifiedAt: null },
       });
     },
     async markFaceVerified(id, at) { await db.update(faceEnrollments).set({ lastVerifiedAt: at }).where(eq(faceEnrollments.participantId, id)); },
@@ -172,9 +180,16 @@ export function createDrizzleStore(db: Db): IdentityStore {
       const row = (await db.select().from(faceAuthJobs).where(eq(faceAuthJobs.providerJobId, id)))[0];
       return row ? toJob(row) : null;
     },
+    async listExpiredPendingFaceAuthJobs(now) {
+      const rows = await db.select().from(faceAuthJobs)
+        .where(and(eq(faceAuthJobs.status, "pending"), lt(faceAuthJobs.expiresAt, now))).orderBy(asc(faceAuthJobs.expiresAt));
+      return rows.map(toJob);
+    },
     async completeFaceAuthJob(id, status, reason, at) {
       const rows = await db.update(faceAuthJobs).set({ status, failureReason: reason, completedAt: at,
-        pendingEmbeddingEncrypted: null, pendingEmbeddingIv: null, pendingEmbeddingAuthTag: null })
+        pendingEmbeddingEncrypted: null, pendingEmbeddingIv: null, pendingEmbeddingAuthTag: null,
+        pendingModelVersion: null, pendingCaptureObjectKey: null, pendingCaptureSha256: null,
+        pendingCaptureConsentVersion: null, pendingCaptureConsentGrantedAt: null })
         .where(and(eq(faceAuthJobs.id, id), eq(faceAuthJobs.status, "pending"))).returning({ id: faceAuthJobs.id });
       return rows.length === 1;
     },

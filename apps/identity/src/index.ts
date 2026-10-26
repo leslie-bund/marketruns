@@ -1,7 +1,8 @@
 import { createDatabase } from "./db.js";
 import type { Env } from "./env.js";
 import { RequestIdSchema } from "@market-runs/proto";
-import { createIdentityApp } from "./app.js";
+import { cleanupExpiredEnrollmentCaptures, createIdentityApp } from "./app.js";
+import { createR2CaptureStore } from "./capture-store.js";
 import { createFaceVerifier, createLocalFaceVerifier } from "./face-verifier.js";
 import { createPasskeyVerifier } from "./passkey-verifier.js";
 import { createDrizzleStore } from "./store.js";
@@ -68,6 +69,15 @@ export default {
           ms: Date.now() - started,
         }),
       );
+    }
+  },
+  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    if (!env.IDENTITY_CAPTURES) return;
+    const { db, client } = createDatabase(env);
+    try {
+      await cleanupExpiredEnrollmentCaptures(createDrizzleStore(db), createR2CaptureStore(env.IDENTITY_CAPTURES), new Date());
+    } finally {
+      await client.end();
     }
   },
 };

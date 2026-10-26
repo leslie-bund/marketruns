@@ -70,10 +70,15 @@ export function createMemoryStore(): IdentityStore & {
     async insertFaceAuthJob(row) { jobs.set(row.id, { ...row }); },
     async getFaceAuthJob(id) { return jobs.get(id) ?? null; },
     async getFaceAuthJobByProviderId(id) { return [...jobs.values()].find((j) => j.providerJobId === id) ?? null; },
+    async listExpiredPendingFaceAuthJobs(now) {
+      return [...jobs.values()].filter((job) => job.status === "pending" && job.expiresAt < now).sort((a, b) => +a.expiresAt - +b.expiresAt);
+    },
     async completeFaceAuthJob(id, status, reason, at) {
       const row = jobs.get(id); if (!row || row.status !== "pending") return false;
       Object.assign(row, { status, failureReason: reason, completedAt: at,
-        pendingEmbeddingEncrypted: null, pendingEmbeddingIv: null, pendingEmbeddingAuthTag: null }); return true;
+        pendingEmbeddingEncrypted: null, pendingEmbeddingIv: null, pendingEmbeddingAuthTag: null,
+        pendingModelVersion: null, pendingCaptureObjectKey: null, pendingCaptureSha256: null,
+        pendingCaptureConsentVersion: null, pendingCaptureConsentGrantedAt: null }); return true;
     },
     async setFaceAuthJobSession(id, tokenId) { const row = jobs.get(id); if (row) row.sessionTokenId = tokenId; },
   };

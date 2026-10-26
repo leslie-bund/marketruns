@@ -76,8 +76,6 @@ export interface SmileIdCallbackPayload {
   providerJobId: string;
   userId: string;
   verifiedLegalName: string | null;
-  /** Optional callback selfie; used only if no authorized pending capture exists. */
-  providerImage: Uint8Array | null;
 }
 
 const TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -213,15 +211,14 @@ export class SmileIdClient {
    * 202 = processing, 404 = not_found (treated as still-pending upstream:
    * a just-submitted job may not be visible to the status endpoint yet).
    */
-  async getJobStatus(jobId: string): Promise<{ status: SmileIdJobStatus; message: string; verifiedLegalName: string | null; providerImage: Uint8Array | null }> {
+  async getJobStatus(jobId: string): Promise<{ status: SmileIdJobStatus; message: string; verifiedLegalName: string | null }> {
     const res = await this.fetchImpl(`${this.config.baseUrl}/v3/status/${encodeURIComponent(jobId)}`, {
       method: "GET", headers: await this.authedHeaders(),
     });
     if (!res.ok && res.status !== 202 && res.status !== 404) throw new SmileIdApiError(res.status, await res.text());
     const body = (await res.json()) as Record<string, unknown>;
     return { status: (body.status as SmileIdJobStatus | undefined) ?? (res.status === 202 ? "processing" : "not_found"),
-      message: typeof body.message === "string" ? body.message : "", verifiedLegalName: callbackLegalName(body),
-      providerImage: callbackImage(body) };
+      message: typeof body.message === "string" ? body.message : "", verifiedLegalName: callbackLegalName(body) };
   }
 
   /* ------------------------------------------------------------------ */
@@ -289,7 +286,6 @@ export class SmileIdClient {
       providerJobId: jobId,
       userId,
       verifiedLegalName: callbackLegalName(body ?? {}),
-      providerImage: callbackImage(body ?? {}),
     };
   }
 }
@@ -302,15 +298,6 @@ function callbackLegalName(body: Record<string, unknown>): string | null {
   const first = value("first_name", "FirstName", "given_names"); const last = value("last_name", "LastName", "surname");
   return [first, last].filter(Boolean).join(" ").trim() || null;
 }
-function callbackImage(body: Record<string, unknown>): Uint8Array | null {
-  const value = [body.selfie_image, body.image, body.Image, body.selfie].find((v) => typeof v === "string");
-  if (typeof value !== "string") return null;
-  try { const bytes = base64ToBytes(value); return bytes.length ? bytes : null; } catch { return null; }
-}
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value.replace(/^data:image\/[a-z]+;base64,/, "")); return Uint8Array.from(binary, (c) => c.charCodeAt(0));
-}
-
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);

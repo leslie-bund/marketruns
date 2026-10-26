@@ -40,7 +40,7 @@ export default function SignIn() {
         <Text style={{ color: "white", fontSize: 19, fontWeight: "800" }}>Seven fresh frames. One participant-specific match.</Text></Card>
       {problem ? <Card style={{ borderColor: colors.orange }}><Text style={s.body}>{problem}</Text></Card> : null}
       <Section title="Face sign-in">
-        <Text style={s.muted}>Consent biometric-capture-v1: captures are used for liveness and 1:1 sign-in only. Images are transit-only and are never used for 1:N search.</Text>
+        <Text style={s.muted}>Consent biometric-capture-v2: captures are used for private liveness and 1:1 sign-in only. Login images are transit-only, are not sent to Smile ID, and are never used for 1:N search.</Text>
         <Button title={consented ? "✓ Consent recorded for this capture" : "I consent to biometric sign-in"} secondary onPress={() => setConsented(true)} />
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>

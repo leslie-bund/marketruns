@@ -16,8 +16,9 @@ app exercises the real flows before vendors and sessions ship.
   solely with explicit `ALLOW_HEADER_AUTH=true`; otherwise a shape-valid
   document remains `pending` for real asynchronous KYC. It never returns
   `verified`. Raw document numbers are in transit only; the registry stores
-  keyed HMAC-SHA256 hashes. Biometric frames are transit-only through identity,
-  never onboarding R2 captures (ADR-0028). Vendor integration replaces the
+  keyed HMAC-SHA256 hashes. Login/recovery biometric frames are transit-only;
+  one approved enrollment selfie may live in identity-owned private R2, never
+  onboarding R2 captures (ADR-0028). Vendor integration replaces the
   verifier seam (ADR-0009).
 - **Auth**: the app attaches `x-participant-id` / `x-participant-role` from
   the onboarded identity — the exact dev-stage resolution ADR-0015 records.

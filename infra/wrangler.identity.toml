@@ -7,11 +7,22 @@ compatibility_flags = ["nodejs_compat"]
 [dev]
 port = 8789
 
+# Private identity-owned enrollment selfies. Never attach a public bucket domain.
+[[r2_buckets]]
+binding = "IDENTITY_CAPTURES"
+bucket_name = "market-runs-identity-captures"
+preview_bucket_name = "market-runs-identity-captures-preview"
+
+[triggers]
+# Terminal paths delete immediately; this sweeps abandoned expired jobs too.
+crons = ["*/5 * * * *"]
+
 # DATABASE_URL (dev) or the Hyperdrive binding (prod) is provided at deploy
 # time — never committed. Secrets: IDENTITY_ENCRYPTION_KEY, IDENTITY_SESSION_
 # SECRET, IDENTITY_INTERNAL_TOKEN via `wrangler secret put`; committed dev
 # defaults exist (apps/identity/src/env.ts) so the local stack runs out of the
 # box, matching the OPS_TOKEN posture (ADR-0015). Vars: FACE_VERIFIER (default
-# "stub"; "smileid" = vendor-held async mode, requires SMILEID_PARTNER_ID +
-# SMILEID_API_KEY secrets — see infra/.dev.vars.example), FACE_MATCH_THRESHOLD
-# (default 0.6), FIDO_UPSERT_ENABLED, FIDO_STUB_ENABLED.
+# "stub"; "hybrid" = async Biometric KYC enrollment + local 1:1 login/recovery,
+# requires SMILEID_PARTNER_ID + SMILEID_API_KEY, BIOMETRICS_SERVICE_URL/TOKEN,
+# model artifacts, and this private R2 binding), FACE_MATCH_THRESHOLD (default
+# 0.6), FIDO_UPSERT_ENABLED, FIDO_STUB_ENABLED.

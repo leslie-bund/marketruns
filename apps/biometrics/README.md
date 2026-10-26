@@ -8,13 +8,13 @@ Required:
 
 - `BIOMETRICS_INTERNAL_TOKEN` — at least 32 characters, shared only with identity.
 - `FACE_MODEL_PATH` — ArcFace `w600k_r50.onnx`, 112×112 RGB, 512 outputs.
-- `LIVENESS_MODEL_PATH` — MiniFASNet ONNX, 80×80 BGR, three-class output with class 1 = live.
+- `LIVENESS_MODEL_PATH` — MiniFASNet ONNX, 80×80 BGR, three-class output with class 1 = live. Required for `/analyze` and routine local login/recovery, but not for enrollment-only `/embed`.
 - `LIVENESS_THRESHOLD` — optional engineering default `0.8`; benchmark before launch.
 - `PORT` — default `8791`; `BIND_ADDRESS` — default `127.0.0.1`, set to `0.0.0.0` in the container.
 
 Build with `pnpm build`; run with `pnpm start`. The Docker image is intended for an internal compose/Kubernetes network with **no published host port**. Deploy model artifacts as licensed, read-only runtime assets; they are not included here.
 
-Endpoints: unauthenticated `GET /healthz`; bearer-protected `POST /v1/face/analyze` and `POST /v1/face/embed`. `analyze` requires 6–8 frames and invokes liveness before embedding. `embed` exists only for an authorized KYC callback-image fallback; public login/enrollment never uses it.
+Endpoints: unauthenticated `GET /healthz`; bearer-protected `POST /v1/face/analyze` and `POST /v1/face/embed`. `analyze` requires 6–8 frames and invokes local liveness before embedding for routine login/recovery. Hybrid enrollment calls only `embed`: the service strips EXIF/re-encodes the submitted device selfie, computes a finite embedding from those exact normalized bytes, and returns them to identity for hash-bound vendor submission and private retention. Provider callback images are never accepted here.
 
 Tests inject deterministic fake model inference and require no native model artifacts. No accuracy benchmark is claimed.
 

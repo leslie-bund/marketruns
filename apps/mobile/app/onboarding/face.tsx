@@ -50,7 +50,7 @@ export default function OnboardingFace() {
       <Card style={{ backgroundColor: colors.ink }}><Pill active>LOCAL 1:1 + KYC PROVIDER REF</Pill>
         <Text style={{ color: "white", fontSize: 19, fontWeight: "800" }}>No passwords. No email recovery.</Text></Card>
       {!enrolled ? <Section title="Consent and seven-frame capture">
-        <Text style={s.muted}>Consent biometric-capture-v1: fresh frames are used for liveness, your encrypted 1:1 embedding, and Biometric KYC submission. Images are transit-only. Your legal name is stored separately from this editable display name.</Text>
+        <Text style={s.muted}>Consent biometric-capture-v2: fresh frames are used for Biometric KYC and your encrypted 1:1 embedding. After vendor approval, one current enrollment selfie is retained privately until replacement or account deletion; it is never shown publicly. Your legal name is stored separately from this editable display name.</Text>
         <Button title={consented ? "✓ Consent recorded for this capture" : "I consent to capture and vendor submission"} secondary onPress={() => setConsented(true)} />
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>

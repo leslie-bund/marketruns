@@ -5,9 +5,11 @@ import { isProduction } from "./env.js";
 import { createSmileIdFaceVerifier } from "./smileid/index.js";
 
 export interface FaceAnalysis { embedding: number[]; liveness: { live: boolean; confidence: number }; modelVersion: string }
+export interface EnrollmentPreparation { embedding: number[]; modelVersion: string; image: Uint8Array }
 export interface FaceVerifier {
   readonly modelVersion: string;
   embed(image: Uint8Array): Promise<number[]>;
+  prepareEnrollment(image: Uint8Array): Promise<EnrollmentPreparation>;
   analyze(image: Uint8Array, frames: Uint8Array[]): Promise<FaceAnalysis>;
 }
 export interface AsyncFaceVerifier {
@@ -23,11 +25,11 @@ export interface FaceJobSubmissionInput {
 }
 export type FaceJobVerdict =
   | { outcome: "pending" }
-  | { outcome: "passed"; verifiedLegalName?: string | null; providerImage?: Uint8Array | null }
+  | { outcome: "passed"; verifiedLegalName?: string | null }
   | { outcome: "failed"; reason: string | null };
 export interface FaceCallbackVerdict {
   providerJobId: string; userRef: string; passed: boolean; reason: string | null;
-  verifiedLegalName?: string | null; providerImage?: Uint8Array | null;
+  verifiedLegalName?: string | null;
 }
 export function isAsyncFaceVerifier(v: FaceVerifier | AsyncFaceVerifier): v is AsyncFaceVerifier {
   return (v as AsyncFaceVerifier).asyncJobs === true;
@@ -45,6 +47,9 @@ export class StubFaceVerifier implements FaceVerifier {
     }
     return l2Normalize(dims);
   }
+  async prepareEnrollment(image: Uint8Array): Promise<EnrollmentPreparation> {
+    return { embedding: await this.embed(image), modelVersion: this.modelVersion, image };
+  }
   async analyze(image: Uint8Array, frames: Uint8Array[]): Promise<FaceAnalysis> {
     if (frames.length < 6 || frames.length > 8) throw new Error("6-8 frames required");
     return { embedding: await this.embed(image), liveness: { live: true, confidence: 1 }, modelVersion: this.modelVersion };
@@ -61,9 +66,24 @@ export class NodeBiometricFaceVerifier implements FaceVerifier {
       method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ image: bytesToBase64(image) }),
     });
-    const body = await res.json().catch(() => ({})) as { embedding?: number[] };
-    if (!res.ok || body.embedding?.length !== FACE_EMBEDDING_DIMS) throw new BiometricServiceError(res.status, "bad-identity-response");
+    const body = await res.json().catch(() => ({})) as { embedding?: unknown };
+    if (!res.ok || !validEmbedding(body.embedding)) throw new BiometricServiceError(res.status, "bad-identity-response");
     return body.embedding;
+  }
+  async prepareEnrollment(image: Uint8Array): Promise<EnrollmentPreparation> {
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl.replace(/\/$/, "")}/v1/face/embed`, {
+        method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ image: bytesToBase64(image) }), signal: controller.signal,
+      });
+      const body = await res.json().catch(() => ({})) as { embedding?: unknown; modelVersion?: string; image?: string };
+      const normalized = typeof body.image === "string" ? decodeBase64(body.image) : null;
+      if (!res.ok || !validEmbedding(body.embedding) || !body.modelVersion || !normalized?.length || normalized.length > 8 * 1024 * 1024) {
+        throw new BiometricServiceError(res.status, "bad-identity-response", "invalid enrollment preparation response");
+      }
+      return { embedding: body.embedding, modelVersion: body.modelVersion, image: normalized };
+    } finally { clearTimeout(timer); }
   }
   async analyze(image: Uint8Array, frames: Uint8Array[]): Promise<FaceAnalysis> { return this.request(image, frames); }
   private async request(image: Uint8Array, frames: Uint8Array[]): Promise<FaceAnalysis> {
@@ -75,7 +95,7 @@ export class NodeBiometricFaceVerifier implements FaceVerifier {
       });
       const body = await res.json().catch(() => ({})) as Partial<FaceAnalysis> & { error?: string; reason?: string };
       if (!res.ok) throw new BiometricServiceError(res.status, body.error ?? "identity-unavailable", body.reason);
-      if (!Array.isArray(body.embedding) || body.embedding.length !== FACE_EMBEDDING_DIMS || !body.liveness?.live || !body.modelVersion) {
+      if (!validEmbedding(body.embedding) || !body.liveness?.live || !body.modelVersion) {
         throw new BiometricServiceError(502, "bad-identity-response", "invalid biometric service response");
       }
       return body as FaceAnalysis;
@@ -87,6 +107,12 @@ export class BiometricServiceError extends Error {
 }
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary);
+}
+function decodeBase64(value: string): Uint8Array | null {
+  try { return Uint8Array.from(atob(value), (char) => char.charCodeAt(0)); } catch { return null; }
+}
+function validEmbedding(value: unknown): value is number[] {
+  return Array.isArray(value) && value.length === FACE_EMBEDDING_DIMS && value.every((item) => typeof item === "number" && Number.isFinite(item));
 }
 export function createFaceVerifier(env: Env): FaceVerifier | AsyncFaceVerifier {
   const selector = env.FACE_VERIFIER ?? (isProduction(env) ? "hybrid" : "stub");
