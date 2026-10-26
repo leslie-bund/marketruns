@@ -2,7 +2,8 @@ import { Image, Text, View } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import { HANDOFF_AUTO_CONFIRM_MS } from "@market-runs/domain";
 import type { RunHandoff } from "@market-runs/proto";
-import { captureUrl } from "../../api";
+import { captureUrl, participantHeaders, sessionHeaders } from "../../api";
+import { createHandoffPayload } from "./handoff-payload";
 import { Card, Pill, colors, s } from "../../ui";
 import { countdownClock } from "./format";
 
@@ -17,7 +18,7 @@ export function HandoffPhoto({ handoff, size = 96 }: { handoff: RunHandoff; size
   return (
     <View style={{ gap: 6 }}>
       <Image
-        source={{ uri: captureUrl(handoff.photoCaptureRef) }}
+        source={{ uri: captureUrl(handoff.photoCaptureRef), headers: { ...sessionHeaders(), ...participantHeaders() } }}
         style={{ width: size, height: size, borderRadius: 14, backgroundColor: "#E5EBE3" }}
       />
       <Text style={s.muted}>
@@ -36,13 +37,13 @@ export function HandoffPhoto({ handoff, size = 96 }: { handoff: RunHandoff; size
  * the auto-confirm / dispute windows close. Shared by the seller (pickup)
  * and the buyer (delivery receipt).
  */
-export function HandoffQrCard({ handoff, now, prompt }: { handoff: RunHandoff; now: number; prompt: string }) {
+export function HandoffQrCard({ handoff, runId, challenge, now, prompt }: { handoff: RunHandoff; runId: string; challenge?: string | undefined; now: number; prompt: string }) {
   if (handoff.status === "confirmed") {
     return (
       <Card>
         <View style={s.row}>
           <Text style={{ color: colors.ink, fontWeight: "800" }}>{prompt}</Text>
-          <Pill active>{handoff.autoConfirmed ? "AUTO-CONFIRMED" : "CONFIRMED"}</Pill>
+          <Pill active>{handoff.autoConfirmed ? "AUTO-CONFIRMED" : `CONFIRMED · ${handoff.confirmedBy ?? "RECEIVER"}`}</Pill>
         </View>
         <HandoffPhoto handoff={handoff} />
       </Card>
@@ -54,18 +55,18 @@ export function HandoffQrCard({ handoff, now, prompt }: { handoff: RunHandoff; n
         {handoff.awaitingPhoto
           ? "WAITING FOR RUNNER PHOTO EVIDENCE"
           : handoff.scannedAt != null
-            ? "SCANNED · WAITING FOR RUNNER PHOTO"
-            : `WAITING · AUTO-CONFIRM IN ${countdownClock(handoff.requestedAt + HANDOFF_AUTO_CONFIRM_MS, now)}`}
+            ? "CODE VERIFIED · FRESH PHOTO + CONFIRM REQUIRED"
+            : handoff.type === "delivery" ? "DELIVERY CODE REQUIRED" : `WAITING · AUTO-CONFIRM IN ${countdownClock(handoff.requestedAt + HANDOFF_AUTO_CONFIRM_MS, now)}`}
       </Pill>
       <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 17, textAlign: "center" }}>{prompt}</Text>
-      {handoff.scannedAt == null ? (
+      {handoff.scannedAt == null && challenge ? (
         <View style={{ padding: 14, backgroundColor: "white", borderRadius: 18 }}>
-          <QRCode value={`market-runs:handoff:${handoff.id}`} size={200} />
+          <QRCode value={createHandoffPayload({ runId, handoffId: handoff.id, challenge })} size={200} />
         </View>
-      ) : (
-        <Text style={s.muted}>Challenge scanned — the handoff confirms when the runner's photo lands.</Text>
+      ) : handoff.scannedAt == null ? <Text style={s.muted}>Loading secure QR…</Text> : (
+        <Text style={s.muted}>Code verified. The runner must take a new photo and explicitly confirm receipt.</Text>
       )}
-      <Text style={s.muted}>One-time challenge · {handoff.id}</Text>
+      <Text style={s.muted}>Expiring challenge · {handoff.id}</Text>
       <HandoffPhoto handoff={handoff} />
     </Card>
   );

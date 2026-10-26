@@ -10,6 +10,16 @@ import {
   postIntent,
   readJson,
 } from "./helpers.js";
+import {
+  completePickup,
+  confirm as confirmHandoff,
+  driveToRun as driveReceiverRun,
+  openDelivery,
+  photo as attachHandoffPhoto,
+  postJson as postRunJson,
+  runView,
+  scan as scanHandoff,
+} from "./handoff-helpers.js";
 
 const BASE = "http://edge";
 const ARCHIVE = "http://localhost:8788";
@@ -287,59 +297,26 @@ describe("seller run discovery", () => {
   });
 });
 
-/** Dispute state rides the run wire: run.updated carries it after a dispute is filed. */
+/** Dispute state rides the run wire after a member files it. */
 describe("dispute state on the run wire", () => {
-  it("run.updated carries disputed, disputeRaisedByParticipantId, and finalDeliveryAt", async () => {
-    expect((await postIntent("dsw-intent-1", "dsw", "buyer:dsw")).status).toBe(200);
-    expect((await offerProduct("dsw-product-1", "dsw-intent-1", "dsw")).status).toBe(200);
-    expect((await acceptProduct("dsw-product-1", "buyer:dsw")).status).toBe(200);
-    const accepted = await checkout("cart:dsw:buyer:dsw", { kind: "plus-code", plusCode: "6FR5+8X Lagos" }, "buyer:dsw");
-    expect(accepted.status).toBe(200);
-    const runId = String((await readJson(accepted)).runId);
-
-    // Before anything happens: clean dispute state, no delivery stamp.
-    const initial = await readJson(await SELF.fetch(new Request(`${BASE}/runs/${runId}`)));
-    const initialRun = initial.run as Record<string, unknown>;
-    expect(initialRun.disputed).toBe(false);
-    expect(initialRun.disputeRaisedByParticipantId).toBeNull();
-    expect(initialRun.finalDeliveryAt).toBeNull();
-
-    // The buyer files a dispute; the edge attributes it from the headers.
-    const raised = await postJson(`/runs/${runId}/dispute`, { reason: "items missing from the bag" }, "buyer:dsw");
-    expect(raised.status).toBe(200);
-
-    const disputed = await readJson(await SELF.fetch(new Request(`${BASE}/runs/${runId}`)));
-    const disputedRun = disputed.run as Record<string, unknown>;
-    expect(disputedRun.disputed).toBe(true);
-    expect(disputedRun.disputeRaisedByParticipantId).toBe("buyer:dsw");
-
-    // The trip still completes: photo evidence attached (photo-required
-    // confirm), handoff confirmed, final delivery stamped.
-    const handoff = await postJson(`/runs/${runId}/handoffs`, {
-      handoffId: "dsw-handoff-1",
-      exchangePointId: "dsw Market, Stall B14",
-      counterparty: "Amina's Fresh Store",
-    });
-    expect(handoff.status).toBe(200);
-    expect(
-      (
-        await postJson(`/runs/${runId}/handoffs/dsw-handoff-1/photo`, {
-          type: "handoff.photo-captured",
-          handoffId: "dsw-handoff-1",
-          photoCaptureRef: "r2://archive/captures/dsw-handoff-1.jpg",
-          capturedAt: Date.now(),
-        })
-      ).status,
-    ).toBe(200);
-    expect((await postJson(`/runs/${runId}/handoffs/dsw-handoff-1/confirm`, {})).status).toBe(200);
-    const delivered = await postJson(`/runs/${runId}/delivery/final`, {});
-    expect(delivered.status).toBe(200);
-
-    const final = await readJson(await SELF.fetch(new Request(`${BASE}/runs/${runId}`)));
-    const finalRun = final.run as Record<string, unknown>;
-    expect(finalRun.status).toBe("delivered");
-    expect(typeof finalRun.finalDeliveryAt).toBe("number");
-    expect(finalRun.disputed).toBe(true);
-    expect(finalRun.disputeRaisedByParticipantId).toBe("buyer:dsw");
+  it("carries disputed, disputeRaisedByParticipantId, and finalDeliveryAt", async () => {
+    const buyerId = "buyer:dsw-new";
+    const { runId, code } = await driveReceiverRun("dsw-new", buyerId, { kind: "designated", name: "Receiver" });
+    const initial = await runView(runId, buyerId);
+    expect(initial.disputed).toBe(false);
+    expect(initial.disputeRaisedByParticipantId).toBeNull();
+    expect(initial.finalDeliveryAt).toBeNull();
+    expect((await postRunJson(`/runs/${runId}/dispute`, { reason: "items missing" }, { "x-participant-id": buyerId, "x-participant-role": "buyer" })).status).toBe(200);
+    expect((await runView(runId, buyerId)).disputeRaisedByParticipantId).toBe(buyerId);
+    await completePickup(runId, "dsw-new");
+    await openDelivery(runId, buyerId, "dsw-delivery", "Receiver");
+    await scanHandoff(runId, "dsw-delivery", code);
+    await attachHandoffPhoto(runId, "dsw-delivery");
+    expect((await confirmHandoff(runId, "dsw-delivery")).status).toBe(200);
+    expect((await postRunJson(`/runs/${runId}/delivery/final`, {}, { "x-participant-id": "runner:internal", "x-participant-role": "runner" })).status).toBe(200);
+    const final = await runView(runId, buyerId);
+    expect(final.status).toBe("delivered");
+    expect(typeof final.finalDeliveryAt).toBe("number");
+    expect(final.disputed).toBe(true);
   });
 });

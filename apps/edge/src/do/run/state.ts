@@ -4,20 +4,23 @@
  * (ADR-0010).
  */
 
-import type { Run } from "@market-runs/proto";
+import type { HandoffType, Run } from "@market-runs/proto";
 
 export interface InternalHandoff {
   id: string;
+  type: HandoffType;
   exchangePointId: string;
   counterparty: string;
   status: "pending" | "confirmed";
   requestedAt: number;
-  /** R2 reference string only — media bytes never pass through the RunDO. */
   photoCaptureRef?: string;
   photoCapturedAt?: number;
   scannedAt?: number;
+  codeVerifiedAt?: number;
+  failedCodeAttempts?: number;
   autoConfirmed?: boolean;
   confirmedAt?: number;
+  confirmedBy?: string;
 }
 
 export interface SettlementConfig {
@@ -38,6 +41,10 @@ export interface RunState {
   /** Seller participants resolved from accepted products; legacy store-only runs omit it. */
   sellerParticipantIds?: string[];
   handoffs: InternalHandoff[];
+  /** Only keyed digests and issuance metadata are persisted; plaintext codes never enter DO storage. */
+  deliveryCodeHash?: string;
+  deliveryCodeIssuedAt?: number;
+  deliveryCodeExpiresAt?: number;
   finalDeliveryAt?: number;
   settlementReleased: boolean;
   disputed: boolean;

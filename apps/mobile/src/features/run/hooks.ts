@@ -31,9 +31,14 @@ export function useRunById(runId: string | null, intervalMs: number): RunFollow 
  * events arrive over the run's WebSocket; slow polling is the fallback.
  * Follows the device's active market.
  */
-export function useRun(intervalMs = 15000): RunFollow {
-  const { runId } = useActiveCartIds();
-  return useRunById(runId, intervalMs);
+export function useRun(intervalMs = 15000, routeRunId?: string): RunFollow {
+  const { runId: storedRunId } = useActiveCartIds();
+  const discovery = usePoll(
+    () => (routeRunId || storedRunId ? Promise.resolve(null) : listActiveRuns({ buyer: true })),
+    intervalMs,
+  );
+  const discoveredRunId = discovery.data?.runs[0]?.runId ?? null;
+  return useRunById(routeRunId ?? storedRunId ?? discoveredRunId, intervalMs);
 }
 
 export interface RunnerPoolFollow extends RunFollow {
@@ -46,12 +51,12 @@ export interface RunnerPoolFollow extends RunFollow {
 }
 
 /** Internal-pool queue plus the runner's claimed work; unassigned runs never auto-open. */
-export function useRunnerPool(intervalMs = 8000): RunnerPoolFollow {
+export function useRunnerPool(intervalMs = 8000, routeRunId?: string): RunnerPoolFollow {
   const discovery = usePoll(listActiveRuns, intervalMs);
   const [chosenRunId, setChosenRunId] = useState<string | null>(null);
   const runs = discovery.data?.runs ?? [];
   const { available, claimed } = partitionRunnerRuns(runs);
-  const selectedRunId = chosenRunId ?? preferredRunnerRunId(runs);
+  const selectedRunId = routeRunId ?? chosenRunId ?? preferredRunnerRunId(runs);
   const follow = useRunById(selectedRunId, intervalMs);
 
   useEffect(() => {
@@ -82,13 +87,15 @@ export function useRunnerRun(intervalMs = 15000, routeRunId?: string): RunFollow
   return useRunById(routeRunId ?? storedRunId ?? discoveredRunId, intervalMs);
 }
 
-/** Follow the newest live trip containing this owned store (demo name fallback only). */
-export function useSellerRun(store: Store | null, intervalMs = 15000): RunFollow {
+/** Follow a selected live trip containing this owned store; deep-link ids win. */
+export function useSellerRun(store: Store | null, intervalMs = 15000, routeRunId?: string): RunFollow & { runs: ActiveRun[]; selectRun: (runId: string) => void } {
   const storeId = store?.id ?? identities.seller.name;
+  const [chosenRunId, setChosenRunId] = useState<string | null>(null);
   const discovery = usePoll(
     () => listActiveRuns({ storeId }).catch(() => ({ runs: [], warning: "Live run discovery is unavailable." })),
     intervalMs,
   );
-  const discoveredRunId = discovery.data?.runs[0]?.runId ?? null;
-  return useRunById(discoveredRunId, intervalMs);
+  const runs = discovery.data?.runs ?? [];
+  const selectedRunId = routeRunId ?? chosenRunId ?? runs[0]?.runId ?? null;
+  return { ...useRunById(selectedRunId, intervalMs), runs, selectRun: setChosenRunId };
 }
