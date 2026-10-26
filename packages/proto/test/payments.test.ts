@@ -17,8 +17,8 @@ const dispatchRequested = {
   runId: "run:cart:Balogun:buyer:1",
   market: "Balogun",
   legs: [
-    { account: "seller", partyId: "seller:amina", amountKobo: 165_000, memo: "Seller settlement" },
-    { account: "runner", partyId: "runner:internal", amountKobo: 170_000, memo: "Runner settlement" },
+    { account: "seller", partyId: "seller:amina", amountKobo: 148_500, memo: "Seller settlement" },
+    { account: "runner", partyId: "runner:internal", amountKobo: 160_000, memo: "Runner settlement" },
     { account: "platform", partyId: "platform", amountKobo: 26_500, memo: "Platform settlement" },
   ],
   idempotencyKey: "settlement:run:cart:Balogun:buyer:1:settlement",

@@ -88,8 +88,8 @@ describe("payment dispatch emission on settlement release", () => {
       // Legs mirror the settlement record exactly — seller payout, runner
       // payout, platform commission (ADR-0005) — no recomputation at dispatch.
       expect(dispatched.data.legs).toEqual([
-        { account: "seller", partyId: "Amina's Fresh Store", amountKobo: 165_000, memo: "Seller settlement" },
-        { account: "runner", partyId: "runner:internal", amountKobo: 170_000, memo: "Runner settlement" },
+        { account: "seller", partyId: "Amina's Fresh Store", amountKobo: 148_500, memo: "Seller settlement" },
+        { account: "runner", partyId: "runner:internal", amountKobo: 160_000, memo: "Runner settlement" },
         { account: "platform", partyId: "platform", amountKobo: 26_500, memo: "Platform settlement" },
       ]);
     }

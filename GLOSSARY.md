@@ -7,7 +7,7 @@ An on-demand errand marketplace: buyers post intents, sellers respond with ephem
 ### Participants
 
 **Buyer**:
-A person who posts intents, accepts offers, and pays for the full chain (goods + delivery + platform fee).
+A person who posts intents, accepts offers, and pays for goods + delivery. Goods commission and delivery margin are deducted from seller and runner proceeds at settlement, never added to the buyer's checkout bill.
 _Avoid_: customer, user
 
 **Seller**:

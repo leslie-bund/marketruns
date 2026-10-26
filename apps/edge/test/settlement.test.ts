@@ -110,9 +110,9 @@ describe("RunDO settlement trigger", () => {
     const released = await waitForEvent(events, "settlement.released");
     expect(released.mode).toBe("completed");
     expect(released.runId).toBe(runId);
-    expect(released.sellers).toEqual([{ sellerId: "Amina's Fresh Store", amountKobo: 165_000 }]);
-    expect(released.runnerKobo).toBe(floorRateKobo);
-    expect(released.platformKobo).toBe(26_500); // 10% of 165_000 + 10_000 delivery margin
+    expect(released.sellers).toEqual([{ sellerId: "Amina's Fresh Store", amountKobo: 148_500 }]);
+    expect(released.runnerKobo).toBe(floorRateKobo - 10_000);
+    expect(released.platformKobo).toBe(26_500); // 10% seller commission + 10_000 runner margin deduction
     expect(released.buyerRefundKobo).toBe(0);
     expect(released.platformLossKobo).toBe(0);
 

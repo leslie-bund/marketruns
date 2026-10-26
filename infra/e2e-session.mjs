@@ -189,34 +189,40 @@ function expectedOutcome(inputs) {
   const goodsTotal = inputs.sellers.reduce((sum, s) => sum + s.amountKobo, 0);
   const completed = inputs.sellers.filter((s) => s.stopCompleted);
   const completedTotal = completed.reduce((sum, s) => sum + s.amountKobo, 0);
-  const sellers = inputs.sellers.map((s) => ({ sellerId: s.sellerId, amountKobo: s.stopCompleted ? s.amountKobo : 0 }));
+  const goodsCommission = completed.reduce((sum, s) => sum + Math.floor((s.amountKobo * inputs.goodsCommissionBps) / BPS), 0);
+  const sellers = inputs.sellers.map((s) => ({
+    sellerId: s.sellerId,
+    amountKobo: s.stopCompleted ? s.amountKobo - Math.floor((s.amountKobo * inputs.goodsCommissionBps) / BPS) : 0,
+  }));
 
   if (inputs.mode === "aborted") {
     const policy = inputs.abortSplit ?? { disruptionCompensationBps: 2_500, platformFeeBps: 1_000, ambiguousLossCapKobo: 5_000 };
     const disruption = Math.floor((inputs.deliveryPriceKobo * policy.disruptionCompensationBps) / BPS);
     const platformFee = Math.floor((inputs.deliveryPriceKobo * policy.platformFeeBps) / BPS);
+    const deliveryMargin = Math.min(inputs.deliveryMarginKobo, disruption);
     return {
       sellers,
-      runnerKobo: disruption,
-      platformKobo: platformFee,
-      buyerRefundKobo: goodsTotal - completedTotal + inputs.deliveryPriceKobo - disruption - platformFee + inputs.deliveryMarginKobo,
+      runnerKobo: disruption - deliveryMargin,
+      platformKobo: goodsCommission + platformFee + deliveryMargin,
+      buyerRefundKobo: goodsTotal - completedTotal + inputs.deliveryPriceKobo - disruption - platformFee,
       platformLossKobo: 0,
     };
   }
 
-  // disputed: confirmed exchange points settle; the buyer recovers the
-  // residual; the platform retains its delivery margin and absorbs a capped
-  // loss only when the evidence is ambiguous (ADR-0007).
+  // disputed: confirmed exchange points settle less commission; the buyer
+  // recovers the residual. Delivery margin is deducted from the gross runner
+  // payout, and ambiguous loss is separately platform-funded (ADR-0007).
   const fraction = inputs.sellers.length === 0 ? 0 : completed.length / inputs.sellers.length;
-  const runnerPayout = Math.floor(inputs.deliveryPriceKobo * fraction);
-  const buyersPool = goodsTotal - completedTotal + inputs.deliveryPriceKobo - runnerPayout;
+  const grossRunnerPayout = Math.floor(inputs.deliveryPriceKobo * fraction);
+  const deliveryMargin = Math.min(inputs.deliveryMarginKobo, grossRunnerPayout);
+  const buyersPool = goodsTotal - completedTotal + inputs.deliveryPriceKobo - grossRunnerPayout;
   const dispute = inputs.dispute ?? { ambiguous: true };
   const cap = inputs.abortSplit?.ambiguousLossCapKobo ?? 5_000;
   const platformLoss = dispute.ambiguous ? Math.min(dispute.requestedPlatformLossKobo ?? 0, cap) : 0;
   return {
     sellers,
-    runnerKobo: runnerPayout,
-    platformKobo: inputs.deliveryMarginKobo,
+    runnerKobo: grossRunnerPayout - deliveryMargin,
+    platformKobo: goodsCommission + deliveryMargin,
     buyerRefundKobo: buyersPool + platformLoss,
     platformLossKobo: platformLoss,
   };
@@ -227,9 +233,9 @@ function sameSellers(actual, expected) {
   return JSON.stringify(norm(actual)) === JSON.stringify(norm(expected));
 }
 
-/** What the captured total is for a settlement: goods + delivery + platform margin (ADR-0008's yardstick). */
+/** The buyer capture is goods + delivery; both platform deductions come out of participant proceeds. */
 function capturedTotalKobo(inputs) {
-  return inputs.sellers.reduce((sum, s) => sum + s.amountKobo, 0) + inputs.deliveryPriceKobo + inputs.deliveryMarginKobo;
+  return inputs.sellers.reduce((sum, s) => sum + s.amountKobo, 0) + inputs.deliveryPriceKobo;
 }
 
 /** Mirrors apps/archive/src/settlement-legs.ts: the ledger identity every settlement must write. */

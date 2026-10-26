@@ -24,8 +24,11 @@ export const MVP_ABORT_SPLIT: AbortSplit = {
 export interface SettlementInput {
   mode: SettlementMode;
   sellers: SellerAmount[];
+  /** Gross delivery proceeds captured from the buyer, before the runner deduction. */
   deliveryPriceKobo: number;
+  /** Maximum platform deduction from the runner's gross delivery payout. */
   deliveryMarginKobo: number;
+  /** Commission deducted independently from each completed seller's goods proceeds. */
   goodsCommissionBps: number;
   abortSplit?: AbortSplit;
   /** In disputed mode, evidence resolves to these adjustments within this function. */
@@ -51,6 +54,27 @@ function requireKobo(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${label} must be non-negative integer kobo`);
 }
 
+/** Exact floor(amount * commission / 10000) without overflowing the intermediate product. */
+function sellerCommission(amountKobo: number, commissionBps: number): number {
+  return Number((BigInt(amountKobo) * BigInt(commissionBps)) / BigInt(bps));
+}
+
+function paySellers(sellers: SellerAmount[], commissionBps: number, completedOnly = false) {
+  let commissionKobo = 0;
+  const payouts = sellers.map(({ sellerId, amountKobo, stopCompleted }) => {
+    if (completedOnly && !stopCompleted) return { sellerId, amountKobo: 0 };
+    const commission = sellerCommission(amountKobo, commissionBps);
+    commissionKobo += commission;
+    return { sellerId, amountKobo: amountKobo - commission };
+  });
+  return { payouts, commissionKobo };
+}
+
+function runnerPayout(grossKobo: number, configuredMarginKobo: number) {
+  const marginKobo = Math.min(configuredMarginKobo, grossKobo);
+  return { netKobo: grossKobo - marginKobo, marginKobo };
+}
+
 export function settle(input: SettlementInput): SettlementOutcome {
   requireKobo(input.deliveryPriceKobo, "deliveryPriceKobo");
   requireKobo(input.deliveryMarginKobo, "deliveryMarginKobo");
@@ -62,13 +86,15 @@ export function settle(input: SettlementInput): SettlementOutcome {
   if (!Number.isSafeInteger(input.goodsCommissionBps) || input.goodsCommissionBps < 0 || input.goodsCommissionBps > bps) {
     throw new RangeError("goodsCommissionBps must be between 0 and 10000");
   }
+  const capturedTotal = goodsTotal + input.deliveryPriceKobo;
 
   if (input.mode === "completed") {
-    const commission = floor((goodsTotal * input.goodsCommissionBps) / bps);
+    const sellerSettlement = paySellers(input.sellers, input.goodsCommissionBps);
+    const runner = runnerPayout(input.deliveryPriceKobo, input.deliveryMarginKobo);
     return {
-      sellers: input.sellers.map(({ sellerId, amountKobo }) => ({ sellerId, amountKobo })),
-      runnerKobo: input.deliveryPriceKobo,
-      platformKobo: commission + input.deliveryMarginKobo,
+      sellers: sellerSettlement.payouts,
+      runnerKobo: runner.netKobo,
+      platformKobo: sellerSettlement.commissionKobo + runner.marginKobo,
       buyerRefundKobo: 0,
       platformLossKobo: 0,
     };
@@ -80,47 +106,47 @@ export function settle(input: SettlementInput): SettlementOutcome {
     const completedTotal = completedGoods.reduce((sum, seller) => sum + seller.amountKobo, 0);
     const disruption = floor((input.deliveryPriceKobo * policy.disruptionCompensationBps) / bps);
     const platformFee = floor((input.deliveryPriceKobo * policy.platformFeeBps) / bps);
-    const sellerPayouts = completedGoods.map(({ sellerId, amountKobo }) => ({ sellerId, amountKobo }));
-    sellerPayouts.push(...failedGoods.map(({ sellerId }) => ({ sellerId, amountKobo: 0 })));
-    const buyerRefund = goodsTotal - completedTotal + input.deliveryPriceKobo - disruption - platformFee + input.deliveryMarginKobo;
-    const capturedTotal = goodsTotal + input.deliveryPriceKobo + input.deliveryMarginKobo;
+    const sellerSettlement = paySellers(completedGoods, input.goodsCommissionBps);
+    sellerSettlement.payouts.push(...failedGoods.map(({ sellerId }) => ({ sellerId, amountKobo: 0 })));
+    const runner = runnerPayout(disruption, input.deliveryMarginKobo);
+    // The buyer receives the residual capture. Participant deductions fund
+    // platform revenue; they are not additional components of the buyer bill.
+    const buyerRefund = goodsTotal - completedTotal + input.deliveryPriceKobo - disruption - platformFee;
     if (buyerRefund >= capturedTotal) {
       throw new Error("aborted settlement must retain friction — a full-capture refund violates ADR-0008");
     }
     return {
-      sellers: sellerPayouts,
-      runnerKobo: disruption,
-      platformKobo: platformFee,
+      sellers: sellerSettlement.payouts,
+      runnerKobo: runner.netKobo,
+      platformKobo: sellerSettlement.commissionKobo + platformFee + runner.marginKobo,
       buyerRefundKobo: buyerRefund,
       platformLossKobo: 0,
     };
   }
 
   // Disputed mode: the evidence layer marks which Exchange Points confirmed.
-  // Confirmed stops still settle; the Buyer recovers the disputed residual.
-  // A full refund of goods and delivery exists only when no Exchange Point was
-  // confirmed — a failure before the Runner took custody. The platform retains
-  // its delivery margin on disputed closes (founder decision, 2026-10-11) and
-  // absorbs an additional, capped loss only when the evidence is ambiguous
+  // Confirmed stops still settle less their commission; the Buyer recovers the
+  // disputed residual. Delivery margin comes only out of the gross runner
+  // payout, so no confirmed stops means no runner-funded platform margin.
+  // The platform absorbs an additional, capped loss only when ambiguous
   // (ADR-0007).
   const disputed = input.dispute ?? { ambiguous: true };
   const completedGoods = input.sellers.filter((seller) => seller.stopCompleted);
   const completedTotal = completedGoods.reduce((sum, seller) => sum + seller.amountKobo, 0);
   const confirmedFraction = input.sellers.length === 0 ? 0 : completedGoods.length / input.sellers.length;
-  const runnerPayout = floor(input.deliveryPriceKobo * confirmedFraction);
-  const buyersPool = goodsTotal - completedTotal + input.deliveryPriceKobo - runnerPayout;
+  const grossRunnerPayout = floor(input.deliveryPriceKobo * confirmedFraction);
+  const sellerSettlement = paySellers(input.sellers, input.goodsCommissionBps, true);
+  const runner = runnerPayout(grossRunnerPayout, input.deliveryMarginKobo);
+  const buyersPool = goodsTotal - completedTotal + input.deliveryPriceKobo - grossRunnerPayout;
   let platformLoss = 0;
   if (disputed.ambiguous) {
     requireKobo(disputed.requestedPlatformLossKobo ?? 0, "requestedPlatformLossKobo");
     platformLoss = Math.min(disputed.requestedPlatformLossKobo ?? 0, policy.ambiguousLossCapKobo);
   }
   return {
-    sellers: input.sellers.map(({ sellerId, amountKobo, stopCompleted }) => ({
-      sellerId,
-      amountKobo: stopCompleted ? amountKobo : 0,
-    })),
-    runnerKobo: runnerPayout,
-    platformKobo: input.deliveryMarginKobo,
+    sellers: sellerSettlement.payouts,
+    runnerKobo: runner.netKobo,
+    platformKobo: sellerSettlement.commissionKobo + runner.marginKobo,
     buyerRefundKobo: buyersPool + platformLoss,
     platformLossKobo: platformLoss,
   };

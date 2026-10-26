@@ -126,7 +126,7 @@ export class FakeMessage implements QueueMessageLike {
   }
 }
 
-/** A two-leg dispatch request (one seller + runner) for consumer tests. */
+/** Net seller, runner, and platform legs for a 335,000 kobo capture. */
 export function sampleDispatchRequest(overrides: Partial<PaymentDispatchRequested> = {}): PaymentDispatchRequested {
   return {
     type: "payment.dispatch-requested",
@@ -134,8 +134,8 @@ export function sampleDispatchRequest(overrides: Partial<PaymentDispatchRequeste
     runId: "run:cart:Balogun:buyer:1",
     market: "Balogun",
     legs: [
-      { account: "seller", partyId: "seller:amina", amountKobo: 165_000, memo: "Seller settlement" },
-      { account: "runner", partyId: "runner:internal", amountKobo: 170_000, memo: "Runner settlement" },
+      { account: "seller", partyId: "seller:amina", amountKobo: 148_500, memo: "Seller settlement" },
+      { account: "runner", partyId: "runner:internal", amountKobo: 160_000, memo: "Runner settlement" },
       { account: "platform", partyId: "platform", amountKobo: 26_500, memo: "Platform settlement" },
     ],
     idempotencyKey: "settlement:run:cart:Balogun:buyer:1:settlement",

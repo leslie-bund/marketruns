@@ -18,23 +18,24 @@ describe("settlement ledger legs", () => {
   it("maps completed settlement", () => {
     const outcome = settle(completed);
     const legs = settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" });
-    expect(legs.find((leg) => leg.account === "seller_payable")?.creditKobo).toBe(10_000);
-    expect(legs.find((leg) => leg.account === "runner_payable")?.creditKobo).toBe(2_000);
+    expect(legs.find((leg) => leg.account === "seller_payable")?.creditKobo).toBe(9_000);
+    expect(legs.find((leg) => leg.account === "runner_payable")?.creditKobo).toBe(1_900);
     expect(legs.find((leg) => leg.account === "platform_revenue")?.creditKobo).toBe(1_100);
+    expect(legs.find((leg) => leg.account === "buyer_capture")?.debitKobo).toBe(12_000);
     expect(isBalanced(legs)).toBe(true);
   });
 
   it("maps abort friction with platform fee, runner disruption, and buyer remainder", () => {
     const outcome = settle(aborted);
     const legs = settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" });
-    // Exact split per MVP_ABORT_SPLIT (delivery-based): disruption 25%,
-    // platform fee 10% of the 2,000 delivery price; the buyer receives the
-    // remainder of the 12,100 capture — never a full refund (ADR-0008).
-    expect(outcome.runnerKobo).toBe(500);
-    expect(outcome.platformKobo).toBe(200);
-    expect(outcome.buyerRefundKobo).toBe(11_400);
-    expect(outcome.buyerRefundKobo).toBeLessThan(12_100); // capture: goods 10,000 + delivery 2,000 + margin 100
-    expect(legs.find((leg) => leg.account === "buyer_capture")?.debitKobo).toBe(12_100);
+    // Gross disruption is 25% and the policy fee is 10% of delivery. The
+    // runner receives disruption less margin; the buyer receives the residual
+    // of the 12,000 capture — never a full refund (ADR-0008).
+    expect(outcome.runnerKobo).toBe(400);
+    expect(outcome.platformKobo).toBe(300);
+    expect(outcome.buyerRefundKobo).toBe(11_300);
+    expect(outcome.buyerRefundKobo).toBeLessThan(12_000); // capture: goods 10,000 + delivery 2,000
+    expect(legs.find((leg) => leg.account === "buyer_capture")?.debitKobo).toBe(12_000);
     expect(isBalanced(legs)).toBe(true);
   });
 
