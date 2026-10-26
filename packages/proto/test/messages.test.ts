@@ -316,6 +316,37 @@ describe("settlement family", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("validates abortSplit integers, safe loss cap, and combined delivery shares", () => {
+    const event = {
+      type: "settlement.released",
+      runId: "run-1",
+      buyerId: "buyer-1",
+      runnerId: "runner-1",
+      mode: "aborted",
+      sellers: [],
+      runnerKobo: 0,
+      platformKobo: 0,
+      buyerRefundKobo: 0,
+      platformLossKobo: 0,
+      releasedAt: now,
+    };
+    const valid = { disruptionCompensationBps: 6_000, platformFeeBps: 4_000, ambiguousLossCapKobo: 0 };
+    expect(SettlementReleasedSchema.safeParse({ ...event, inputs: { ...settlementInputs, abortSplit: valid } }).success).toBe(true);
+    const invalid = [
+      { ...valid, disruptionCompensationBps: -1 },
+      { ...valid, disruptionCompensationBps: 1.5 },
+      { ...valid, platformFeeBps: -1 },
+      { ...valid, platformFeeBps: 1.5 },
+      { ...valid, disruptionCompensationBps: 6_001 },
+      { ...valid, ambiguousLossCapKobo: -1 },
+      { ...valid, ambiguousLossCapKobo: 1.5 },
+      { ...valid, ambiguousLossCapKobo: Number.MAX_SAFE_INTEGER + 1 },
+    ];
+    for (const abortSplit of invalid) {
+      expect(SettlementReleasedSchema.safeParse({ ...event, inputs: { ...settlementInputs, abortSplit } }).success).toBe(false);
+    }
+  });
 });
 
 describe("archive family", () => {

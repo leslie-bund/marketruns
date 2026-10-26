@@ -1,4 +1,8 @@
-import postgres from "postgres";
+import { createRequire } from "node:module";
+
+// infra/ has no package.json; resolve the workspace dep from apps/payments.
+const require = createRequire(new URL("../apps/payments/package.json", import.meta.url));
+const postgres = require("postgres");
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required; the Neon connection string is never committed");

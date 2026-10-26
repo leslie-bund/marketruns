@@ -4,6 +4,6 @@ Disputes are resolved first from the evidence layer (signed photos, scan logs, G
 
 ## Consequences
 
-- The platform budgets an ambiguity-loss allowance per market. That loss is separately platform-funded; it is not netted against participant-funded commission or margin.
+- The platform budgets an ambiguity-loss allowance per market. Actual loss is the minimum of the requested amount, that policy cap, the buyer's residual, and the platform revenue available in the disputed run. It is deducted from platform revenue and added to the buyer refund, never introduced as external capture funding.
 - Confirmed seller legs pay goods proceeds less per-seller commission. The runner's confirmed-fraction payout is reduced by at most the configured delivery margin; with no gross runner payout there is no delivery-margin revenue.
-- Every dispute outcome must be representable as inputs to the settlement function; no side-channel refunds. Buyer refund plus all payouts and platform revenue, less the explicit platform loss, must equal the goods-plus-delivery capture.
+- Every dispute outcome must be representable as inputs to the settlement function; no side-channel refunds. Buyer refund plus all seller and runner payouts and net platform revenue must equal the goods-plus-delivery capture, so total outflows never exceed capture and no output is negative.

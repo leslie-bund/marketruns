@@ -131,16 +131,18 @@ function warn(check, table, id, amounts, why) {
 /**
  * The captured total a settlement's ledger must record as the buyer_capture
  * debit (apps/archive/src/settlement-legs.ts): the sum of credited outcome
- * legs, less the platform-loss debit. NOTE: seller payouts come from the
- * stored OUTCOME (post-settlement kobo), never from goods_total_kobo — the
- * goods total is an input, and aborted/disputed settlements pay sellers less.
+ * legs. Dispute loss is already deducted from platform revenue, not external
+ * funding. Legacy rows with an actual platform_loss debit subtract that
+ * external funding instead. NOTE: seller payouts come from the stored OUTCOME
+ * (post-settlement kobo), never from goods_total_kobo — the goods total is an
+ * input, and aborted/disputed settlements pay sellers less.
  */
 function capturedTotalKobo(settlement) {
   const outcome = settlement.outcome ?? {};
   const sellers = (outcome.sellers ?? []).reduce((sum, s) => sum + Number(s.amountKobo ?? 0), 0);
   return (
     sellers + kobo(settlement.runner_kobo) + kobo(settlement.platform_kobo) +
-    kobo(settlement.buyer_refund_kobo) - kobo(settlement.platform_loss_kobo)
+    kobo(settlement.buyer_refund_kobo) - kobo(settlement.external_platform_loss ?? 0)
   );
 }
 
@@ -148,8 +150,7 @@ function capturedTotalKobo(settlement) {
  * Check 1 — ledger balance. Per settlement_record:
  *   sum(debit_kobo) == sum(credit_kobo), and the buyer_capture debit leg equals
  *   the captured total (capturedTotalKobo — the identity settlement-legs.ts
- *   writes: capture is the balancing debit for all credited value, less the
- *   platform-loss debit).
+ *   writes: capture is the balancing debit for all credited value).
  */
 async function checkLedgerBalance(sql, settlements) {
   const check = makeCheck("ledger-balance");
@@ -660,7 +661,9 @@ async function main() {
     const marketFilter = opts.market ? sql`WHERE ra.market_id = ${opts.market}` : sql``;
     const settlements = await sql`
       SELECT sr.id, sr.run_id, sr.mode, sr.goods_total_kobo, sr.runner_kobo, sr.platform_kobo,
-             sr.buyer_refund_kobo, sr.platform_loss_kobo, sr.outcome, ra.market_id, ra.runner_id
+             sr.buyer_refund_kobo, sr.platform_loss_kobo, sr.outcome, ra.market_id, ra.runner_id,
+             COALESCE((SELECT SUM(le.debit_kobo) FROM ledger_entries le
+               WHERE le.settlement_record_id = sr.id AND le.account = 'platform_loss'), 0)::bigint AS external_platform_loss
       FROM settlement_records sr
       JOIN runs_archive ra ON ra.id = sr.run_id
       ${marketFilter}

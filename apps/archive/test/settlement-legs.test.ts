@@ -39,11 +39,20 @@ describe("settlement ledger legs", () => {
     expect(isBalanced(legs)).toBe(true);
   });
 
-  it("caps ambiguous platform loss", () => {
-    const outcome = settle(disputed);
-    expect(outcome.platformLossKobo).toBe(MVP_ABORT_SPLIT.ambiguousLossCapKobo);
-    expect(settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" }).find((leg) => leg.account === "platform_loss")?.debitKobo)
-      .toBe(MVP_ABORT_SPLIT.ambiguousLossCapKobo);
+  it("records dispute loss as contra-revenue, never as external capture funding", () => {
+    const outcome = settle({
+      ...disputed,
+      sellers: [
+        { sellerId: "seller-1", amountKobo: 10_000, stopCompleted: true },
+        { sellerId: "seller-2", amountKobo: 5_000, stopCompleted: false },
+      ],
+    });
+    expect(outcome.platformLossKobo).toBe(1_100);
+    expect(outcome.platformKobo).toBe(0);
+    const legs = settlementLegs(outcome, { buyerId: "buyer-1", runnerId: "runner-1" });
+    expect(legs.find((leg) => leg.account === "platform_loss")).toBeUndefined();
+    expect(legs.find((leg) => leg.account === "buyer_capture")?.debitKobo).toBe(17_000);
+    expect(isBalanced(legs)).toBe(true);
   });
 
   it("balances every settlement mode", () => {

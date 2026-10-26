@@ -1,4 +1,3 @@
-import postgres from "postgres";
 import type { Env } from "../config/env.js";
 import { MemoryCoreRegistry } from "./memory.js";
 import { PostgresCoreRegistry } from "./postgres.js";
@@ -19,8 +18,7 @@ export function coreRegistry(env: Env): CoreRegistry {
   }
   let registry = clients.get(connectionString);
   if (!registry) {
-    const sql = postgres(connectionString, { max: 1, prepare: false });
-    registry = new PostgresCoreRegistry(sql);
+    registry = new PostgresCoreRegistry(connectionString);
     clients.set(connectionString, registry);
   }
   return registry;
