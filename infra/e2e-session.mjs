@@ -61,8 +61,8 @@ const DEFAULT_DATABASE_URL = "postgres://postgres:postgres@localhost:54322/marke
 const MARKET = "Balogun";
 /** How far ahead the ops config lever rolls closeAt when the close gate would refuse checkout. */
 const MARKET_OPEN_ROLL_MS = 8 * 60 * 60 * 1000;
-/** Archive + payments consumers land in well under this in dev; the poll bound keeps CI honest. */
-const DB_POLL_MS = 30_000;
+/** Archive/payment queues can retry across independent archive/payment ordering; keep a bounded but realistic provider-window. */
+const DB_POLL_MS = 120_000;
 
 const RUNNER_ID = "runner:internal";
 
@@ -168,7 +168,7 @@ function postCommand(edge, command, identity, options = {}) {
 /** One real photo through the capture seam (ADR-0010): bytes in, signed r2:// reference out. */
 async function capturePhoto(edge, label) {
   const res = await req("POST", `${edge}/captures`, {
-    headers: { "content-type": "image/png" },
+    headers: { "content-type": "image/png", ...who(RUNNER_ID, "runner") },
     body: Buffer.from(PIXEL_PNG_B64, "base64"),
   });
   check(`${label}: photo captured via POST /captures`, res.status === 200 && typeof res.json?.ref === "string", `HTTP ${res.status}: ${res.text}`);
@@ -396,6 +396,7 @@ async function playToCheckout(label, edge, buyerId, store, delivery, { withDisco
       unit: store.unit,
       priceKobo: store.priceKobo,
       sellerName: store.sellerName,
+      sellerParticipantId: store.sellerId,
       exchangePoint: store.exchangePoint,
     }),
   });
@@ -440,28 +441,55 @@ async function playHandoff(label, edge, runId, handoff) {
     `HTTP ${initiated.status}: ${initiated.text}`,
   );
 
+  const pickup = handoff.handoffType === "pickup";
+  const credential = pickup
+    ? await req("GET", `${edge}/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoff.handoffId)}/challenge`, { headers: who(handoff.sellerId, "seller") })
+    : await req("GET", `${edge}/runs/${encodeURIComponent(runId)}/delivery-code`, { headers: who(handoff.counterparty, "buyer") });
+  const challenge = pickup ? credential.json?.challenge : credential.json?.code;
+  check(
+    `${label}: ${pickup ? "seller QR challenge" : "buyer delivery code"} issued securely`,
+    credential.status === 200 && typeof challenge === "string" && challenge.length >= 6,
+    `HTTP ${credential.status}: ${credential.text}`,
+  );
+
   const scan = await postCommand(
     edge,
-    { type: "handoff.challenge-scanned", handoffId: handoff.handoffId, runId, scannedAt: Date.now() },
+    { type: "handoff.challenge-scanned", handoffId: handoff.handoffId, runId, challenge },
     who(RUNNER_ID, "runner"),
   );
   check(
-    `${label}: photoless scan refused 409 photo-required (ADR-0020 — the scan alone never confirms)`,
-    scan.status === 409 && scan.json?.error === "photo-required",
+    pickup
+      ? `${label}: photoless pickup scan refused 409 photo-required (ADR-0020)`
+      : `${label}: delivery code verified before photo`,
+    pickup
+      ? scan.status === 409 && scan.json?.error === "photo-required"
+      : scan.status === 200 && scan.json?.type === "handoff.challenge-verified",
     `HTTP ${scan.status}: ${scan.text}`,
   );
 
   const photoRef = await capturePhoto(edge, label);
   const photo = await req("POST", `${edge}/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoff.handoffId)}/photo`, {
     headers: { "content-type": "application/json", ...who(RUNNER_ID, "runner") },
-    body: JSON.stringify({ type: "handoff.photo-captured", handoffId: handoff.handoffId, photoCaptureRef: photoRef, capturedAt: Date.now() }),
+    body: JSON.stringify({ type: "handoff.photo-captured", handoffId: handoff.handoffId, photoCaptureRef: photoRef }),
   });
   const wireHandoff = (photo.json?.run?.handoffs ?? []).find((h) => h.id === handoff.handoffId);
   check(
-    `${label}: photo attached — the handoff confirmed (photo IS the confirm act)`,
-    photo.status === 200 && wireHandoff?.status === "confirmed" && wireHandoff.photoCaptureRef === photoRef && wireHandoff.autoConfirmed === false,
+    `${label}: fresh photo attached after challenge verification`,
+    photo.status === 200 && wireHandoff?.photoCaptureRef === photoRef && (pickup ? wireHandoff.status === "confirmed" : wireHandoff.status === "pending"),
     `HTTP ${photo.status}: ${photo.text}`,
   );
+
+  if (!pickup) {
+    const confirmed = await req("POST", `${edge}/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoff.handoffId)}/confirm`, {
+      headers: { "content-type": "application/json", ...who(handoff.counterparty, "buyer") },
+      body: "{}",
+    });
+    check(
+      `${label}: buyer explicitly confirmed code + photo delivery`,
+      confirmed.status === 200 && confirmed.json?.type === "handoff.confirmed" && confirmed.json.autoConfirmed === false,
+      `HTTP ${confirmed.status}: ${confirmed.text}`,
+    );
+  }
   return photoRef;
 }
 
@@ -523,16 +551,18 @@ async function playS3(edge, tag) {
   const buyerId = `buyer:e2e-s3-${tag}`;
   const { runId } = await playToCheckout(label, edge, buyerId, S3_STORE, { kind: "plus-code", plusCode: "6FR5+8X Lagos" }, { withDiscovery: true });
 
-  const run = await req("GET", `${edge}/runs/${encodeURIComponent(runId)}`);
+  const run = await req("GET", `${edge}/runs/${encodeURIComponent(runId)}`, { headers: who(RUNNER_ID, "runner") });
   const stop = run.json?.run?.stops?.[0];
   check(`${label}: run live with its seller stop`, run.status === 200 && stop?.exchangePoint === S3_STORE.exchangePoint, `HTTP ${run.status}: ${run.text}`);
 
   const pickupRef = await playHandoff(label, edge, runId, {
     handoffId: `handoff-e2e-s3-${tag}-pickup`,
+    handoffType: "pickup",
+    sellerId: S3_STORE.sellerId,
     exchangePointId: stop.exchangePoint,
     counterparty: stop.sellerName,
   });
-  const afterPickup = await req("GET", `${edge}/runs/${encodeURIComponent(runId)}`);
+  const afterPickup = await req("GET", `${edge}/runs/${encodeURIComponent(runId)}`, { headers: who(RUNNER_ID, "runner") });
   check(
     `${label}: pickup confirmed — run delivering, stop completed`,
     afterPickup.json?.run?.status === "delivering" && afterPickup.json.run.stops[0].status === "completed",
@@ -542,6 +572,7 @@ async function playS3(edge, tag) {
   const deliveryLabel = run.json.run.delivery.kind === "plus-code" ? run.json.run.delivery.plusCode : run.json.run.delivery.name;
   const deliveryRef = await playHandoff(label, edge, runId, {
     handoffId: `handoff-e2e-s3-${tag}-delivery`,
+    handoffType: "delivery",
     exchangePointId: deliveryLabel,
     counterparty: buyerId,
   });
@@ -581,12 +612,14 @@ async function playS4(edge, tag) {
   const buyerId = `buyer:e2e-s4-${tag}`;
   const { runId } = await playToCheckout(label, edge, buyerId, S4_STORE, { kind: "muster-point", name: "Balogun Market Partner" }, { withDiscovery: false });
 
-  const run = await req("GET", `${edge}/runs/${encodeURIComponent(runId)}`);
+  const run = await req("GET", `${edge}/runs/${encodeURIComponent(runId)}`, { headers: who(RUNNER_ID, "runner") });
   const stop = run.json?.run?.stops?.[0];
   check(`${label}: run live with its seller stop`, run.status === 200 && stop?.exchangePoint === S4_STORE.exchangePoint, `HTTP ${run.status}: ${run.text}`);
 
   await playHandoff(label, edge, runId, {
     handoffId: `handoff-e2e-s4-${tag}-pickup`,
+    handoffType: "pickup",
+    sellerId: S4_STORE.sellerId,
     exchangePointId: stop.exchangePoint,
     counterparty: stop.sellerName,
   });

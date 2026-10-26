@@ -13,18 +13,14 @@ import type { RecipientResolver, ResolvedPayoutAccount } from "../recipients.js"
  * Malformed JSON or entry shapes throw at construction — a payout misconfig
  * must be loud, never silently misdirect money.
  *
- * At this stage the settlement legs carry the store's trading identity
- * (`sellerName`, ADR-0014/0018), so seller party ids are store display names,
- * not participant ids. The defaults below therefore cover the demo seed's
- * stores by name; they are Flutterwave's published test accounts (Access Bank
- * code 044, accounts 0690000031–0690000033 — test mode ONLY; OTP 12345).
- * They are included only when the configured secret key is a test key, so a
- * live key can never send money to a mock recipient. Payout-details collection
- * is DB-first (ADR-0025) but keyed by participant id; the store→participant
- * mapping is the remaining follow-up. Until it lands, a seller with a saved
- * payout account still resolves null for a display-name leg and must be
- * covered by DEV_PAYOUT_RECIPIENTS. An unknown partyId resolves to null and
- * the dispatch fails "recipient-unresolved", replayable once the map is fixed.
+ * Current seller legs carry authoritative participant ids; legacy fixtures may
+ * still carry display names. The defaults below cover both forms of the demo
+ * seed with Flutterwave's published test accounts (Access Bank code 044,
+ * accounts 0690000031–0690000033 — test mode ONLY; OTP 12345). They are
+ * included only for a test key, so a live key can never pay a mock recipient.
+ * Real payout-details collection remains DB-first by participant id
+ * (ADR-0025). An unknown partyId fails "recipient-unresolved" and can be
+ * replayed after the participant saves a valid account.
  */
 
 interface DevRecipientEntry {
@@ -35,10 +31,13 @@ interface DevRecipientEntry {
 
 /** Flutterwave-documented test accounts for the demo seed's parties (test mode only). */
 const FLUTTERWAVE_TEST_ACCOUNT_DEFAULTS: Readonly<Record<string, DevRecipientEntry>> = {
-  // The demo seed's seller legs carry the store display name (ADR-0014/0018).
+  // Both legacy display-name legs and current participant-owned demo stores.
   "Amina's Fresh Store": { bank: "044", account: "0690000031", name: "TEST — Forrest Green" },
+  "participant:demo-amina": { bank: "044", account: "0690000031", name: "TEST — Forrest Green" },
   "Mama Ngozi Provisions": { bank: "044", account: "0690000032", name: "TEST — Pastor Bright" },
+  "participant:demo-ngozi": { bank: "044", account: "0690000032", name: "TEST — Pastor Bright" },
   "Emeka Phones & Accessories": { bank: "044", account: "0690000033", name: "TEST — platform" },
+  "participant:demo-emeka": { bank: "044", account: "0690000033", name: "TEST — platform" },
   // Retained for tests and pre-ADR-0018 fixtures that still use the old id.
   "seller:amina": { bank: "044", account: "0690000031", name: "TEST — Forrest Green" },
   "runner:internal": { bank: "044", account: "0690000032", name: "TEST — Pastor Bright" },

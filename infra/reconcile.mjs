@@ -595,14 +595,24 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
     dispatches.flatMap((d) => [d.provider_reference, d.idempotency_key]).filter((value) => value !== null),
   );
   let providerOrphans = 0;
+  const sharedTestAccount = secretKey.startsWith("FLWSECK_TEST-");
   for (const t of transfers) {
     const reference = bareReference(String(t.reference ?? ""));
     const ours = reference.startsWith(PROVIDER_REFERENCE_PREFIX) || reference.startsWith("settlement:");
     if (!ours) continue; // unrelated account activity is not ours to reconcile
     if (!localKeys.has(reference)) {
       providerOrphans += 1;
-      fail(check, "flutterwave:transfers", String(t.id), { reference, providerKobo: Math.round(Number(t.amount) * KOBO_PER_NAIRA) },
-        "provider transfer with one of our reference shapes has no local dispatch row — money moved without a Postgres record");
+      const detail = { reference, providerKobo: Math.round(Number(t.amount) * KOBO_PER_NAIRA) };
+      if (sharedTestAccount) {
+        // Hermetic rehearsal databases share the provider's test wallet. A
+        // transfer from another temporary DB is expected and must not become a
+        // false production orphan. Local executed rows still require a match.
+        warn(check, "flutterwave:transfers", String(t.id), detail,
+          "test-wallet transfer has no row in this rehearsal database (possible prior/temporary test scope)");
+      } else {
+        fail(check, "flutterwave:transfers", String(t.id), detail,
+          "provider transfer with one of our reference shapes has no local dispatch row — money moved without a Postgres record");
+      }
     }
   }
 
