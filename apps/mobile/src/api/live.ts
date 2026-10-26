@@ -4,12 +4,15 @@ import type { ServerEvent } from "@market-runs/proto";
 import { EDGE_URL } from "./config";
 import { sessionHeaders } from "./auth";
 import { participantHeaders } from "./participant";
+import { getDeviceLocationFix, locationErrorMessage } from "./location";
 
 export interface LiveEventOptions {
   /** Session-authenticated sellers attach their owned store to the market socket. */
   storeId?: string;
-  /** Send explicit foreground presence heartbeats (seller market sockets only). */
+  /** Send explicit foreground presence heartbeats with fresh GPS (seller sockets only). */
   heartbeat?: boolean;
+  /** Local permission/accuracy failures and server presence refusals surface here. */
+  onPresenceError?: (message: string | null) => void;
 }
 
 type ReactNativeWebSocket = new (
@@ -41,6 +44,8 @@ export function useLiveEvents(
   handlerRef.current = onEvent;
   const reconnectRef = useRef(onReconnect);
   reconnectRef.current = onReconnect;
+  const presenceErrorRef = useRef(options.onPresenceError);
+  presenceErrorRef.current = options.onPresenceError;
   const topicsRef = useRef(topics);
   topicsRef.current = topics;
   const socketRef = useRef<WebSocket | null>(null);
@@ -54,13 +59,20 @@ export function useLiveEvents(
     let closed = false;
     let attempt = 0;
     let everConnected = false;
+    let locating = false;
     let foreground = AppState.currentState === "active";
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const sendHeartbeat = () => {
-      if (heartbeat && foreground && socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "heartbeat", foreground: true }));
-      }
+      if (!heartbeat || !foreground || locating || socket?.readyState !== WebSocket.OPEN) return;
+      locating = true;
+      void getDeviceLocationFix().then((location) => {
+        if (!closed && foreground && socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "heartbeat", foreground: true, location }));
+        }
+      }).catch((error) => {
+        if (!closed) presenceErrorRef.current?.(locationErrorMessage(error));
+      }).finally(() => { locating = false; });
     };
     const connect = () => {
       if (closed) return;
@@ -80,9 +92,14 @@ export function useLiveEvents(
       };
       socket.onmessage = (message) => {
         try {
-          handlerRef.current(JSON.parse(String(message.data)) as ServerEvent);
+          const data = JSON.parse(String(message.data)) as ServerEvent | { type: string; online?: boolean; message?: string };
+          if (data.type === "presence") {
+            presenceErrorRef.current?.("online" in data && data.online === false ? data.message ?? "You are offline." : null);
+            return;
+          }
+          handlerRef.current(data as ServerEvent);
         } catch {
-          // Presence acknowledgements and malformed frames need no event handling.
+          // Pongs, subscriptions and malformed frames need no event handling.
         }
       };
       socket.onclose = () => {

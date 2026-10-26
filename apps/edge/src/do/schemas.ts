@@ -4,6 +4,7 @@ import {
   HandoffInitiatedSchema,
   IntentSchema,
   KoboSchema,
+  LocationFixSchema,
   ProductRetirementReasonSchema,
   ProductSchema,
   RunRouteSchema,
@@ -59,6 +60,7 @@ export const MarketConfigSchema = z.object({
   geo: z
     .object({
       center: GeoPointSchema.omit({ name: true }),
+      radiusMeters: z.number().int().positive().default(750),
       exchangePoints: z.array(GeoPointSchema),
       musterPoints: z.array(GeoPointSchema),
     })
@@ -74,7 +76,7 @@ export type MarketConfig = z.infer<typeof MarketConfigSchema>;
 export const MARKET_OPEN_WINDOW_MS = 8 * 60 * 60 * 1000;
 
 /** A sensible default so a market works before ops configures it. Values are tunable per market. */
-export function defaultMarketConfig(now: number): MarketConfig {
+export function defaultMarketConfig(now: number, center = { latitude: 6.4541, longitude: 3.3947 }): MarketConfig {
   return {
     closeAt: now + MARKET_OPEN_WINDOW_MS,
     opsConfigured: false,
@@ -91,7 +93,8 @@ export function defaultMarketConfig(now: number): MarketConfig {
     // Balogun Market, Lagos Island — demo geography until ops configures the
     // real exchange points. All within a few hundred metres of the market.
     geo: {
-      center: { latitude: 6.4541, longitude: 3.3947 },
+      center,
+      radiusMeters: 750,
       exchangePoints: [
         { name: "Balogun Market, Stall B14", latitude: 6.4544, longitude: 3.3949 },
         { name: "Balogun Market, Stall A02", latitude: 6.4536, longitude: 3.394 },
@@ -249,7 +252,7 @@ export const SeedRunRequestSchema = z.object({
 });
 export type SeedRunRequest = z.infer<typeof SeedRunRequestSchema>;
 
-export const ClaimRunRequestSchema = z.object({ participantId: z.string().min(1) });
+export const ClaimRunRequestSchema = z.object({ participantId: z.string().min(1), location: LocationFixSchema.optional() });
 export type ClaimRunRequest = z.infer<typeof ClaimRunRequestSchema>;
 
 export const DisputeRunRequestSchema = z.object({

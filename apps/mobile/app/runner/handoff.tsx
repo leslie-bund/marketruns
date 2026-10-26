@@ -4,7 +4,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { HANDOFF_AUTO_CONFIRM_MS } from "@market-runs/domain";
 import { useLocalSearchParams } from "expo-router";
 import { ApiError, attachPhoto, identities, scanChallenge, newId, uploadCapture, useActiveParticipant } from "../../src/api";
-import { canRunnerMutate, HandoffPhoto } from "../../src/features/run";
+import { canRunnerMutate, HandoffPhoto, useRunnerLocationStream } from "../../src/features/run";
 import { useRunnerRun } from "../../src/features/runner";
 import { Button, Card, Page, Pill, Section, colors, s } from "../../src/ui";
 
@@ -26,6 +26,7 @@ export default function HandoffScreen() {
   const [photo, setPhoto] = useState(false);
   const [now, setNow] = useState(Date.now());
   const camera = useRef<CameraView>(null);
+  const gps = useRunnerLocationStream(run.run?.id ?? null);
 
   const handoff = run.run?.handoffs.find((candidate) => candidate.id === handoffId) ?? null;
 
@@ -121,6 +122,8 @@ export default function HandoffScreen() {
 
   return (
     <Page eyebrow="EXCHANGE POINT" title="Handoff">
+      {gps.error ? <Card><Text style={s.body}>{gps.error}</Text></Card> : null}
+      {!gps.sharing && !gps.error ? <Card><Text style={s.muted}>Acquiring fresh GPS for pickup or delivery confirmation…</Text></Card> : null}
       <Card>
         <Pill active={handoff?.status === "confirmed"}
         >

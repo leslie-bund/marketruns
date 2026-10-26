@@ -25,6 +25,7 @@ import {
   boolean,
   check,
   customType,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -170,6 +171,9 @@ export const markets = pgTable(
     /** Full MarketDO configuration; edge validates before every write. */
     config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
     active: boolean("active").notNull().default(true),
+    centerLatitude: doublePrecision("center_latitude"),
+    centerLongitude: doublePrecision("center_longitude"),
+    geofenceRadiusMeters: integer("geofence_radius_meters").notNull().default(750),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -219,6 +223,10 @@ export const sellerPresence = pgTable(
     participantId: text("participant_id").notNull(),
     storeId: text("store_id").notNull().references(() => stores.id),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
+    accuracyMeters: doublePrecision("accuracy_meters"),
+    locationObservedAt: timestamp("location_observed_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("seller_presence_participant_market_unique").on(table.marketId, table.participantId),

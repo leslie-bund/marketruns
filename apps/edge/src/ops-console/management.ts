@@ -18,7 +18,7 @@ const StoreInput = z.object({ marketId: MarketName, sellerId: Name, name: Name, 
 const ShopItemInput = z.object({ name: Name, attributes: z.record(z.unknown()).default({}), active: z.boolean().default(true) });
 const PoolInput = z.object({ marketId: MarketName, name: Name, active: z.boolean().default(true) });
 
-async function body<T>(c: Context<{ Bindings: Env }>, schema: z.ZodType<T>): Promise<T | Response> {
+async function body<S extends z.ZodTypeAny>(c: Context<{ Bindings: Env }>, schema: S): Promise<z.output<S> | Response> {
   const parsed = schema.safeParse(await c.req.json().catch(() => null));
   return parsed.success ? parsed.data : errorResponse(400, "invalid-body", "request failed validation", { issues: parsed.error.issues });
 }

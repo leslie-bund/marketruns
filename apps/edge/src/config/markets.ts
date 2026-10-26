@@ -1,4 +1,5 @@
 import type { Env } from "./env.js";
+import type { MarketConfig } from "../do/schemas.js";
 import { coreRegistry } from "../registry/index.js";
 
 /** Durable market registry. Runtime configuration remains in MarketDO/KV, never in this list cache. */
@@ -14,11 +15,25 @@ export function isKnownMarket(ids: string[], name: string): boolean {
 }
 
 /** CRUD-ready create compatibility for the existing ops route. */
-export async function addMarketToIndex(env: Env, name: string): Promise<boolean> {
+export async function addMarketToIndex(env: Env, name: string, config?: MarketConfig): Promise<boolean> {
   try {
-    await coreRegistry(env).upsertMarket({ id: name, name, opensAt: "08:00", closesAt: "18:00" });
+    await coreRegistry(env).upsertMarket({
+      id: name, name, opensAt: "08:00", closesAt: "18:00",
+      ...(config?.geo ? { geofence: { center: config.geo.center, radiusMeters: config.geo.radiusMeters } } : {}),
+    });
     return true;
   } catch {
     return false;
   }
+}
+
+/** Persist the enforcement center/radius without replacing the market's schedule. */
+export async function syncMarketGeofence(env: Env, name: string, config: MarketConfig): Promise<void> {
+  const registry = coreRegistry(env);
+  const existing = (await registry.listMarkets()).find((market) => market.id.toLowerCase() === name.toLowerCase());
+  if (!existing) throw new Error(`market ${name} is not registered`);
+  await registry.upsertMarket({
+    id: existing.id, name: existing.name, opensAt: existing.opensAt, closesAt: existing.closesAt,
+    ...(config.geo ? { geofence: { center: config.geo.center, radiusMeters: config.geo.radiusMeters } } : {}),
+  });
 }

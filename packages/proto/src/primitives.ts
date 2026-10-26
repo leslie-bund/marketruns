@@ -43,10 +43,18 @@ export const DeliverySchema = z.discriminatedUnion("kind", [
 ]);
 export type Delivery = z.infer<typeof DeliverySchema>;
 
-/** Throttled fire-and-forget location stream; confirmations are must-arrive. */
+/** Throttled fire-and-forget location stream; only the latest fix is retained. */
 export const GeoLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   observedAt: TimestampSchema,
+  /** Optional only for runs persisted before accuracy enforcement landed. New writes require it. */
+  accuracyMeters: z.number().nonnegative().optional(),
 });
 export type GeoLocation = z.infer<typeof GeoLocationSchema>;
+
+/** A fresh device measurement, distinct from static market geography. */
+export const LocationFixSchema = GeoLocationSchema.extend({
+  accuracyMeters: z.number().nonnegative(),
+});
+export type LocationFix = z.infer<typeof LocationFixSchema>;

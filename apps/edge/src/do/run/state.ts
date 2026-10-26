@@ -57,6 +57,8 @@ export interface RunState {
    * run.retired so the disputes table's evidence_refs can be written from it.
    */
   disputeEvidenceRefs?: string[];
+  /** Session-claimed runs keep enforcing a fresh fix during timer-driven auto-confirm. */
+  locationRequired?: boolean;
   /** Deterministic-time seam: epoch offset added to Date.now(). 0 in production. */
   timeOffsetMs?: number;
 }

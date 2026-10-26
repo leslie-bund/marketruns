@@ -1,4 +1,4 @@
-import type { MarketRegistryUpsert, Participant, Store } from "@market-runs/proto";
+import type { LocationFix, MarketRegistryUpsert, Participant, Store } from "@market-runs/proto";
 
 export interface MarketRecord extends MarketRegistryUpsert {}
 
@@ -7,6 +7,7 @@ export interface PresenceRecord {
   participantId: string;
   storeId: string;
   lastSeenAt: number;
+  location: LocationFix;
 }
 
 /** Durable core registry; presence is a deduped, expiring read model. */
@@ -20,4 +21,5 @@ export interface CoreRegistry {
   isInternalRunner(marketId: string, participantId: string): Promise<boolean>;
   joinInternalRunner(marketId: string, participantId: string): Promise<void>;
   heartbeat(presence: PresenceRecord): Promise<void>;
+  removePresence(marketId: string, participantId: string, storeId: string): Promise<void>;
 }

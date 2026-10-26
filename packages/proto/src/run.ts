@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DeliverySchema, GeoLocationSchema, KoboSchema, TimestampSchema } from "./primitives.js";
+import { DeliverySchema, GeoLocationSchema, KoboSchema, LocationFixSchema, TimestampSchema } from "./primitives.js";
 
 /**
  * One Runner's trip collecting every item in one Cart and delivering them.
@@ -143,13 +143,13 @@ export const RunUpdatedSchema = z.object({
 });
 export type RunUpdated = z.infer<typeof RunUpdatedSchema>;
 
-/** Runner → edge: throttled fire-and-forget location stream. */
-export const RunnerLocationUpdatedSchema = z.object({
+/** Runner → edge: throttled fire-and-forget location stream, latest fix only. */
+export const RunnerLocationUpdatedSchema = LocationFixSchema.extend({
   type: z.literal("run.location-updated"),
   runId: z.string().min(1),
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
-  observedAt: TimestampSchema,
+  /** Legacy dev fixtures omit these; deployed session writes reject their absence. */
+  observedAt: TimestampSchema.optional(),
+  accuracyMeters: z.number().nonnegative().optional(),
 });
 export type RunnerLocationUpdated = z.infer<typeof RunnerLocationUpdatedSchema>;
 
