@@ -10,3 +10,4 @@ kimi-export-session*.md
 .worktrees/
 *-test.log
 ops-test*.log
+**/test-results/
