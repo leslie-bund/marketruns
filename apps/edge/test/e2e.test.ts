@@ -217,7 +217,7 @@ describe("buyer product discovery", () => {
   it("indexes offered products under their intent for the buyer app", async () => {
     const posted = await postJson("/command", {
       type: "intent.posted", intentId: "disc-intent-1", shopItem: "Tomatoes", quantity: 2, unit: "kg",
-      priceBand: { minKobo: 120_000, maxKobo: 180_000 }, market: "disc",
+      priceBand: { minKobo: 120_000, maxKobo: 180_000 }, market: "disc", buyerId: "buyer:disc",
     });
     expect(posted.status).toBe(200);
     const offered = await postJson(`/markets/disc/offers`, {
@@ -230,7 +230,7 @@ describe("buyer product discovery", () => {
     const body = await readJson(discovery);
     expect(body.productIds).toEqual(["disc-product-1"]);
 
-    const product = await readJson(await getJson("/products/disc-product-1"));
+    const product = await readJson(await SELF.fetch(new Request(`${BASE}/products/disc-product-1`, { headers: { "x-participant-id": "buyer:disc", "x-participant-role": "buyer" } })));
     expect(product.product.priceKobo).toBe(165_000);
   });
 });
