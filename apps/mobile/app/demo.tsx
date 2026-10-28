@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { router } from "expo-router";
-import { Text } from "react-native";
+import { Alert, Text } from "react-native";
 import {
   acceptProduct,
   attachPhoto,
@@ -18,6 +18,7 @@ import {
   postIntent,
   scanChallenge,
 } from "../src/api";
+import { devDemoMode, withDevRehearsal } from "../src/api/dev-mode";
 import { Card, Page, Pill } from "../src/ui";
 
 /**
@@ -31,11 +32,15 @@ export default function Demo() {
   const running = useRef(false);
 
   useEffect(() => {
-    if (running.current) return;
+    if (!devDemoMode || running.current) return;
     running.current = true;
-    void run();
+    void withDevRehearsal(run).catch((error) => Alert.alert("Demo rehearsal failed", error instanceof Error ? error.message : String(error)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (!devDemoMode) {
+    return <Page eyebrow="DEV REHEARSAL" title="Demo unavailable"><Card><Text>This route requires __DEV__ and EXPO_PUBLIC_DEMO_MODE=true. Explore is read-only; rehearsal writes belong only on an isolated dev backend.</Text></Card></Page>;
+  }
 
   return (
     <Page eyebrow="DEV ONLY · SCRIPTED" title="Demo walkthrough">

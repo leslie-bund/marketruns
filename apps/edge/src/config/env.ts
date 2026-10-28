@@ -9,6 +9,8 @@ import type { ParticipantDO } from "../do/participant-do.js";
  * Durable Object classes so stubs carry their fetch() protocol.
  */
 export interface Env {
+  /** Explicit deployed topology validation; unset/development/test keeps local URLs. */
+  EDGE_ENV?: string;
   MARKET_DO: DurableObjectNamespace<MarketDO>;
   PRODUCT_DO: DurableObjectNamespace<ProductDO>;
   CART_DO: DurableObjectNamespace<CartDO>;

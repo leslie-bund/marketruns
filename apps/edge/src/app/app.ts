@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "../config/env.js";
+import { validateEdgeTopology } from "../config/topology.js";
 import { errorResponse } from "../do/runtime/index.js";
 import { participant } from "./middleware/participant.js";
 import { requestId } from "./middleware/request-id.js";
-import { opsConsole } from "../ops-console/index.js";
+import { opsConsole, opsLoginPage } from "../ops-console/index.js";
 import { handleOpsAuth, withOpsAuth } from "../ops-console/auth.js";
 import { commandRoute } from "./routes/command.js";
 import { authRoute, callbacksRoute } from "./routes/auth.js";
@@ -39,6 +40,15 @@ export function createApp(): Hono<{ Bindings: Env }> {
   );
   app.notFound((c) => errorResponse(404, "not-found", `no route: ${c.req.method} ${new URL(c.req.url).pathname}`));
 
+  app.use("*", async (c, next) => {
+    try {
+      validateEdgeTopology(c.env);
+      await next();
+    } catch (error) {
+      return errorResponse(503, "edge-topology-unconfigured", error instanceof Error ? error.message : String(error));
+    }
+  });
+
   app.get("/", (c) => c.json({ ok: true, service: "market-runs-edge" }));
   app.get("/healthz", (c) => c.json({ ok: true, service: "market-runs-edge" }));
 
@@ -61,6 +71,9 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/runs", runsRoute());
 
   const ops = new Hono<{ Bindings: Env }>();
+  // Only the sign-in page and the explicitly allow-listed auth endpoints are
+  // public. The console root and every API route still require Better Auth.
+  ops.get("/login", opsLoginPage);
   ops.all("/auth/*", handleOpsAuth);
   ops.use("/api/*", withOpsAuth());
   ops.use("/", withOpsAuth());

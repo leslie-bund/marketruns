@@ -15,6 +15,7 @@ import {
 import { canRunnerMutate, HandoffPhoto, parseHandoffPayload, useRunnerLocationStream } from "../../src/features/run";
 import { useRunnerRun } from "../../src/features/runner";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
+import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function HandoffScreen() {
   const { handoffId, runId } = useLocalSearchParams<{ handoffId: string; runId?: string }>();
@@ -72,9 +73,9 @@ export default function HandoffScreen() {
     } catch (error) {
       Alert.alert("Camera capture failed", error instanceof Error ? error.message : String(error), [
         { text: "Cancel", style: "cancel" },
-        { text: "Use dev reference", onPress: () => {
+        ...(devDemoMode ? [{ text: "Use dev reference", onPress: () => {
           void attachPhoto(currentRunId, handoffId, `r2://archive/captures/${newId("capture")}.jpg`).then(run.refresh).catch(fail("Photo failed"));
-        } },
+        } }] : []),
       ]);
     }
   };

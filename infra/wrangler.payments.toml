@@ -31,3 +31,22 @@ PAYMENT_DISPATCHER = "stub"
 
 # DATABASE_URL (dev) or the Hyperdrive binding (prod) is provided at deploy
 # time — never committed. Dev: a local Postgres container (infra/README).
+
+# Named environments do not inherit resource bindings. This safe staging
+# dispatcher moves no money; opt into a vendor only with explicit staging keys.
+[env.staging]
+name = "market-runs-payments-staging"
+
+[env.staging.vars]
+PAYMENT_DISPATCHER = "stub"
+
+[[env.staging.queues.consumers]]
+queue = "payment-dispatch-staging"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "payment-dispatch-dlq-staging"
+
+[[env.staging.queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "notification-events-staging"

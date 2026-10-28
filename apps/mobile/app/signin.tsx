@@ -7,6 +7,7 @@ import {
   useActiveParticipant, useDeviceCredential, verifyFace,
 } from "../src/api";
 import { Button, Card, Page, Pill, Section, colors, s } from "../src/ui";
+import { devDemoMode } from "../src/api/dev-mode";
 
 export default function SignIn() {
   const { participant } = useActiveParticipant(); const { credential } = useDeviceCredential();
@@ -45,7 +46,7 @@ export default function SignIn() {
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>
           <Button title={busy ? "Verifying…" : "Capture 7 frames and sign in"} onPress={() => { if (consented && !busy) void capture(); }} />
-          <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} />
+          {devDemoMode ? <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} /> : null}
         </>}
       </Section>
       {hasDeviceKey ? <Button title="Use this device’s key instead" secondary onPress={deviceKeySignIn} /> : null}

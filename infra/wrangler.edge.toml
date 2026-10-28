@@ -76,3 +76,59 @@ OSRM_BASE_URL = "https://router.project-osrm.org"
 # [[hyperdrive]]
 # binding = "HYPERDRIVE"
 # id = "set-with-wrangler"
+
+# Explicit staging example. Replace each example.com hostname with the staged
+# worker's HTTPS route before `wrangler deploy --env staging`; validation rejects
+# missing or loopback values instead of inheriting the local [vars] above.
+[env.staging]
+name = "market-runs-edge-staging"
+
+[env.staging.vars]
+EDGE_ENV = "staging"
+OPS_ARCHIVE_URL = "https://archive-staging.example.com"
+IDENTITY_URL = "https://identity-staging.example.com"
+PAYMENTS_URL = "https://payments-staging.example.com"
+NOTIFICATIONS_URL = "https://notifications-staging.example.com"
+OSRM_BASE_URL = "https://osrm-staging.example.com"
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "MARKET_DO", class_name = "MarketDO" },
+  { name = "PRODUCT_DO", class_name = "ProductDO" },
+  { name = "CART_DO", class_name = "CartDO" },
+  { name = "RUN_DO", class_name = "RunDO" },
+  { name = "PARTICIPANT_DO", class_name = "ParticipantDO" }
+]
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["MarketDO", "ProductDO", "CartDO", "RunDO"]
+
+[[env.staging.migrations]]
+tag = "v2"
+new_sqlite_classes = ["ParticipantDO"]
+
+[[env.staging.queues.producers]]
+binding = "ARCHIVE_QUEUE"
+queue = "archive-snapshots-staging"
+
+[[env.staging.queues.producers]]
+binding = "PAYMENT_QUEUE"
+queue = "payment-dispatch-staging"
+
+[[env.staging.queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "notification-events-staging"
+
+[[env.staging.r2_buckets]]
+binding = "ARCHIVE_BUCKET"
+bucket_name = "market-runs-archive-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "MARKET_CONFIG"
+id = "set-with-wrangler-staging"
+
+# If migrating a proxy to a Cloudflare Service binding, declare it under the
+# same environment, e.g. [[env.staging.services]] with binding/service names,
+# and update that proxy seam to fetch the binding. A services declaration alone
+# does not replace these URL reads.

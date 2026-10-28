@@ -6,6 +6,7 @@ import { createR2CaptureStore } from "./capture-store.js";
 import { createFaceVerifier, createLocalFaceVerifier } from "./face-verifier.js";
 import { createPasskeyVerifier } from "./passkey-verifier.js";
 import { createDrizzleStore } from "./store.js";
+import { validateIdentityRuntime } from "./runtime-config.js";
 
 /**
  * The identity worker: owns all credential/biometric state (face enrollment +
@@ -33,9 +34,10 @@ export default {
     const requestId = resolveRequestId(request.headers.get("x-request-id"));
     let status = 500;
     try {
+      validateIdentityRuntime(env);
       const url = new URL(request.url);
       let response: Response;
-      // Health check must not require the database.
+      // Health checks validate deployed configuration without opening Postgres.
       if (request.method === "GET" && url.pathname === "/healthz") {
         response = Response.json({ ok: true, service: "market-runs-identity" });
       } else {

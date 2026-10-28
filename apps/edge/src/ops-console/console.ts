@@ -24,17 +24,18 @@ import { databaseConfigured } from "./db.js";
  * settlement function — ops can pick a mode and dispute evidence shape,
  * never move money directly (ADR-0007).
  *
- * Auth: every /ops/api/* route runs behind the `ops` role guard — in dev
- * the guard admits a local operator when OPS_TOKEN is unset; deployed, the
- * shared token is required (ADR-0015). The HTML page itself follows the same
- * rule when OPS_TOKEN is set, accepting the token as the `x-ops-token`
- * header OR a `?token=` query param so a browser can open it; API fetches
- * from the page always authenticate with the header.
+ * Auth: /ops/login is public; the console root and every /ops/api/* route run
+ * behind the ops guard. Deployed environments require Better Auth. Only the
+ * explicit local legacy mode accepts OPS_TOKEN as x-ops-token or ?token=.
  */
+export function opsLoginPage(): Response {
+  return new Response(OPS_LOGIN_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
 export function opsConsole(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
-  app.get("/login", (c) => new Response(OPS_LOGIN_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }));
+  app.get("/login", opsLoginPage);
   app.get("/", (c) => {
     const identity = c.get("opsIdentity");
     if (identity?.mustChangePassword) return c.redirect("/ops/login", 302);

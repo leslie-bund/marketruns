@@ -17,3 +17,19 @@ EDGE_URL = "http://localhost:8787"
 # wrangler secret put RESEND_API_KEY
 # RESEND_FROM_EMAIL is a verified non-secret sender identity.
 # NOTIFICATION_INTERNAL_TOKEN is shared by the edge and notifications workers.
+
+# Replace the example hostname before deploying. Deployed queue/fetch validation
+# rejects missing or loopback EDGE_URL values instead of using local [vars].
+[env.staging]
+name = "market-runs-notifications-staging"
+
+[env.staging.vars]
+NOTIFICATIONS_ENV = "staging"
+EDGE_URL = "https://edge-staging.example.com"
+
+[[env.staging.queues.consumers]]
+queue = "notification-events-staging"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "notification-events-dlq-staging"

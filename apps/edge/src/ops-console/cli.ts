@@ -1,9 +1,9 @@
 import { count, eq, sql } from "drizzle-orm";
 import { markets, opsUsers } from "../../../../infra/drizzle/schema.js";
-import { defaultMarketConfig } from "../do/schemas.js";
 import type { Env } from "../config/env.js";
 import { createOpsAuth } from "./auth.js";
 import { createOpsDatabase } from "./db.js";
+import { resolveMarketSeeds } from "./market-seeds.js";
 
 /** Run with tsx; secrets arrive only through argv/environment, never source. */
 async function main() {
@@ -34,18 +34,20 @@ async function main() {
       return;
     }
     if (command === "seed-markets") {
-      const names = args.length > 0 ? args : ["Balogun", "Computer Village"];
-      for (const name of names) {
-        if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/.test(name)) throw new Error(`invalid market name: ${name}`);
-        const config = defaultMarketConfig(Date.now());
+      for (const seed of resolveMarketSeeds(args, Date.now())) {
         await db.insert(markets).values({
-          id: name, name, opensAt: "08:00", closesAt: "18:00", config,
-        }).onConflictDoUpdate({ target: markets.id, set: { name, updatedAt: new Date() } });
-        console.log(`Seeded market ${name}`);
+          id: seed.id, name: seed.name, opensAt: seed.opensAt, closesAt: seed.closesAt, config: seed.config,
+          centerLatitude: seed.center.latitude, centerLongitude: seed.center.longitude, geofenceRadiusMeters: seed.radiusMeters,
+        }).onConflictDoUpdate({ target: markets.id, set: {
+          name: seed.name, opensAt: seed.opensAt, closesAt: seed.closesAt,
+          centerLatitude: seed.center.latitude, centerLongitude: seed.center.longitude,
+          geofenceRadiusMeters: seed.radiusMeters, updatedAt: new Date(),
+        } });
+        console.log(`Seeded market ${seed.name} at ${seed.center.latitude},${seed.center.longitude} (${seed.radiusMeters} m)`);
       }
       return;
     }
-    throw new Error("usage: bootstrap-admin --email EMAIL --password PASSWORD | seed-markets [MARKET ...]");
+    throw new Error("usage: bootstrap-admin --email EMAIL --password PASSWORD | seed-markets [MARKET ...] | seed-markets MARKET --latitude LAT --longitude LNG --radius-meters METERS");
   } finally {
     await client.end();
   }
