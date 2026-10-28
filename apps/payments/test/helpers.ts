@@ -178,6 +178,10 @@ export class InMemoryHoldStore implements HoldStore {
     return null;
   }
 
+  async byRun(runId: string): Promise<HoldRow[]> {
+    return [...this.rows.values()].filter((row) => row.runId === runId).map((row) => ({ ...row }));
+  }
+
   async bindRun(id: string, runId: string): Promise<BindRunResult> {
     const row = this.rows.get(id);
     if (!row) return "missing";
@@ -222,7 +226,7 @@ export class InMemoryRefundStore implements RefundStore {
 
   async insertPending(row: RefundRow): Promise<boolean> {
     for (const existing of this.rows.values()) {
-      if (existing.settlementRecordId === row.settlementRecordId) return false;
+      if (existing.settlementRecordId === row.settlementRecordId && existing.holdId === row.holdId) return false;
     }
     this.rows.set(row.id, { ...row });
     return true;
@@ -233,6 +237,10 @@ export class InMemoryRefundStore implements RefundStore {
       if (row.settlementRecordId === settlementRecordId) return { ...row };
     }
     return null;
+  }
+
+  async forSettlement(settlementRecordId: string): Promise<RefundRow[]> {
+    return [...this.rows.values()].filter((row) => row.settlementRecordId === settlementRecordId).map((row) => ({ ...row }));
   }
 
   async byId(id: string): Promise<RefundRow | null> {

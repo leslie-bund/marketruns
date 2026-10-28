@@ -135,8 +135,7 @@ export async function handleDispatchRequested(
   // (held → released). A partially-refunded/refunded hold keeps its refund
   // state — release() never overwrites it.
   if (holds) {
-    const hold = await holds.byRunId(value.runId);
-    if (hold) {
+    for (const hold of await holds.byRun(value.runId)) {
       await holds.release(hold.id);
       if (notify && hold.status === "held") {
         await notify(paymentNotification({

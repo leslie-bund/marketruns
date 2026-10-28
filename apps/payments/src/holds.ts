@@ -57,6 +57,7 @@ export interface HoldStore {
   byTxRef(txRef: string): Promise<HoldRow | null>;
   byId(id: string): Promise<HoldRow | null>;
   byRunId(runId: string): Promise<HoldRow | null>;
+  byRun(runId: string): Promise<HoldRow[]>;
   /** Bind the hold to its run at checkout; idempotent on the same runId. */
   bindRun(id: string, runId: string): Promise<BindRunResult>;
   setStatus(id: string, status: PaymentHoldStatus): Promise<void>;
@@ -220,6 +221,11 @@ export class DrizzleHoldStore implements HoldStore {
   async byRunId(runId: string): Promise<HoldRow | null> {
     const rows = await this.db.select().from(paymentHolds).where(eq(paymentHolds.runId, runId)).limit(1);
     return (rows[0] as HoldRow | undefined) ?? null;
+  }
+
+  async byRun(runId: string): Promise<HoldRow[]> {
+    const rows = await this.db.select().from(paymentHolds).where(eq(paymentHolds.runId, runId)).orderBy(paymentHolds.createdAt, paymentHolds.id);
+    return rows as HoldRow[];
   }
 
   async bindRun(id: string, runId: string): Promise<BindRunResult> {

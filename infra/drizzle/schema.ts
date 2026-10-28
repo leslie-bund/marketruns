@@ -603,10 +603,10 @@ export type RefundStatus = (typeof REFUND_STATUSES)[number];
 export const paymentRefunds = pgTable(
   "payment_refunds",
   {
-    /** Deterministic: `refund:<settlementRecordId>` — one refund per settlement. */
+    /** Deterministic per settlement + contributing hold; legacy single-hold ids remain unchanged. */
     id: text("id").primaryKey(),
     holdId: text("hold_id").notNull(),
-    /** UNIQUE: queue redelivery of payment.refund-requested is a no-op replay. */
+    /** UNIQUE with holdId: queue redelivery replays only the same hold's refund. */
     settlementRecordId: text("settlement_record_id").notNull(),
     amountKobo: bigint("amount_kobo", { mode: "number" }).notNull(),
     status: text("status").notNull().default("pending"),
@@ -618,7 +618,7 @@ export const paymentRefunds = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("payment_refunds_settlement_record_unique").on(table.settlementRecordId),
+    uniqueIndex("payment_refunds_settlement_hold_unique").on(table.settlementRecordId, table.holdId),
     index("payment_refunds_hold_id_idx").on(table.holdId),
     index("payment_refunds_status_idx").on(table.status),
     check(

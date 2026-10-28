@@ -209,6 +209,32 @@ describe("payment.refund-requested consumer", () => {
     expect((await holds.byId("hold:mr-cart-1-abc"))?.status).toBe("released");
   });
 
+  it("splits a refund across top-up holds and replay never double-refunds", async () => {
+    const holds = new InMemoryHoldStore();
+    await holds.insertIfAbsent(sampleHold());
+    await holds.insertIfAbsent(sampleHold({ id: "hold:topup", txRef: "mr-topup", providerTxId: "topup-provider", amountKobo: 100_000 }));
+    const refunds = new InMemoryRefundStore();
+    const gateway = new ScriptedGateway({ status: "processing", providerRef: "flw-refund:multi" });
+    const worker = appWith(holds, refunds, gateway);
+    const body = JSON.stringify(sampleRefundRequest({ amountKobo: 400_000 }));
+
+    const first = new FakeMessage("m1", body);
+    await queueRefund(worker, first);
+    expect(first.acked).toBe(true);
+    expect(gateway.refundCalls).toEqual([
+      { providerTxId: "9049104", amountKobo: null, comments: "Buyer refund run:cart:Balogun:buyer:1:settlement" },
+      { providerTxId: "topup-provider", amountKobo: 65_000, comments: "Buyer refund run:cart:Balogun:buyer:1:settlement" },
+    ]);
+    expect((await holds.byId("hold:mr-cart-1-abc"))?.status).toBe("refunded");
+    expect((await holds.byId("hold:topup"))?.status).toBe("partially-refunded");
+
+    const replay = new FakeMessage("m2", body);
+    await queueRefund(worker, replay);
+    expect(replay.acked).toBe(true);
+    expect(gateway.refundCalls).toHaveLength(2);
+    expect(await refunds.forSettlement("run:cart:Balogun:buyer:1:settlement")).toHaveLength(2);
+  });
+
   it("a failed dispatch leg does NOT release the hold", async () => {
     const holds = new InMemoryHoldStore();
     await holds.insertIfAbsent(sampleHold());

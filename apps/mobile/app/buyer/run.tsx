@@ -44,7 +44,8 @@ export default function BuyerRun() {
     return (
       <Page eyebrow="YOUR RUN" title="Track your Run">
         <Card>
-          <Text style={s.body}>{run.error ? `Edge: ${run.error}` : "No active run — check out a cart and it appears here."}</Text>
+          <Text style={s.body}>{run.error ? `Could not load your Run: ${run.error}` : "No active run — check out a cart and it appears here."}</Text>
+          {run.error ? <Button title="Retry" onPress={run.refresh} /> : null}
         </Card>
       </Page>
     );

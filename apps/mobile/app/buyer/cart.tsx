@@ -19,11 +19,19 @@ export default function CartScreen() {
   const left = current ? Math.max(0, Math.floor((current.deadline - now) / 1000)) : 0;
   const total = current?.products.reduce((sum, p) => sum + p.priceKobo, 0) ?? 0;
 
+  if (cart.error) {
+    return (
+      <Page eyebrow={`${market.toUpperCase()} MARKET`} title="Your Cart">
+        <Card><Text style={s.body}>Could not load your cart: {cart.error}</Text><Button title="Retry" onPress={cart.refresh} /></Card>
+      </Page>
+    );
+  }
+
   if (current === null) {
     return (
       <Page eyebrow={`${market.toUpperCase()} MARKET`} title="Your Cart">
         <Card>
-          <Text style={s.body}>{cart.error ? `Edge: ${cart.error}` : "Your cart is empty."}</Text>
+          <Text style={s.body}>{cart.data ? "This cart is no longer open." : "Your cart is empty."}</Text>
           <Text style={s.muted}>Accept a product from a negotiation and the shared clock starts.</Text>
           <Link href="/buyer/products" asChild><Button title="Browse Products" secondary /></Link>
         </Card>

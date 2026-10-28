@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
 import { useActiveMarket } from "./active-market";
+import { clearCheckoutPaymentState } from "./payment-state";
 
 /**
  * The device's edge-issued cart/run ids, per market. The edge is authoritative
@@ -82,7 +83,10 @@ export async function clearRunId(market: string): Promise<void> {
 export async function clearCartState(): Promise<void> {
   cache = {};
   loaded = true;
-  await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+  await Promise.all([
+    AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined),
+    clearCheckoutPaymentState(),
+  ]);
   for (const listener of listeners) listener();
 }
 
