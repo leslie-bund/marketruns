@@ -5,6 +5,7 @@ import {
   AdminListSchema,
   AdminRunEntrySchema,
   MarketRegistryResponseSchema,
+  CartQuoteRequestSchema,
   type ActiveRun,
   type LiveRun,
 } from "@market-runs/proto";
@@ -85,6 +86,34 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     }
     const stub = c.env.PRODUCT_DO.get(c.env.PRODUCT_DO.idFromName(data.productId));
     return stub.fetch(internalPost("/offer", data, correlationHeaders(c, { "x-market-id": market, ...resolvedHeaders(c) })));
+  });
+
+  app.post("/:market/cart/quote", async (c) => {
+    const denied = await requireTransactionRole(c, "buyer");
+    if (denied) return denied;
+    let raw: unknown;
+    try { raw = await c.req.json(); } catch { return errorResponse(400, "invalid-body", "request body is not valid JSON"); }
+    const parsed = CartQuoteRequestSchema.safeParse(raw);
+    if (!parsed.success) return errorResponse(400, "invalid-body", "request body failed quote validation", { issues: parsed.error.issues });
+    const market = decodeURIComponent(c.req.param("market"));
+    const who = c.get("participant");
+    const buyerId = who.source === "anonymous" ? "buyer:anonymous" : who.id;
+    const cartId = cartIdForBuyer(market, buyerId);
+    return c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)).fetch(
+      internalPost("/quote", parsed.data, correlationHeaders(c, { "x-participant-id": buyerId })),
+    );
+  });
+
+  app.get("/:market/cart/delivery-options", async (c) => {
+    const denied = await requireTransactionRole(c, "buyer");
+    if (denied) return denied;
+    const market = decodeURIComponent(c.req.param("market"));
+    const who = c.get("participant");
+    const buyerId = who.source === "anonymous" ? "buyer:anonymous" : who.id;
+    const cartId = cartIdForBuyer(market, buyerId);
+    return c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)).fetch(
+      new Request("http://do/delivery-options", { headers: correlationHeaders(c) }),
+    );
   });
 
   app.get("/:market/cart", (c) => {

@@ -1,0 +1,2 @@
+DROP INDEX "payment_refunds_settlement_record_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "payment_refunds_settlement_hold_unique" ON "payment_refunds" USING btree ("settlement_record_id","hold_id");

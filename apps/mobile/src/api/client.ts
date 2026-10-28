@@ -1,4 +1,4 @@
-import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
+import type { ActiveRunsResponse, Cart, CartDeliveryOptions, CartQuote, CheckoutAccepted, Delivery, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
 import { identities, EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
 import { getActiveParticipant, participantHeaders, setActiveParticipant } from "./participant";
@@ -23,6 +23,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -44,7 +45,7 @@ async function request<T>(path: string, init?: RequestInit, options?: { allowUna
       // Any authenticated 401 kills the cached session, regardless of error code.
       void clearSession();
     }
-    throw new ApiError(response.status, code, String(body.message ?? response.statusText));
+    throw new ApiError(response.status, code, String(body.message ?? response.statusText), body);
   }
   return body as T;
 }
@@ -197,8 +198,9 @@ export async function listIntentProducts(intentId: string): Promise<Product[]> {
       try {
         const body = await request<{ product: Product }>(`/products/${encodeURIComponent(id)}`);
         return body.product;
-      } catch {
-        return null; // retired or unknown — products are never resurrected
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
       }
     }),
   );
@@ -232,8 +234,9 @@ export async function getProduct(productId: string): Promise<ProductThread | nul
   try {
     const body = await request<{ product: Product; priceHistory?: PriceMove[] }>(`/products/${encodeURIComponent(productId)}`);
     return { product: body.product, priceHistory: body.priceHistory ?? [] };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
   }
 }
 
@@ -262,15 +265,34 @@ export async function getCart(): Promise<Cart | null> {
     else void clearCartId(market);
     return body.cart;
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) void clearCartId(market);
-    return null;
+    if (error instanceof ApiError && error.status === 404) {
+      void clearCartId(market);
+      return null;
+    }
+    throw error;
   }
 }
 
+/** The authenticated CartDO quote used to size collection; never a client estimate. */
+export async function quoteCart(delivery: Delivery): Promise<CartQuote> {
+  const market = getActiveMarket();
+  return request<CartQuote>(`/markets/${encodeURIComponent(market)}/cart/quote`, {
+    method: "POST",
+    headers: demoBuyerHeaders(),
+    body: JSON.stringify({ delivery }),
+  });
+}
+
+export async function getCartDeliveryOptions(): Promise<CartDeliveryOptions> {
+  const market = getActiveMarket();
+  return request<CartDeliveryOptions>(`/markets/${encodeURIComponent(market)}/cart/delivery-options`, { headers: demoBuyerHeaders() });
+}
+
 export async function checkout(
-  delivery: { kind: "plus-code"; plusCode: string } | { kind: "muster-point"; name: string },
+  delivery: Delivery,
   paymentRef?: string,
   receiver: { kind: "buyer" } | { kind: "designated"; name: string } = { kind: "buyer" },
+  options: { quoteId?: string; paymentRefs?: string[] } = {},
 ): Promise<CheckoutAccepted> {
   const market = getActiveMarket();
   const cartId = getStoredCartId(market);
@@ -284,6 +306,8 @@ export async function checkout(
     // The confirmed hold's txRef — required only when the edge runs with
     // PAYMENTS_REQUIRED on; absent keeps the unpaid dev checkout working.
     ...(paymentRef ? { paymentRef } : {}),
+    ...(options.paymentRefs && options.paymentRefs.length > 0 ? { paymentRefs: options.paymentRefs } : {}),
+    ...(options.quoteId ? { quoteId: options.quoteId } : {}),
   });
   // checkout.accepted echoes the run id; the cart retires at checkout.
   void recordRunId(market, accepted.runId);
@@ -400,10 +424,11 @@ export async function getRun(runId: string): Promise<Run | null> {
     return body.run;
   } catch (error) {
     // A 404 means the run retired and its storage is gone — heal the device state.
-    if (error instanceof ApiError && error.status === 404 && getStoredRunId(getActiveMarket()) === runId) {
-      void clearRunId(getActiveMarket());
+    if (error instanceof ApiError && error.status === 404) {
+      if (getStoredRunId(getActiveMarket()) === runId) void clearRunId(getActiveMarket());
+      return null;
     }
-    return null;
+    throw error;
   }
 }
 

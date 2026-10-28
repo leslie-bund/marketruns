@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { TelemetryReporter } from "./telemetry.js";
 import { cartDeadline, floorRate, plusCodeToLocation } from "@market-runs/domain";
-import type { Cart, CheckoutRequested, GeoPointValue, Product, ServerEvent } from "@market-runs/proto";
-import { PaymentHoldViewSchema } from "@market-runs/proto";
+import type { Cart, CartQuoteRequest, CheckoutRequested, Delivery, GeoPointValue, PaymentHoldView, Product, ServerEvent } from "@market-runs/proto";
+import { CartQuoteRequestSchema, PaymentHoldViewSchema } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
 import {
   acceptHibernatedWebSocket,
@@ -27,6 +27,7 @@ import type { CartAppendRequest, GeoPoint, MarketConfig, RetireProductRequest } 
 import { CartAppendRequestSchema, CloseGateResponseSchema, MarketConfigSchema } from "./schemas.js";
 import { fetchInternal, internalPost } from "./transport.js";
 import { routeTrip } from "./routing.js";
+import type { TripRoute } from "./routing.js";
 import { cartIdForBuyer, runIdForCart } from "../config/ids.js";
 
 /** Dev default for the payments worker; override with PAYMENTS_URL. */
@@ -64,6 +65,34 @@ interface CartEntry {
   market: string;
 }
 
+interface StopOrderEntry {
+  sellerName: string;
+  exchangePoint: string;
+  storeId?: string;
+  sellerParticipantId?: string;
+}
+
+interface CartGeography {
+  waypoints: GeoPointValue[];
+  stopLocations: GeoPointValue[];
+  deliveryLocation: GeoPointValue;
+}
+
+interface CartPricing {
+  config: MarketConfig;
+  stopOrder: StopOrderEntry[];
+  geography: CartGeography | null;
+  trip: TripRoute | null;
+  goodsKobo: number;
+  floorRateKobo: number;
+}
+
+interface StoredCartQuote extends CartPricing {
+  quoteId: string;
+  delivery: Delivery;
+  expiresAt: number;
+}
+
 interface CartState {
   cartId?: string;
   market?: string;
@@ -76,6 +105,8 @@ interface CartState {
   /** The shared lap-timer deadline (domain cartDeadline). */
   deadline?: number;
   status: "open" | "checked-out" | "retired";
+  /** Latest short-lived routed quote; invalidated whenever the cart changes. */
+  quote?: StoredCartQuote;
   /** Deterministic-time seam: epoch offset added to Date.now(). 0 in production. */
   timeOffsetMs?: number;
 }
@@ -119,6 +150,14 @@ export class CartDO extends DurableObject<Env> {
       if (!parsed.ok) return parsed.response;
       return internalErrorGuard(() => this.acceptProduct(parsed.data));
     }
+    if (request.method === "POST" && path === "/quote") {
+      const parsed = await parseInternal(request, CartQuoteRequestSchema);
+      if (!parsed.ok) return parsed.response;
+      return internalErrorGuard(() => this.quote(parsed.data, request.headers.get("x-participant-id") ?? undefined));
+    }
+    if (request.method === "GET" && path === "/delivery-options") {
+      return internalErrorGuard(() => this.deliveryOptions());
+    }
     if (request.method === "POST" && path === "/checkout") {
       const parsed = await parseClientCommand(request);
       const command = expectCommand(parsed, "checkout.requested");
@@ -159,12 +198,90 @@ export class CartDO extends DurableObject<Env> {
     this.state.acceptanceCount += 1;
     this.state.deadline = cartDeadline(this.state.firstAcceptedAt, this.state.acceptanceCount);
     this.state.entries.push({ product: data.product, market: data.market });
+    delete this.state.quote;
     await this.ctx.storage.put(STATE_KEY, this.state);
     await this.ctx.storage.setAlarm(this.state.deadline);
 
     const event: ServerEvent = { type: "cart.updated", cart: this.cartView() };
     broadcast(this.ctx, this.env,event);
     return jsonResponse(event);
+  }
+
+  /** Authenticated collection quote: no holds, charges, runs, or retirement side effects. */
+  private async quote(input: CartQuoteRequest, buyerId?: string): Promise<Response> {
+    const state = this.state;
+    if (!state.cartId || !state.market) return notFound("cart is empty or retired");
+    if (state.status !== "open") return conflict(`cart is ${state.status}; quoting is refused`);
+    if (state.buyerId !== undefined && buyerId !== undefined && state.buyerId !== buyerId) {
+      return conflict(`cart ${state.cartId} belongs to ${state.buyerId}; ${buyerId} cannot quote it`);
+    }
+    if (state.deadline === undefined || this.now() >= state.deadline) {
+      return refusal("cart-deadline", "the cart deadline has lapsed; a new quote cannot be issued");
+    }
+    const pricing = await this.calculatePricing(input.delivery);
+    if (pricing instanceof Response) return pricing;
+    const quoteId = crypto.randomUUID();
+    const expiresAt = Math.min(this.now() + 5 * 60_000, state.deadline);
+    this.state.quote = { quoteId, delivery: input.delivery, expiresAt, ...pricing };
+    await this.ctx.storage.put(STATE_KEY, this.state);
+    return jsonResponse({
+      quoteId,
+      cartId: state.cartId,
+      delivery: input.delivery,
+      goodsKobo: pricing.goodsKobo,
+      deliveryKobo: pricing.floorRateKobo,
+      totalKobo: pricing.goodsKobo + pricing.floorRateKobo,
+      expiresAt,
+    });
+  }
+
+  /** Registered choices only — the client never invents a muster-point name. */
+  private async deliveryOptions(): Promise<Response> {
+    if (!this.state.market) return notFound("cart is empty or retired");
+    const marketStub = this.env.MARKET_DO.get(this.env.MARKET_DO.idFromName(this.state.market));
+    const config = await this.marketConfig(marketStub);
+    if (config instanceof Response) return config;
+    return jsonResponse({ musterPoints: config.geo?.musterPoints.map((point) => point.name) ?? [] });
+  }
+
+  /** The one CartDO pricing path shared by quote and checkout. */
+  private async calculatePricing(delivery: Delivery): Promise<CartPricing | Response> {
+    const state = this.state;
+    if (!state.market) return notFound("cart is empty or retired");
+    const marketStub = this.env.MARKET_DO.get(this.env.MARKET_DO.idFromName(state.market));
+    const config = await this.marketConfig(marketStub);
+    if (config instanceof Response) return config;
+
+    const stopOrder: StopOrderEntry[] = [];
+    for (const entry of state.entries) {
+      const product = entry.product;
+      if (!stopOrder.some((stop) => stop.sellerName === product.sellerName && stop.exchangePoint === product.exchangePoint)) {
+        stopOrder.push({
+          sellerName: product.sellerName,
+          exchangePoint: product.exchangePoint,
+          ...(product.storeId ? { storeId: product.storeId } : {}),
+          ...(product.sellerParticipantId ? { sellerParticipantId: product.sellerParticipantId } : {}),
+        });
+      }
+    }
+
+    const geography = this.resolveGeography(stopOrder, delivery, config);
+    if (!geography && this.env.ALLOW_HEADER_AUTH !== "true") {
+      return refusal("location-unresolved", "Checkout geography is unresolved. Ops must configure the market center, every exchange point, and this buyer destination; the market center is never a fallback.");
+    }
+    const trip = geography && this.env.OSRM_BASE_URL ? await routeTrip(this.env.OSRM_BASE_URL, geography.waypoints) : null;
+    const floorRateKobo = floorRate({
+      ...config.floorRate,
+      ...(trip ? { distanceMeters: trip.distanceMeters, estimatedDurationMs: trip.durationSeconds * 1000 } : {}),
+    });
+    return {
+      config,
+      stopOrder,
+      geography,
+      trip,
+      goodsKobo: state.entries.reduce((sum, entry) => sum + entry.product.priceKobo, 0),
+      floorRateKobo,
+    };
   }
 
   /**
@@ -237,38 +354,22 @@ export class CartDO extends DurableObject<Env> {
       return refusal("market-close-gate", gate.refusal ?? "the market is too close to closing for this trip");
     }
 
-    const config = await this.marketConfig(marketStub, correlation);
-    if (config instanceof Response) return config;
-
-    // Seed stops grouped by seller exchange point, preserving acceptance order.
-    const stopOrder: Array<{ sellerName: string; exchangePoint: string; storeId?: string; sellerParticipantId?: string }> = [];
-    for (const entry of state.entries) {
-      const product = entry.product;
-      if (!stopOrder.some((stop) => stop.sellerName === product.sellerName && stop.exchangePoint === product.exchangePoint)) {
-        stopOrder.push({
-          sellerName: product.sellerName,
-          exchangePoint: product.exchangePoint,
-          ...(product.storeId ? { storeId: product.storeId } : {}),
-          ...(product.sellerParticipantId ? { sellerParticipantId: product.sellerParticipantId } : {}),
-        });
+    let pricing: CartPricing;
+    if (command.quoteId) {
+      const quoted = state.quote;
+      if (!quoted || quoted.quoteId !== command.quoteId || JSON.stringify(quoted.delivery) !== JSON.stringify(command.delivery)) {
+        return refusal("quote-mismatch", "the quote does not match this cart and delivery; request a fresh quote");
       }
+      if (this.now() >= quoted.expiresAt) {
+        return refusal("quote-expired", "the routed quote expired; request a fresh quote before checkout");
+      }
+      pricing = quoted;
+    } else {
+      const calculated = await this.calculatePricing(command.delivery);
+      if (calculated instanceof Response) return calculated;
+      pricing = calculated;
     }
-
-    // Routing at checkout (AGENTS.md stack): resolve every waypoint to
-    // coordinates, call OSRM once, cache the result on the Run. Any failure
-    // falls back to the market's static floor-rate inputs — checkout never
-    // blocks on the routing service.
-    const geography = this.resolveGeography(stopOrder, command, config);
-    if (!geography && this.env.ALLOW_HEADER_AUTH !== "true") {
-      return refusal("location-unresolved", "Checkout geography is unresolved. Ops must configure the market center, every exchange point, and this buyer destination; the market center is never a fallback.");
-    }
-    const trip = geography && this.env.OSRM_BASE_URL ? await routeTrip(this.env.OSRM_BASE_URL, geography.waypoints) : null;
-
-    // MVP: internal runners at the floor rate only (ADR-0013).
-    const floorRateKobo = floorRate({
-      ...config.floorRate,
-      ...(trip ? { distanceMeters: trip.distanceMeters, estimatedDurationMs: trip.durationSeconds * 1000 } : {}),
-    });
+    const { config, stopOrder, geography, trip, floorRateKobo } = pricing;
 
     const stops = stopOrder.map((stop, index) => ({
       sellerName: stop.sellerName,
@@ -297,26 +398,34 @@ export class CartDO extends DurableObject<Env> {
     // The buyer is the checkout caller, falling back to the cart's recorded owner.
     const buyerId = command.buyerId ?? state.buyerId ?? "buyer:anonymous";
 
-    // Payment gate (Env.PAYMENTS_REQUIRED, dev default OFF): checkout requires
-    // a payments-worker hold covering the checkout total (goods + delivery),
-    // belonging to this cart and this buyer. When the gate is off, checkout
-    // is unpaid and behaves exactly as before — demo flows and e2e tests run
-    // without a PSP. The gate never CREATES money decisions: the hold was
-    // verified server-side at the payments worker; here we only check it.
+    // Payment gate (Env.PAYMENTS_REQUIRED, dev default OFF): one or more holds
+    // belonging to this cart and buyer must cover goods + delivery. Additional
+    // references are exact top-ups after a reroute/shortfall, never re-charges
+    // of an existing hold. The gate only reads and binds verified holds.
+    const paymentRefs = [...new Set([...(command.paymentRef ? [command.paymentRef] : []), ...(command.paymentRefs ?? [])])];
     if (paymentsRequired(this.env.PAYMENTS_REQUIRED)) {
-      if (!command.paymentRef) {
+      if (paymentRefs.length === 0) {
         return refusal(
           "payment-required",
           "checkout requires a confirmed payment hold — confirm the charge and pass its txRef as paymentRef",
         );
       }
       const checkoutTotalKobo = legs.reduce((sum, leg) => sum + leg.amountKobo, 0) + floorRateKobo;
-      const gateFailure = await this.verifyCheckoutHold(command.paymentRef, {
-        cartId: state.cartId,
-        buyerId,
-        checkoutTotalKobo,
-      });
-      if (gateFailure) return gateFailure;
+      let heldKobo = 0;
+      for (const paymentRef of paymentRefs) {
+        const hold = await this.verifyCheckoutHold(paymentRef, { cartId: state.cartId, buyerId });
+        if (hold instanceof Response) return hold;
+        heldKobo += hold.amountKobo;
+      }
+      if (heldKobo < checkoutTotalKobo) {
+        const message = `the holds cover ${heldKobo} kobo; the checkout total is ${checkoutTotalKobo} kobo`;
+        return errorResponse(409, "payment-hold-insufficient", message, {
+          refusal: message,
+          heldKobo,
+          requiredKobo: checkoutTotalKobo,
+          shortfallKobo: checkoutTotalKobo - heldKobo,
+        });
+      }
     }
 
     const runId = runIdForCart(state.cartId);
@@ -366,11 +475,10 @@ export class CartDO extends DurableObject<Env> {
       return errorResponse(502, "bad-run-response", "run did not issue a delivery code");
     }
 
-    // Bind the hold to the run (gated checkouts only): the refund rail finds
-    // holds by runId at settlement. Best-effort with a loud log — the hold is
-    // already verified and recorded; a missed bind is recoverable by txRef.
-    if (command.paymentRef && paymentsRequired(this.env.PAYMENTS_REQUIRED)) {
-      await this.bindHoldToRun(command.paymentRef, runId);
+    // Bind every contributing hold to the run (gated checkouts only). A missed
+    // bind is recoverable by txRef and never changes the checkout outcome.
+    if (paymentsRequired(this.env.PAYMENTS_REQUIRED)) {
+      for (const paymentRef of paymentRefs) await this.bindHoldToRun(paymentRef, runId);
     }
 
     // Announce the live Run so the archive consumer can maintain the
@@ -467,15 +575,11 @@ export class CartDO extends DurableObject<Env> {
     return (this.env.PAYMENTS_URL ?? PAYMENTS_URL_DEFAULT).replace(/\/+$/, "");
   }
 
-  /**
-   * Payment gate check: the payments worker's hold for `paymentRef` must
-   * exist, be `held`, belong to this cart and buyer, and cover the checkout
-   * total. Returns null on pass; a refusal/502 Response on failure.
-   */
+  /** Read one verified hold; aggregate coverage is checked across all references. */
   private async verifyCheckoutHold(
     paymentRef: string,
-    context: { cartId: string; buyerId: string; checkoutTotalKobo: number },
-  ): Promise<Response | null> {
+    context: { cartId: string; buyerId: string },
+  ): Promise<PaymentHoldView | Response> {
     let upstream: Response;
     try {
       upstream = await fetch(`${this.paymentsBaseUrl()}/payments/holds/${encodeURIComponent(paymentRef)}`);
@@ -510,13 +614,7 @@ export class CartDO extends DurableObject<Env> {
     if (hold.data.buyerId !== context.buyerId) {
       return refusal("payment-hold-mismatch", "the hold belongs to a different buyer");
     }
-    if (hold.data.amountKobo < context.checkoutTotalKobo) {
-      return refusal(
-        "payment-hold-insufficient",
-        `the hold covers ${hold.data.amountKobo} kobo; the checkout total is ${context.checkoutTotalKobo} kobo`,
-      );
-    }
-    return null;
+    return hold.data;
   }
 
   /** Bind a verified hold to its run (post-seed). Failures are logged, never checkout-blocking. */
@@ -544,9 +642,9 @@ export class CartDO extends DurableObject<Env> {
    */
   private resolveGeography(
     stopOrder: Array<{ sellerName: string; exchangePoint: string }>,
-    command: CheckoutRequested,
+    delivery: Delivery,
     config: MarketConfig,
-  ): { waypoints: GeoPointValue[]; stopLocations: GeoPointValue[]; deliveryLocation: GeoPointValue } | null {
+  ): CartGeography | null {
     const geo = config.geo;
     if (!geo) return null;
     const center: GeoPointValue = geo.center;
@@ -558,9 +656,9 @@ export class CartDO extends DurableObject<Env> {
     const stopLocations = stopOrder.map((stop) => findPoint(geo.exchangePoints, stop.exchangePoint));
     if (stopLocations.some((point) => point === undefined)) return null;
 
-    const deliveryLocation = command.delivery.kind === "muster-point"
-      ? findPoint(geo.musterPoints, command.delivery.name)
-      : plusCodeToLocation(command.delivery.plusCode, center);
+    const deliveryLocation = delivery.kind === "muster-point"
+      ? findPoint(geo.musterPoints, delivery.name)
+      : plusCodeToLocation(delivery.plusCode, center);
     if (!deliveryLocation) return null;
 
     return {

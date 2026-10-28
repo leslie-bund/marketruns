@@ -15,15 +15,22 @@ export function Button({
   onPress,
   secondary = false,
   danger = false,
+  disabled = false,
 }: {
   title: string;
   onPress?: () => void;
   secondary?: boolean;
   /** Warning-action styling (disputes, destructive dev affordances). */
   danger?: boolean;
+  disabled?: boolean;
 }) {
   return (
-    <Pressable onPress={onPress} style={[s.button, secondary && s.buttonSecondary, danger && (secondary ? s.buttonDangerSecondary : s.buttonDanger)]}>
+    <Pressable
+      onPress={disabled ? undefined : onPress}
+      disabled={disabled}
+      accessibilityState={{ disabled }}
+      style={[s.button, secondary && s.buttonSecondary, danger && (secondary ? s.buttonDangerSecondary : s.buttonDanger), disabled && { opacity: 0.45 }]}
+    >
       <Text style={[s.buttonText, secondary && s.buttonTextSecondary, danger && secondary && s.buttonDangerTextSecondary]}>{title}</Text>
     </Pressable>
   );

@@ -4,6 +4,7 @@ import {
   acceptProduct,
   cartStub,
   checkout,
+  internalPost,
   offerProduct,
   postIntent,
   readJson,
@@ -146,6 +147,36 @@ describe("CartDO checkout payment gate", () => {
     expect(body.type).toBe("checkout.accepted");
     expect(body.runId).toBe(`run:cart:pg-4:buyer:anonymous`);
     expect(JSON.parse(String(bindBody))).toEqual({ runId: `run:${kase.cartId}` });
+  });
+
+  it("gate ON: exact top-up holds aggregate and every hold binds to the run", async () => {
+    const kase = testCase("6");
+    const topUpRef = `${kase.txRef}-topup`;
+    cases.push(kase);
+    await freshCart(kase);
+    const pool = fetchMock.get(PAYMENTS_ORIGIN);
+    pool.intercept({ path: `/payments/holds/${kase.txRef}`, method: "GET" })
+      .reply(200, JSON.stringify(holdView(kase, { amountKobo: CHECKOUT_TOTAL_KOBO - 35_000 })), { headers: { "content-type": "application/json" } });
+    pool.intercept({ path: `/payments/holds/${topUpRef}`, method: "GET" })
+      .reply(200, JSON.stringify(holdView(kase, { id: `hold:${topUpRef}`, txRef: topUpRef, amountKobo: 35_000 })), { headers: { "content-type": "application/json" } });
+    const bound: string[] = [];
+    for (const ref of [kase.txRef, topUpRef]) {
+      pool.intercept({ path: `/payments/holds/${ref}/bind`, method: "POST" }).reply(200, () => {
+        bound.push(ref);
+        return JSON.stringify({ status: "bound" });
+      });
+    }
+
+    await setGate(kase, true);
+    const accepted = await cartStub(kase.cartId).fetch(internalPost("/checkout", {
+      type: "checkout.requested",
+      cartId: kase.cartId,
+      delivery: { kind: "plus-code", plusCode: "6FR5+8X Lagos" },
+      paymentRef: kase.txRef,
+      paymentRefs: [topUpRef],
+    }));
+    expect(accepted.status).toBe(200);
+    expect(bound).toEqual([kase.txRef, topUpRef]);
   });
 
   it("gate OFF (dev default): checkout works unpaid, unchanged", async () => {

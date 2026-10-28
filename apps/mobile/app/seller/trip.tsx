@@ -40,7 +40,8 @@ export default function SellerTrip() {
     return (
       <Page eyebrow="YOUR STORE · TRIP" title="Trip">
         <Card>
-          <Text style={s.body}>{run.error ? `Edge: ${run.error}` : "No active run — trips appear here once a buyer checks out with your products."}</Text>
+          <Text style={s.body}>{run.error ? `Could not load this trip: ${run.error}` : "No active run — trips appear here once a buyer checks out with your products."}</Text>
+          {run.error ? <Button title="Retry" onPress={run.refresh} /> : null}
         </Card>
       </Page>
     );

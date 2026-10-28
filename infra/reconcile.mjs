@@ -399,19 +399,15 @@ async function checkRefundRail(sql, opts, settlements, holdIdSet, runHasHold) {
   `;
   const bySettlement = new Map(refunds.map((r) => [r.settlement_record_id, r]));
   const settlementById = new Map(settlements.map((s) => [s.id, s]));
+  const settlementTotals = new Map();
+  for (const r of refunds) settlementTotals.set(r.settlement_record_id, (settlementTotals.get(r.settlement_record_id) ?? 0) + kobo(r.amount_kobo));
 
   let clean = 0;
   for (const r of refunds) {
     const amount = kobo(r.amount_kobo);
-    const s = settlementById.get(r.settlement_record_id);
     if (!holdIdSet.has(r.hold_id)) {
       fail(check, "payment_refunds", r.id, { amount, holdId: r.hold_id },
         "refund row points at a hold that does not exist — refunding money we never collected");
-      continue;
-    }
-    if (!s || kobo(s.buyer_refund_kobo) !== amount) {
-      fail(check, "payment_refunds", r.id, { amount, settlementBuyerRefundKobo: s ? kobo(s.buyer_refund_kobo) : null },
-        "refund amount != settlement buyerRefundKobo — the rail executed a different kobo than the settlement decided");
       continue;
     }
     if (r.status === "refund-manual") {
@@ -425,6 +421,13 @@ async function checkRefundRail(sql, opts, settlements, holdIdSet, runHasHold) {
       continue;
     }
     clean += 1;
+  }
+  for (const [settlementRecordId, amount] of settlementTotals) {
+    const s = settlementById.get(settlementRecordId);
+    if (!s || kobo(s.buyer_refund_kobo) !== amount) {
+      fail(check, "payment_refunds", settlementRecordId, { amount, settlementBuyerRefundKobo: s ? kobo(s.buyer_refund_kobo) : null },
+        "refund rows do not sum to settlement buyerRefundKobo — the rail executed a different kobo than the settlement decided");
+    }
   }
   for (const s of settlements) {
     const refundKobo = kobo(s.buyer_refund_kobo);

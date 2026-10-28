@@ -65,6 +65,7 @@ export interface RefundStore {
   /** Insert the pending row; returns false when the settlement already has one (replay). */
   insertPending(row: RefundRow): Promise<boolean>;
   bySettlementRecordId(settlementRecordId: string): Promise<RefundRow | null>;
+  forSettlement(settlementRecordId: string): Promise<RefundRow[]>;
   byId(id: string): Promise<RefundRow | null>;
   /** Record an execution outcome: status + providerRef/failureReason, attempts + 1. */
   recordResult(id: string, result: RefundExecutionResult): Promise<void>;
@@ -73,8 +74,8 @@ export interface RefundStore {
   list(filter: RefundListFilter, params: RefundListParams): Promise<{ items: RefundRow[]; total: number }>;
 }
 
-export function refundIdForSettlement(settlementRecordId: string): string {
-  return `refund:${settlementRecordId}`;
+export function refundIdForSettlement(settlementRecordId: string, holdId?: string): string {
+  return `refund:${settlementRecordId}${holdId ? `:${holdId}` : ""}`;
 }
 
 /** Row → wire view (epoch-millisecond timestamps, packages/proto convention). */
@@ -106,138 +107,121 @@ export async function handleRefundRequested(
   value: PaymentRefundRequested,
   notify?: PaymentNotificationSink,
 ): Promise<void> {
-  const refundId = refundIdForSettlement(value.settlementRecordId);
-
-  // Replay: an executed (or ops-manual) refund is never executed twice.
-  const existing = await refunds.bySettlementRecordId(value.settlementRecordId);
-  if (existing && existing.status !== "pending" && existing.status !== "failed") {
+  const existingRows = await refunds.forSettlement(value.settlementRecordId);
+  const runHolds = await holds.byRun(value.runId);
+  if (runHolds.length === 0) {
+    console.error(JSON.stringify({
+      event: "payment.refund_no_hold",
+      settlementRecordId: value.settlementRecordId,
+      runId: value.runId,
+      amountKobo: value.amountKobo,
+      ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+    }));
     message.ack();
     return;
   }
 
-  const hold = await holds.byRunId(value.runId);
-  if (!hold) {
-    // The run settled without a gated hold (PAYMENTS_REQUIRED off, or a
-    // pre-collection run): there is no collected money to refund. Honest and
-    // terminal — logged, not retried into the DLQ.
-    console.error(
-      JSON.stringify({
-        event: "payment.refund_no_hold",
-        settlementRecordId: value.settlementRecordId,
-        runId: value.runId,
-        amountKobo: value.amountKobo,
-        ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
-      }),
-    );
-    message.ack();
-    return;
-  }
+  let remainingKobo = value.amountKobo;
+  const planned = runHolds.map((hold) => {
+    const amountKobo = Math.min(remainingKobo, hold.amountKobo);
+    remainingKobo -= amountKobo;
+    return { hold, amountKobo };
+  });
+  if (remainingKobo > 0) planned[0] = { ...planned[0]!, amountKobo: planned[0]!.amountKobo + remainingKobo };
 
-  const row: RefundRow =
-    existing ??
-    ({
+  // One durable row per contributing hold. A retry skips committed rows, so a
+  // partial multi-hold failure can never repeat an earlier provider refund.
+  for (const { hold, amountKobo } of planned) {
+    if (amountKobo <= 0) continue;
+    const refundId = refundIdForSettlement(value.settlementRecordId, runHolds.length > 1 ? hold.id : undefined);
+    const existing = existingRows.find((candidate) => candidate.id === refundId);
+    if (existing && existing.status !== "pending" && existing.status !== "failed") continue;
+    const row: RefundRow = existing ?? {
       id: refundId,
       holdId: hold.id,
       settlementRecordId: value.settlementRecordId,
-      amountKobo: value.amountKobo,
+      amountKobo,
       status: "pending",
       providerRef: null,
       failureReason: null,
       attempts: 0,
       createdAt: new Date(),
       updatedAt: new Date(),
-    } satisfies RefundRow);
-  if (!existing) {
-    await refunds.insertPending(row);
-  }
+    };
+    if (!existing) await refunds.insertPending(row);
 
-  const emit = async (status: string): Promise<void> => {
-    if (!notify) return;
-    await notify(paymentNotification({
-      sourceEventId: `payment.refund:${row.id}:${status}:${row.attempts + 1}`,
-      sourceEventType: "payment.refund-updated",
-      recipientId: value.buyerId,
-      title: status === "failed" ? "Refund failed" : "Refund updated",
-      body: `Your refund is ${status}.`,
-      runId: value.runId,
-      cartId: hold.cartId,
-      status,
-    }));
-  };
-
-  const fail = async (failureReason: string, retry: boolean): Promise<void> => {
-    await refunds.recordResult(row.id, { status: "failed", failureReason });
-    await emit("failed");
-    console.error(
-      JSON.stringify({
+    const emit = async (status: string): Promise<void> => {
+      if (!notify) return;
+      await notify(paymentNotification({
+        sourceEventId: `payment.refund:${row.id}:${status}:${row.attempts + 1}`,
+        sourceEventType: "payment.refund-updated",
+        recipientId: value.buyerId,
+        title: status === "failed" ? "Refund failed" : "Refund updated",
+        body: `Your refund is ${status}.`,
+        runId: value.runId,
+        cartId: hold.cartId,
+        status,
+      }));
+    };
+    const fail = async (failureReason: string): Promise<void> => {
+      await refunds.recordResult(row.id, { status: "failed", failureReason });
+      await emit("failed");
+      console.error(JSON.stringify({
         event: "payment.refund_failed",
         refundId: row.id,
         failureReason,
         ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
-      }),
-    );
-    if (retry) message.retry({ delaySeconds: retryDelaySeconds(row.attempts + 1) });
-    else message.ack();
-  };
+      }));
+      message.retry({ delaySeconds: retryDelaySeconds(row.attempts + 1) });
+    };
 
-  // The settlement decided the amount; a refund beyond the collected hold is
-  // an inconsistency, never silently clamped (clamping is a money decision).
-  if (value.amountKobo > hold.amountKobo) {
-    await fail(`refund-exceeds-hold: ${value.amountKobo} kobo against a ${hold.amountKobo} kobo hold`, true);
-    return;
-  }
-  if (gateway === null) {
-    await fail("collection-unavailable: no charge gateway is configured on this worker", true);
-    return;
-  }
-  if (!gateway.supportsRefund(hold.paymentMethod)) {
-    // Non-card collection: no API rail. Ops refunds the buyer manually; the
-    // hold status stays untouched because no money actually moved here.
-    await refunds.recordResult(row.id, {
-      status: "refund-manual",
-      failureReason: `no API refund rail for payment method "${hold.paymentMethod}"`,
-    });
-    await emit("refund-manual");
-    console.error(
-      JSON.stringify({
+    if (amountKobo > hold.amountKobo) {
+      await fail(`refund-exceeds-hold: ${value.amountKobo} kobo against ${runHolds.reduce((sum, candidate) => sum + candidate.amountKobo, 0)} kobo in holds`);
+      return;
+    }
+    if (gateway === null) {
+      await fail("collection-unavailable: no charge gateway is configured on this worker");
+      return;
+    }
+    if (!gateway.supportsRefund(hold.paymentMethod)) {
+      await refunds.recordResult(row.id, {
+        status: "refund-manual",
+        failureReason: `no API refund rail for payment method "${hold.paymentMethod}"`,
+      });
+      await emit("refund-manual");
+      console.error(JSON.stringify({
         event: "payment.refund_manual",
         refundId: row.id,
         paymentMethod: hold.paymentMethod,
         ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
-      }),
-    );
-    message.ack();
-    return;
-  }
+      }));
+      continue;
+    }
 
-  const result = await gateway.refundCharge(
-    hold.providerTxId,
-    value.amountKobo === hold.amountKobo ? null : value.amountKobo,
-    `Buyer refund ${value.settlementRecordId}`,
-  );
-  await refunds.recordResult(row.id, {
-    status: result.status,
-    providerRef: result.providerRef ?? null,
-    failureReason: result.failureReason ?? null,
-  });
-  await emit(result.status);
-  if (result.status === "failed") {
-    console.error(
-      JSON.stringify({
+    const result = await gateway.refundCharge(
+      hold.providerTxId,
+      amountKobo === hold.amountKobo ? null : amountKobo,
+      `Buyer refund ${value.settlementRecordId}`,
+    );
+    await refunds.recordResult(row.id, {
+      status: result.status,
+      providerRef: result.providerRef ?? null,
+      failureReason: result.failureReason ?? null,
+    });
+    await emit(result.status);
+    if (result.status === "failed") {
+      console.error(JSON.stringify({
         event: "payment.refund_failed",
         refundId: row.id,
         failureReason: result.failureReason ?? "unknown",
         ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
-      }),
-    );
-    message.retry({ delaySeconds: retryDelaySeconds(row.attempts + 1) });
-    return;
+      }));
+      message.retry({ delaySeconds: retryDelaySeconds(row.attempts + 1) });
+      return;
+    }
+    const committed = await refunds.committedForHold(hold.id);
+    await holds.setStatus(hold.id, committed >= hold.amountKobo ? "refunded" : "partially-refunded");
   }
-
-  // The refund is committed to the rail (provider accepted). Move the hold:
-  // committed refunds covering the hold → refunded, otherwise partial.
-  const committed = await refunds.committedForHold(hold.id);
-  await holds.setStatus(hold.id, committed >= hold.amountKobo ? "refunded" : "partially-refunded");
   message.ack();
 }
 
@@ -251,7 +235,7 @@ export class DrizzleRefundStore implements RefundStore {
     const inserted = await this.db
       .insert(paymentRefunds)
       .values(row)
-      .onConflictDoNothing({ target: paymentRefunds.settlementRecordId })
+      .onConflictDoNothing({ target: [paymentRefunds.settlementRecordId, paymentRefunds.holdId] })
       .returning({ id: paymentRefunds.id });
     return inserted.length > 0;
   }
@@ -263,6 +247,11 @@ export class DrizzleRefundStore implements RefundStore {
       .where(eq(paymentRefunds.settlementRecordId, settlementRecordId))
       .limit(1);
     return (rows[0] as RefundRow | undefined) ?? null;
+  }
+
+  async forSettlement(settlementRecordId: string): Promise<RefundRow[]> {
+    const rows = await this.db.select().from(paymentRefunds).where(eq(paymentRefunds.settlementRecordId, settlementRecordId));
+    return rows as RefundRow[];
   }
 
   async byId(id: string): Promise<RefundRow | null> {

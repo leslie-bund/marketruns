@@ -1,7 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import PayWithFlutterwave from "flutterwave-react-native";
 import type { RedirectParams } from "flutterwave-react-native/dist/PayWithFlutterwave";
-import { floorRate } from "@market-runs/domain";
 import { FLW_PUBLIC_KEY } from "../../api";
 import { Button } from "../../ui";
 
@@ -25,23 +24,6 @@ import { Button } from "../../ui";
  * hand-rolled WebView inline-checkout fallback would duplicate exactly what
  * this package already does.
  */
-
-/**
- * Delivery estimate for sizing the charge: the domain floorRate over the
- * market's static fallback inputs (the same defaults the edge's CartDO uses
- * when routing is absent). The SERVER is authoritative — its checkout gate
- * cross-checks the hold against goods + the routed floor rate and refuses
- * honestly on a shortfall; a client-side quote endpoint is the follow-up.
- */
-export function estimateDeliveryKobo(): number {
-  return floorRate({
-    distanceMeters: 3_000,
-    estimatedDurationMs: 20 * 60_000,
-    baseKobo: 100_000,
-    perKilometerKobo: 20_000,
-    perMinuteKobo: 500,
-  });
-}
 
 /** Placeholder customer email — participant ids aren't emails; sanitize for the provider's validation. */
 function placeholderEmail(participantId: string): string {
@@ -67,14 +49,15 @@ export function FlutterwavePayButton({
   title: string;
   /** External busy/invalid state — the trigger inertly shows the title. */
   disabled?: boolean;
-  /** Gate the launch (e.g. delivery validation) BEFORE the webview opens. */
-  beforeLaunch?: () => boolean;
+  /** Validate and persist the attempt BEFORE the webview opens. */
+  beforeLaunch?: () => boolean | Promise<boolean>;
   /** The provider says the charge completed — confirm server-side before trusting it. */
   onSuccess: (result: { txRef: string; transactionId?: string }) => void;
   /** Cancelled in the webview or aborted — cart intact, no partial state. */
   onCancel: () => void;
   onError: (message: string) => void;
 }) {
+  const [launching, setLaunching] = useState(false);
   const options = useMemo(
     () => ({
       authorization: FLW_PUBLIC_KEY,
@@ -94,10 +77,20 @@ export function FlutterwavePayButton({
     <PayWithFlutterwave
       options={options}
       customButton={({ disabled: pending, onPress }) => {
-        // exactOptionalPropertyTypes: omit onPress entirely when inert.
-        // beforeLaunch runs at PRESS time (it may Alert), never during render.
-        if (disabled || pending) return <Button title={title} />;
-        return <Button title={title} onPress={() => { if (!beforeLaunch || beforeLaunch()) onPress(); }} />;
+        const inert = disabled || pending || launching || !Number.isSafeInteger(amountKobo) || amountKobo <= 0;
+        return <Button title={launching ? "Preparing payment…" : title} disabled={inert} onPress={() => {
+          if (inert) return;
+          setLaunching(true);
+          void (async () => {
+            try {
+              if (!beforeLaunch || await beforeLaunch()) onPress();
+            } catch (error) {
+              onError(error instanceof Error ? error.message : String(error));
+            } finally {
+              setLaunching(false);
+            }
+          })();
+        }} />;
       }}
       onRedirect={(data: RedirectParams) => {
         if (data.status === "successful") {

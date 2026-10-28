@@ -39,11 +39,35 @@ export const CartUpdatedSchema = z.object({
 });
 export type CartUpdated = z.infer<typeof CartUpdatedSchema>;
 
+/** Authenticated, read-only price quote for collection before checkout. */
+export const CartQuoteRequestSchema = z.object({
+  delivery: DeliverySchema,
+});
+export type CartQuoteRequest = z.infer<typeof CartQuoteRequestSchema>;
+
+export const CartQuoteSchema = z.object({
+  quoteId: z.string().min(1),
+  cartId: z.string().min(1),
+  delivery: DeliverySchema,
+  goodsKobo: KoboSchema,
+  deliveryKobo: KoboSchema,
+  totalKobo: KoboSchema,
+  expiresAt: TimestampSchema,
+});
+export type CartQuote = z.infer<typeof CartQuoteSchema>;
+
+export const CartDeliveryOptionsSchema = z.object({
+  musterPoints: z.array(z.string().min(1)),
+});
+export type CartDeliveryOptions = z.infer<typeof CartDeliveryOptionsSchema>;
+
 /** Buyer → edge: lock the Cart and commit to delivery. */
 export const CheckoutRequestedSchema = z.object({
   type: z.literal("checkout.requested"),
   cartId: z.string().min(1),
   delivery: DeliverySchema,
+  /** Server-issued routed quote reused at checkout to avoid repricing/rerouting divergence. */
+  quoteId: z.string().min(1).optional(),
   /**
    * Buyer identity, client-supplied until participant auth lands on the wire
    * (documented proto gap). Absent → the run is anchored to "buyer:anonymous"
@@ -56,6 +80,8 @@ export const CheckoutRequestedSchema = z.object({
    * covering the checkout total. Absent → unpaid dev checkout (dev default).
    */
   paymentRef: z.string().min(1).optional(),
+  /** Additional held collections (for example an exact shortfall top-up); summed with paymentRef. */
+  paymentRefs: z.array(z.string().min(1)).max(20).optional(),
   receiver: DeliveryReceiverSchema.default({ kind: "buyer" }),
 });
 export type CheckoutRequested = z.infer<typeof CheckoutRequestedSchema>;
