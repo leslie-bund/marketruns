@@ -5,6 +5,7 @@ import { buyerIdForRun, claimRun, finalDelivery, getDeviceLocationFix, initiateH
 import { canRunnerMutate, HandoffList, RunMap, StopList, TripSummaryCard, useRunnerLocationStream, useRunnerPool } from "../../src/features/run";
 import { useActiveMarket, useActiveParticipant } from "../../src/api";
 import { Button, Card, Page, Pill, Section, s } from "../../src/ui";
+import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function RunnerHome() {
   const { runId } = useLocalSearchParams<{ runId?: string }>();
@@ -114,7 +115,7 @@ export default function RunnerHome() {
       ) : null}
       <Button title={gps.sharing ? "Live location ON — stop sharing" : "Share live location (GPS)"} secondary={gps.sharing} onPress={() => setGpsWanted((wanted) => !wanted)} />
       {gps.error ? <Text style={s.muted}>{gps.error}</Text> : null}
-      {!gps.sharing ? <Button title="Location tick (dev)" secondary onPress={act(() => locationTick(current.id, 6.4541, 3.3947), "Location failed")} /> : null}
+      {devDemoMode && !gps.sharing ? <Button title="Location tick (dev)" secondary onPress={act(() => locationTick(current.id, 6.4541, 3.3947), "Location failed")} /> : null}
       {allCollected && deliveryHandoff?.status === "confirmed" && current.status !== "delivered" ? <Button title="Final delivery" onPress={act(() => finalDelivery(current.id), "Final delivery refused")} /> : null}
       {queue}
     </Page>

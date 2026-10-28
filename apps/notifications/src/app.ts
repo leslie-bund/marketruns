@@ -5,6 +5,7 @@ import { DrizzleNotificationStore } from "./drizzle-store.js";
 import type { Env } from "./env.js";
 import { createProviders, type NotificationProviders } from "./provider.js";
 import type { NotificationStore } from "./store.js";
+import { validateNotificationsTopology } from "./topology.js";
 
 export interface NotificationsAppOptions {
   internalToken?: string | undefined;
@@ -54,6 +55,7 @@ export function createNotificationsApp(store: NotificationStore, providers: Noti
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    validateNotificationsTopology(env);
     const { db, client } = createDatabase(env);
     try {
       return await route(new DrizzleNotificationStore(db), request, { internalToken: env.NOTIFICATION_INTERNAL_TOKEN });
@@ -62,6 +64,7 @@ export default {
     }
   },
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    validateNotificationsTopology(env);
     const { db, client } = createDatabase(env);
     try {
       const app = createNotificationsApp(new DrizzleNotificationStore(db), createProviders({

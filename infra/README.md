@@ -25,13 +25,11 @@ npx pnpm@9.15.4 dev:all -- --no-seed  # skip the demo seed
 
 Ctrl-C stops everything the script started — the tunnel, all worker processes, and the Postgres container **only if the script started it** (a container you left running stays running; container data persists either way).
 
-### OPS_TOKEN and the tunnel
+### Ops authentication and the tunnel
 
-`requireOps()` admits everyone as local-ops when `OPS_TOKEN` is unset — fine on localhost, dangerous on a public tunnel URL (it would expose market config writes and ops settlements). So with `--tunnel`:
+Deployed ops uses Better Auth. `/ops/login` and the allow-listed `/ops/auth` endpoints are public so an operator can sign in; `/ops` and every `/ops/api` route remain protected. Local development may instead use the explicit legacy identity when both `OPS_LOCAL_DEV=true` and `OPS_LEGACY_DEV=true`; that path is never inferred in a deployed environment.
 
-- if `OPS_TOKEN` is unset, a random one is generated, passed to the edge as a wrangler var, and printed in the summary box;
-- a set-but-short token (< 16 chars) triggers a loud warning;
-- without `--tunnel`, `OPS_TOKEN` stays optional and the console stays open (dev behavior unchanged).
+With `--tunnel`, a random legacy `OPS_TOKEN` is generated when unset and printed in the summary box; a set-but-short token (< 16 chars) triggers a loud warning. Without `--tunnel`, the token stays optional in local legacy mode. Deployed Better Auth ignores `OPS_TOKEN` entirely.
 
 ### Two-tunnel topology (demo to friends)
 
@@ -51,11 +49,28 @@ The backend tunnel carries app↔edge traffic; the Expo tunnel carries the JS bu
 
 | Worker | Port | What it does | Env / secrets |
 | --- | --- | --- | --- |
-| `apps/edge` (`infra/wrangler.edge.toml`) | 8787 | Public API, Durable Objects (live state), ops console; proxies `/auth/*`, `/payments/*`, `/ops/api/admin/payments|holds|refunds`, and `/ops/api/device-resets*` (the ops device-reset queue → identity's internal seam) | Vars: `OPS_ARCHIVE_URL`, `IDENTITY_URL`, `PAYMENTS_URL`, `NOTIFICATIONS_URL`, `DATABASE_URL` + `ALLOW_HEADER_AUTH=true` (local demo), `OSRM_BASE_URL`, `PAYMENTS_REQUIRED` (unset = unpaid dev checkout). Secrets: `OPS_TOKEN` (any deploy / `--tunnel`), `IDENTITY_SESSION_SECRET` (must match the identity worker), `IDENTITY_INTERNAL_TOKEN` (must match the identity worker when set — the edge injects it as `x-identity-internal` on the guarded `/auth/*` routes; unset = nothing injected) |
+| `apps/edge` (`infra/wrangler.edge.toml`) | 8787 | Public API, Durable Objects (live state), ops console; proxies `/auth/*`, `/payments/*`, `/ops/api/admin/payments|holds|refunds`, and `/ops/api/device-resets*` (the ops device-reset queue → identity's internal seam) | Vars: `OPS_ARCHIVE_URL`, `IDENTITY_URL`, `PAYMENTS_URL`, `NOTIFICATIONS_URL`, `DATABASE_URL` + `ALLOW_HEADER_AUTH=true` (local demo), `OSRM_BASE_URL`, `PAYMENTS_REQUIRED` (unset = unpaid dev checkout), `EDGE_ENV=staging|production` (deployed), `OPS_BASE_URL`. Secrets: `OPS_AUTH_SECRET` (deployed), `OPS_TOKEN` (local legacy/`--tunnel` only), `IDENTITY_SESSION_SECRET` (must match the identity worker), `IDENTITY_INTERNAL_TOKEN` (must match the identity worker when set — the edge injects it as `x-identity-internal` on the guarded `/auth/*` routes; unset = nothing injected) |
 | `apps/archive` (`infra/wrangler.archive.toml`) | 8788 | Queue consumer: retirement snapshots → Postgres/R2 + reputation/admin read API | Var: `DATABASE_URL` (dev) / Hyperdrive (prod) |
 | `apps/identity` (`infra/wrangler.identity.toml`) | 8789 | Hybrid face enroll, local verify/recovery, device keys, HMAC sessions, device reset, and private enrollment-capture lifecycle | Var: `DATABASE_URL` (dev) / Hyperdrive (prod). Secrets: `IDENTITY_ENCRYPTION_KEY`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN`, `BIOMETRICS_SERVICE_TOKEN`; vars `FACE_VERIFIER=hybrid`, `BIOMETRICS_SERVICE_URL`, `FACE_MATCH_THRESHOLD`, `FIDO_UPSERT_ENABLED`, `FIDO_STUB_ENABLED`. Smile ID secrets: `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`; vars `SMILEID_ENV`, `SMILEID_CALLBACK_URL`, `SMILEID_PRIVACY_NOTICE_URL`. `IDENTITY_CAPTURES` is a private R2 binding; the scheduled five-minute sweep deletes abandoned expired pending captures (ADR-0028) |
 | `apps/payments` (`infra/wrangler.payments.toml`) | 8790 | `payment-dispatch` + `payment.refund-requested` queue consumer: persists each settlement leg and executes it via the dispatcher abstraction (stub in dev; Flutterwave test-mode supported); buyer collection — `POST /payments/charges/confirm` (server-side verify → `payment_holds`), refund rail (card via provider, non-card → `refund-manual`), seller/runner payout accounts (`GET /payments/banks`, resolve-then-save) behind resolved-participant authorization; serves `GET /dispatches` + replay, `POST /webhooks/transfers|charges`, `POST /dispatches/sync` | Var: `DATABASE_URL` (dev) / Hyperdrive (prod), `PAYMENT_DISPATCHER=stub`. Secret: `PAYMENTS_INTERNAL_TOKEN` (same on edge and payments). Explicit local demo: `ALLOW_HEADER_AUTH=true` on both workers. Vendor secrets via `infra/.dev.vars` (below) |
 | `apps/notifications` (`infra/wrangler.notifications.toml`) | 8791 | `notification-events` consumer plus durable notification read/mark-read API and realtime/email delivery | Var: `DATABASE_URL` (dev) / Hyperdrive (prod), `EDGE_URL`, `IDENTITY_URL`. Secrets: `NOTIFICATION_INTERNAL_TOKEN`, `RESEND_API_KEY`; verified sender var `RESEND_FROM_EMAIL` |
+
+## Deployed topology and identity
+
+`wrangler.edge.toml` and `wrangler.notifications.toml` contain explicit `staging` examples. Replace every `example.com` hostname with the staged worker's real HTTPS route before `wrangler deploy --env staging`. `EDGE_ENV=staging|production` makes the edge require all four service URLs and reject loopback/HTTP values before any route, including `/healthz`; `NOTIFICATIONS_ENV` applies the same check to notification fetches and queue delivery. The root `[vars]` remain local-development defaults and are never valid deployed topology.
+
+The current proxy seams consume HTTPS URLs. A Cloudflare Service binding must be declared in the same environment **and** the owning proxy seam must be changed to call that binding; adding `[[env.staging.services]]` alone does not replace `IDENTITY_URL`, `PAYMENTS_URL`, `OPS_ARCHIVE_URL`, `NOTIFICATIONS_URL`, or `EDGE_URL`.
+
+`wrangler.identity.toml` has an explicit `production` example with `IDENTITY_ENV=production`, `FACE_VERIFIER=hybrid`, and a non-local biometric service URL. Before deploying it, configure Hyperdrive, the private `IDENTITY_CAPTURES` binding, `BIOMETRICS_SERVICE_TOKEN`, all three identity secrets, and the Smile ID production credentials. Runtime validation rejects missing hybrid requirements and loopback biometrics even on health checks. The unqualified local config still uses the development stub and committed dev-only fallbacks.
+
+Initial ops market seeding mirrors `seed-core.mjs` with real geofences:
+
+```bash
+npx pnpm@9.15.4 --filter @market-runs/edge ops:seed-markets
+npx pnpm@9.15.4 --filter @market-runs/edge ops:seed-markets -- Yaba --latitude 6.5 --longitude 3.38 --radius-meters 900
+```
+
+Balogun and Computer Village use the dev seed's centers and 750 m radius. Any custom market requires all three geofence flags; there is no silent Balogun fallback. Re-running a built-in seed repairs registry geography without replacing an existing market's runtime config.
 
 ## Flutterwave test-mode payouts (payments worker)
 
@@ -105,7 +120,7 @@ What each check proves:
 
 Expected posture caveat: a session run with `PAYMENTS_REQUIRED` unset (unpaid dev checkout) produces settlements with no holds and — if the payments worker wasn't consuming — no dispatch rows; `dispatch-completeness` FAILs on those until the queue drains. Run the tie-out with the full stack up so queued dispatches land first.
 
-Dev defaults let the whole stack run with zero secrets; for any deploy set them with `wrangler secret put` per config (`--config infra/wrangler.<name>.toml`): `OPS_TOKEN`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN` and `PAYMENTS_INTERNAL_TOKEN` on the edge, `IDENTITY_ENCRYPTION_KEY` / `IDENTITY_SESSION_SECRET` / `IDENTITY_INTERNAL_TOKEN` on identity, and `PAYMENTS_INTERNAL_TOKEN` on payments. `IDENTITY_SESSION_SECRET` must be the SAME value on edge and identity — the edge verifies session HMACs locally without a round trip. `IDENTITY_INTERNAL_TOKEN` must likewise be the SAME value on edge and identity when set — the edge's `/auth/*` proxy injects it as `x-identity-internal` on the guarded routes only (face enrollment, the device-reset queue read `GET /auth/device-reset`, device-reset decisions); unset on both leaves those routes open in dev. `PAYMENTS_INTERNAL_TOKEN` must be the SAME value on edge and payments; payout-account session flows fail closed without it. The local header-auth payout demo requires the explicit `ALLOW_HEADER_AUTH=true` override on both workers, never a deployed implicit fallback.
+Dev defaults let the whole stack run with zero secrets; for any deploy set them with `wrangler secret put` per config (`--config infra/wrangler.<name>.toml`, plus `--env` for a named environment): `OPS_AUTH_SECRET`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN` and `PAYMENTS_INTERNAL_TOKEN` on the edge, `IDENTITY_ENCRYPTION_KEY` / `IDENTITY_SESSION_SECRET` / `IDENTITY_INTERNAL_TOKEN` on identity, and `PAYMENTS_INTERNAL_TOKEN` on payments. `OPS_TOKEN` is local legacy/`--tunnel` configuration, not a deployed Better Auth secret. `IDENTITY_SESSION_SECRET` must be the SAME value on edge and identity — the edge verifies session HMACs locally without a round trip. `IDENTITY_INTERNAL_TOKEN` must likewise be the SAME value on edge and identity when set — the edge's `/auth/*` proxy injects it as `x-identity-internal` on the guarded routes only (face enrollment, the device-reset queue read `GET /auth/device-reset`, device-reset decisions); unset on both leaves those routes open in dev. `PAYMENTS_INTERNAL_TOKEN` must be the SAME value on edge and payments; payout-account session flows fail closed without it. The local header-auth payout demo requires the explicit `ALLOW_HEADER_AUTH=true` override on both workers, never a deployed implicit fallback.
 
 ## Manual setup (fallback)
 

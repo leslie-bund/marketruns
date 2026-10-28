@@ -7,6 +7,7 @@ import {
   isFaceJobPending, registerDeviceKey, useActiveParticipant,
 } from "../../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
+import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function OnboardingFace() {
   const params = useLocalSearchParams<{ role?: string; enrollmentProof?: string; docType?: string; docNumber?: string }>();
@@ -55,7 +56,7 @@ export default function OnboardingFace() {
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>
           <Button title={busy ? "Verifying…" : "Capture 7 frames and enroll"} onPress={() => { if (consented && !busy) void capture(); }} />
-          <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} />
+          {devDemoMode ? <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} /> : null}
         </>}
       </Section> : <Section title="Confirm your display name">
         <Label>Vendor legal name may prefill this; your verified legal name will not change.</Label>

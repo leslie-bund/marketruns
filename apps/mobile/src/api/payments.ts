@@ -8,6 +8,7 @@ import { EDGE_URL, identities } from "./config";
 import { ApiError } from "./client";
 import { getActiveParticipant, participantHeaders } from "./participant";
 import { clearSession, sessionHeaders } from "./auth";
+import { assertDemoWriteAllowed } from "./dev-mode";
 
 /**
  * Payments client — the app side of the payments worker's collection/payout
@@ -30,6 +31,7 @@ import { clearSession, sessionHeaders } from "./auth";
  */
 
 async function paymentsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  assertDemoWriteAllowed(init?.method, getActiveParticipant() !== null);
   const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,

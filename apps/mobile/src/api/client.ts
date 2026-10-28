@@ -5,6 +5,7 @@ import { getActiveParticipant, participantHeaders, setActiveParticipant } from "
 import { clearSession, sessionHeaders } from "./auth";
 import { getActiveStore } from "./active-store";
 import { clearCartId, clearRunId, getStoredCartId, getStoredRunId, recordCartId, recordRunId } from "./cart-state";
+import { assertDemoWriteAllowed } from "./dev-mode";
 
 /**
  * The real API client — every method maps one-to-one onto the public edge
@@ -27,7 +28,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, options?: { allowUnauthenticatedWrite?: boolean }): Promise<T> {
+  if (!options?.allowUnauthenticatedWrite) assertDemoWriteAllowed(init?.method, getActiveParticipant() !== null);
   const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,
@@ -47,8 +49,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-const command = <T = Record<string, unknown>>(body: unknown): Promise<T> =>
-  request<T>("/command", { method: "POST", body: JSON.stringify(body) });
+const command = <T = Record<string, unknown>>(body: unknown): Promise<T> => {
+  const type = typeof body === "object" && body !== null && "type" in body ? body.type : undefined;
+  return request<T>("/command", { method: "POST", body: JSON.stringify(body) }, { allowUnauthenticatedWrite: type === "participant.onboarded" });
+};
 
 /** The wire omits buyerId once a participant is onboarded — the edge adopts the caller's identity. */
 function buyerAttribution(): { buyerId?: string } {
@@ -478,6 +482,7 @@ export async function fileDispute(
  * the domain stores (never bytes) plus a read-back URL for previews.
  */
 export async function uploadCapture(localUri: string, runId?: string): Promise<{ ref: string; url: string }> {
+  assertDemoWriteAllowed("POST", getActiveParticipant() !== null);
   const blob = await (await fetch(localUri)).blob();
   const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}/captures`, {

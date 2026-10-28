@@ -26,3 +26,20 @@ crons = ["*/5 * * * *"]
 # requires SMILEID_PARTNER_ID + SMILEID_API_KEY, BIOMETRICS_SERVICE_URL/TOKEN,
 # model artifacts, and this private R2 binding), FACE_MATCH_THRESHOLD (default
 # 0.6), FIDO_UPSERT_ENABLED, FIDO_STUB_ENABLED.
+
+# Deployed identity example. Production is explicit: no dev secrets, preverified
+# KYC, stub verifier, or localhost biometric service can be inherited. Supply
+# BIOMETRICS_SERVICE_URL and all secrets listed in infra/README.md for --env
+# production; validateIdentityRuntime fails every request until they are present.
+[env.production]
+name = "market-runs-identity-production"
+
+[env.production.vars]
+IDENTITY_ENV = "production"
+FACE_VERIFIER = "hybrid"
+BIOMETRICS_SERVICE_URL = "https://biometrics.internal.example.com"
+SMILEID_ENV = "production"
+
+[[env.production.r2_buckets]]
+binding = "IDENTITY_CAPTURES"
+bucket_name = "market-runs-identity-captures"

@@ -259,6 +259,31 @@ describe("market config write guard (edge route layer)", () => {
   });
 });
 
+describe("deployed Better Auth routing", () => {
+  it("serves only the login page publicly and never admits the legacy token", async () => {
+    const app = createApp();
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => {
+        if (prop === "OPS_LOCAL_DEV") return "false";
+        if (prop === "OPS_LEGACY_DEV" || prop === "OPS_TOKEN") return prop === "OPS_TOKEN" ? "legacy-secret" : "true";
+        if (prop === "OPS_AUTH_SECRET") return "deployed-test-secret-at-least-32-characters";
+        if (prop === "DATABASE_URL" || prop === "HYPERDRIVE") return undefined;
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as Env;
+
+    const login = await app.fetch(new Request(`${BASE}/ops/login?token=legacy-secret`), env);
+    expect(login.status).toBe(200);
+    expect(await login.text()).toContain("Sign in");
+
+    for (const path of ["/ops?token=legacy-secret", "/ops/api/session?token=legacy-secret", "/ops/api/markets?token=legacy-secret"]) {
+      const protectedResponse = await app.fetch(new Request(`${BASE}${path}`, { headers: { "x-ops-token": "legacy-secret" } }), env);
+      expect(protectedResponse.status).toBe(503);
+      expect((await readJson(protectedResponse)).error).toBe("ops-auth-unavailable");
+    }
+  });
+});
+
 describe("ops console page guard", () => {
   it("requires the token for the HTML page when OPS_TOKEN is set", async () => {
     const app = createApp();
