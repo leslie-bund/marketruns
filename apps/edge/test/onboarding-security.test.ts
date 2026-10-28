@@ -1,10 +1,13 @@
-import { fetchMock } from "cloudflare:test";
+import { fetchMock, runInDurableObject } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { signSessionToken } from "@market-runs/domain";
 import { createApp } from "../src/app/app.js";
 import type { Env } from "../src/config/env.js";
-import { devIdentityVerifier } from "../src/kyc/verifier.js";
+import { devIdentityVerifier, hashIdDocument } from "../src/kyc/verifier.js";
 import { canTransact } from "../src/registry/index.js";
+import { participantObjectName } from "../src/do/participant-do.js";
+import { STATE_KEY } from "../src/do/state.js";
+import { internalPost } from "../src/do/transport.js";
 import { bindings, readJson } from "./helpers.js";
 
 const BASE = "http://edge";
@@ -121,5 +124,33 @@ describe("secure first-run onboarding", () => {
     expect(canTransact("preverified", false)).toBe(false);
     expect(canTransact("verified", false)).toBe(true);
     expect(canTransact("preverified", true)).toBe(true);
+  });
+
+  it("resumes the same pending participant without replacing the completed record", async () => {
+    const participantId = "participant-pending-resume";
+    const stub = bindings.PARTICIPANT_DO.get(bindings.PARTICIPANT_DO.idFromName(participantObjectName(participantId)));
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put(STATE_KEY, {
+        id: participantId,
+        role: "buyer",
+        displayName: "Pending Trader",
+        email: "pending@example.com",
+        kycStatus: "pending",
+        idDocumentType: "bvn",
+        idDocumentHash: await hashIdDocument("12345678901", "test-document-hmac-key"),
+        consentAt: Date.now(),
+        consentVersion: "kyc-onboarding-v1",
+        markets: ["Balogun"],
+        createdAt: Date.now(),
+      });
+    });
+    const resumed = await stub.fetch(internalPost("/onboard", command(participantId)));
+    expect(resumed.status).toBe(200);
+    const participant = (await readJson(resumed)).participant as { id: string; kycStatus: string };
+    expect(participant.id).toBe(participantId);
+    expect(participant.kycStatus).toBe("preverified");
+
+    const changed = await stub.fetch(internalPost("/onboard", command(participantId)));
+    expect(changed.status).toBe(409);
   });
 });

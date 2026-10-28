@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { router } from "expo-router";
 import { Alert, Platform, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { DEV_FACE_IMAGE_BASE64, captureFaceSequence, recoverDevice, useActiveParticipant } from "../src/api";
+import { DEV_FACE_IMAGE_BASE64, captureFaceSequence, getParticipant, recoverDevice, setActiveParticipant, useActiveParticipant } from "../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, s } from "../src/ui";
 
 /** Self-service recovery: participant id + fresh liveness + 1:1 match. */
@@ -18,7 +18,12 @@ export default function DeviceReset() {
     if (!participantId.trim() || !consented) return;
     setBusy(true);
     try {
-      await recoverDevice({ ...capture, participantId: participantId.trim(), deviceLabel: `${Platform.OS} replacement device` });
+      const recoveredId = participantId.trim();
+      if (participant && participant.id !== recoveredId) await setActiveParticipant(null);
+      await recoverDevice({ ...capture, participantId: recoveredId, deviceLabel: `${Platform.OS} replacement device` });
+      const recoveredParticipant = await getParticipant(recoveredId);
+      if (!recoveredParticipant) throw new Error("Recovery succeeded, but your participant profile could not be loaded. Check your connection and reopen the app.");
+      await setActiveParticipant(recoveredParticipant);
       Alert.alert("Device recovered", "Your old device keys and sessions were revoked. This device is now signed in.");
       router.replace("/");
     } catch (error) { Alert.alert("Recovery failed", error instanceof Error ? error.message : String(error)); }

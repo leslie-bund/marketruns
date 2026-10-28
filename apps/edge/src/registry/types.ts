@@ -17,6 +17,7 @@ export interface CoreRegistry {
   participant(participantId: string): Promise<Participant | null>;
   saveParticipant(participant: Participant): Promise<void>;
   store(storeId: string): Promise<Store | null>;
+  storeForSeller(marketId: string, participantId: string): Promise<Store | null>;
   saveStore(store: Store): Promise<void>;
   isInternalRunner(marketId: string, participantId: string): Promise<boolean>;
   joinInternalRunner(marketId: string, participantId: string): Promise<void>;

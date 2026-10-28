@@ -59,6 +59,13 @@ export class MemoryCoreRegistry implements CoreRegistry {
     return value ? structuredClone(value) : null;
   }
 
+  async storeForSeller(marketId: string, participantId: string) {
+    const value = [...state.stores.values()].find((store) =>
+      store.market.toLowerCase() === marketId.toLowerCase() && store.sellerParticipantId === participantId,
+    );
+    return value ? structuredClone(value) : null;
+  }
+
   async saveStore(store: Store) {
     state.stores.set(store.id, structuredClone(store));
   }

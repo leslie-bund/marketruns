@@ -55,6 +55,15 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     return c.json(MarketRegistryResponseSchema.parse({ markets: markets.filter((market) => !filter || market.id.toLowerCase() === filter || market.name.toLowerCase() === filter) }));
   });
 
+  app.get("/:market/store", async (c) => {
+    const denied = await requireTransactionRole(c, "seller");
+    if (denied) return denied;
+    const market = decodeURIComponent(c.req.param("market"));
+    const store = await coreRegistry(c.env).storeForSeller(market, c.get("participant").id);
+    if (!store) return errorResponse(404, "store-not-found", "no owned store in this market");
+    return c.json({ store });
+  });
+
   app.post("/:market/offers", async (c) => {
     const denied = await requireTransactionRole(c, "seller");
     if (denied) return denied;

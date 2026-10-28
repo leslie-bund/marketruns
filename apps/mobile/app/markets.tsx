@@ -7,6 +7,7 @@ import {
   setActiveMarket,
   useActiveMarket,
   useActiveParticipant,
+  useAuthSession,
   usePoll,
 } from "../src/api";
 import { Button, Card, Page, Pill, Section, colors, s } from "../src/ui";
@@ -21,10 +22,12 @@ export default function Markets() {
   const markets = usePoll(listMarkets, 15000);
   const active = useActiveMarket();
   const { participant } = useActiveParticipant();
+  const { session } = useAuthSession();
   const { role } = useLocalSearchParams<{ role?: "buyer" | "seller" | "runner" }>();
   const [busy, setBusy] = useState<string | null>(null);
   const destination = role === "seller" ? "/seller" : role === "runner" ? "/runner" : "/buyer";
   const finish = () => role ? router.replace(destination) : router.back();
+  const kycEligible = participant?.kycStatus === "verified" || participant?.kycStatus === "preverified";
 
   const join = async (marketId: string) => {
     if (!participant) {
@@ -32,6 +35,10 @@ export default function Markets() {
         { text: "Get started", onPress: () => router.push("/onboarding") },
         { text: "Cancel", style: "cancel" },
       ]);
+      return;
+    }
+    if (!session || !kycEligible || (role && role !== participant.role)) {
+      Alert.alert("Sign in required", "Use your verified role and a live session before joining a market.");
       return;
     }
     setBusy(marketId);
@@ -60,8 +67,10 @@ export default function Markets() {
         {(markets.data ?? []).map((market) => {
           const joined = participant?.markets.includes(market.id) ?? false;
           const isActive = active === market.id;
+          const roleMatches = !role || !participant || role === participant.role;
+          const canEnter = !role || !participant || (joined && roleMatches && Boolean(session) && kycEligible);
           return (
-            <Pressable key={market.id} onPress={async () => { await setActiveMarket(market.id); finish(); }}>
+            <Pressable key={market.id} onPress={async () => { if (!canEnter) return; await setActiveMarket(market.id); finish(); }}>
               <Card style={isActive ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
                 <View style={s.row}>
                   <View style={{ flex: 1 }}>
@@ -72,7 +81,7 @@ export default function Markets() {
                   {joined ? <Pill active>JOINED</Pill> : null}
                 </View>
                 <Pill active={market.onlineSellers > 0}>{market.onlineSellers} seller{market.onlineSellers === 1 ? "" : "s"} online now</Pill>
-                {!joined ? <Button title={busy === market.id ? "Joining…" : "Join this market"} secondary onPress={() => join(market.id)} /> : null}
+                {!joined && roleMatches ? <Button title={busy === market.id ? "Joining…" : "Join this market"} secondary onPress={() => join(market.id)} /> : null}
               </Card>
             </Pressable>
           );

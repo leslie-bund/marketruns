@@ -3,6 +3,7 @@ import { Pressable, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/ui";
 import { useBuyerBadges } from "../../src/features/buyer";
+import { TransactionRoleGate } from "../../src/features/transaction-role";
 
 /**
  * The buyer's phase guide: Errands → Cart → Track. Tab badges pull attention
@@ -10,7 +11,7 @@ import { useBuyerBadges } from "../../src/features/buyer";
  * checkout, a delivery QR to show). Phase-detail screens (post, products,
  * negotiation, checkout) push on top and stay out of the tab bar.
  */
-export default function BuyerLayout() {
+function BuyerTabs() {
   const badges = useBuyerBadges();
   // exactOptionalPropertyTypes: hide the badge by omitting the prop entirely.
   const badge = (count: number) => (count > 0 ? { tabBarBadge: count } : {});
@@ -68,4 +69,8 @@ export default function BuyerLayout() {
       <Tabs.Screen name="checkout" options={{ href: null, title: "Checkout" }} />
     </Tabs>
   );
+}
+
+export default function BuyerLayout() {
+  return <TransactionRoleGate role="buyer"><BuyerTabs /></TransactionRoleGate>;
 }

@@ -118,6 +118,23 @@ export class PostgresCoreRegistry implements CoreRegistry {
     });
   }
 
+  async storeForSeller(marketId: string, participantId: string): Promise<Store | null> {
+    return this.withSql(async (sql) => {
+      const rows = await sql`SELECT * FROM stores WHERE market_id = ${marketId} AND seller_id = ${participantId} ORDER BY joined_at DESC LIMIT 1`;
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        market: row.market_id,
+        name: row.name,
+        sellerParticipantId: row.seller_id,
+        exchangePoint: row.exchange_point,
+        shopItems: row.shop_items,
+        joinedAt: millis(row.joined_at),
+      } as Store;
+    });
+  }
+
   async saveStore(store: Store) {
     if (!store.sellerParticipantId) throw new Error("store sellerParticipantId is required");
     return this.withSql(async (sql) => {

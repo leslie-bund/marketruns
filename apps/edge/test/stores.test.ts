@@ -1,3 +1,4 @@
+import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { internalPost, marketStub, postIntent, readJson } from "./helpers.js";
 
@@ -66,5 +67,33 @@ describe("MarketDO store registry and vocabulary scoping", () => {
 
     const global = await marketStub("sr").fetch(new Request("http://do/intents"));
     expect(((await readJson(global)).intents as unknown[]).length).toBe(2);
+  });
+
+  it("recovers only the caller's owned store for the market", async () => {
+    const sellerHeaders = { "x-participant-id": "seller-recovery", "x-participant-role": "seller" };
+    const registered = await SELF.fetch(new Request("http://edge/command", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...sellerHeaders },
+      body: JSON.stringify({
+        type: "store.registered",
+        storeId: "store-recovery",
+        market: "recovery-market",
+        name: "Recovered Store",
+        exchangePoint: "Stall 1",
+        shopItems: ["Rice"],
+      }),
+    }));
+    expect(registered.status).toBe(200);
+
+    const recovered = await SELF.fetch(new Request("http://edge/markets/recovery-market/store", { headers: sellerHeaders }));
+    expect(recovered.status).toBe(200);
+    const store = (await readJson(recovered)).store as { id: string; sellerParticipantId: string };
+    expect(store.id).toBe("store-recovery");
+    expect(store.sellerParticipantId).toBe("seller-recovery");
+
+    const otherSeller = await SELF.fetch(new Request("http://edge/markets/recovery-market/store", {
+      headers: { "x-participant-id": "seller-other", "x-participant-role": "seller" },
+    }));
+    expect(otherSeller.status).toBe(404);
   });
 });

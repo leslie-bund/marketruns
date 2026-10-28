@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
 import type { Participant } from "@market-runs/proto";
+import { clearSession } from "./auth";
 
 /**
  * The device's onboarded participant (ADR-0004/0015). Onboarding lands a KYC
@@ -35,6 +36,7 @@ export async function loadActiveParticipant(): Promise<Participant | null> {
 }
 
 export async function setActiveParticipant(participant: Participant | null): Promise<void> {
+  if (cache?.id !== participant?.id) await clearSession();
   cache = participant;
   loaded = true;
   if (participant) await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(participant)).catch(() => undefined);

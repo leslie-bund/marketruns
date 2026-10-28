@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/ui";
 import { useActiveStore } from "../../src/api";
 import { useSellerBadges } from "../../src/features/seller";
+import { TransactionRoleGate } from "../../src/features/transaction-role";
 
 /**
  * The seller's phase guide: Demand → Offers → Trip. Tab badges pull attention
@@ -11,7 +12,7 @@ import { useSellerBadges } from "../../src/features/seller";
  * a runner waiting for the QR). Detail screens (respond, negotiation) push
  * on top and stay out of the tab bar.
  */
-export default function SellerLayout() {
+function SellerTabs() {
   const { store } = useActiveStore();
   const badges = useSellerBadges(store);
   // exactOptionalPropertyTypes: hide the badge by omitting the prop entirely.
@@ -69,4 +70,8 @@ export default function SellerLayout() {
       <Tabs.Screen name="join" options={{ href: null, title: "Join the Market" }} />
     </Tabs>
   );
+}
+
+export default function SellerLayout() {
+  return <TransactionRoleGate role="seller"><SellerTabs /></TransactionRoleGate>;
 }

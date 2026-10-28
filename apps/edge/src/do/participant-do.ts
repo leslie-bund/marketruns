@@ -128,9 +128,20 @@ export class ParticipantDO extends DurableObject<Env> {
     return notFound(`ParticipantDO route not found: ${request.method} ${path}`);
   }
 
-  /** Create exactly one participant identity; retries never replace its role or KYC record. */
+  /** Create one identity; only the same pending document may retry verification. */
   private async onboard(command: ParticipantOnboarded): Promise<Response> {
-    if (this.participant) {
+    const idDocumentHash = await hashIdDocument(
+      command.idDocument,
+      this.env.ID_DOCUMENT_HMAC_SECRET ?? "market-runs-dev-document-hmac-key",
+    );
+    const existing = this.participant;
+    if (existing && (
+      existing.kycStatus !== "pending" ||
+      existing.role !== command.role ||
+      existing.idDocumentType !== command.idDocumentType ||
+      existing.idDocumentHash !== idDocumentHash ||
+      !existing.markets.includes(command.market)
+    )) {
       return jsonResponse({ error: "participant-exists", message: "participant onboarding has already been recorded" }, 409);
     }
 
@@ -142,22 +153,20 @@ export class ParticipantDO extends DurableObject<Env> {
       idDocument: command.idDocument,
     }, this.env.ALLOW_HEADER_AUTH === "true");
 
-    const participant: Participant = {
+    const participant: Participant = existing ?? {
       id: command.participantId,
       role: command.role,
       displayName: command.displayName,
       email: command.email,
       kycStatus,
       idDocumentType: command.idDocumentType,
-      idDocumentHash: await hashIdDocument(
-        command.idDocument,
-        this.env.ID_DOCUMENT_HMAC_SECRET ?? "market-runs-dev-document-hmac-key",
-      ),
+      idDocumentHash,
       consentAt: command.consentAt,
       consentVersion: command.consentVersion,
       markets: [command.market],
       createdAt: Date.now(),
     };
+    participant.kycStatus = kycStatus;
     await this.ctx.storage.put(STATE_KEY, participant);
     this.participant = participant;
 

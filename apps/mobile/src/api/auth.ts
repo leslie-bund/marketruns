@@ -63,7 +63,14 @@ const sessionListeners = new Set<(session: AuthSession | null) => void>();
 
 /** The cached session, or null when missing/expired (expiry is honored client-side too). */
 export function getSession(): AuthSession | null {
-  return sessionCache && sessionCache.expiresAt > Date.now() ? sessionCache : null;
+  if (!sessionCache) return null;
+  if (sessionCache.expiresAt > Date.now()) return sessionCache;
+  sessionCache = null;
+  sessionLoaded = true;
+  void AsyncStorage.removeItem(SESSION_KEY).catch(() => undefined);
+  // getSession is also read during render; notify after the current call stack.
+  queueMicrotask(() => { for (const listener of sessionListeners) listener(null); });
+  return null;
 }
 
 export async function loadSession(): Promise<AuthSession | null> {
@@ -219,22 +226,26 @@ async function readDeviceSecret(): Promise<string | null> {
 /* ------------------------------------------------------------------ */
 
 async function authRequest<T>(path: string, body: unknown, method = "POST"): Promise<T> {
+  const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     method,
-    headers: { "content-type": "application/json", ...sessionHeaders() },
+    headers: { "content-type": "application/json", ...authorization },
     body: JSON.stringify(body),
   });
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
+    if (response.status === 401 && authorization.authorization) void clearSession();
     throw new AuthError(response.status, String(parsed.error ?? "unknown"), String(parsed.message ?? response.statusText), parsed);
   }
   return parsed as T;
 }
 
 async function authGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${EDGE_URL}${path}`, { headers: { "content-type": "application/json" } });
+  const authorization = sessionHeaders();
+  const response = await fetch(`${EDGE_URL}${path}`, { headers: { "content-type": "application/json", ...authorization } });
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
+    if (response.status === 401 && authorization.authorization) void clearSession();
     throw new AuthError(response.status, String(parsed.error ?? "unknown"), String(parsed.message ?? response.statusText), parsed);
   }
   return parsed as T;
