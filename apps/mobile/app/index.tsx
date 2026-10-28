@@ -35,6 +35,9 @@ export default function Launch() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return (await response.json()) as { service: string };
   }, 5000);
+  const kycEligible = participant?.kycStatus === "verified" || participant?.kycStatus === "preverified";
+  const transactionReady = Boolean(participant && session && kycEligible);
+  const visibleRoles = participant ? roles.filter((role) => role.role === participant.role) : roles;
 
   /** Dev-only logout: clears the onboarded participant, any auth session, the cached device-credential id, and this device's stored cart/run ids (they belong to that identity). */
   const resetIdentity = () => {
@@ -71,7 +74,7 @@ export default function Launch() {
         <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Pill active>{market.toUpperCase()} · LAGOS</Pill>
           <Pill active={!health.error}>{health.data ? "● LIVE" : health.error ? "● OFFLINE" : "…"}</Pill>
-          {participant ? <Pill active>{participant.kycStatus === "verified" ? "✓ VERIFIED" : "KYC FAILED"}</Pill> : null}
+          {participant ? <Pill active={kycEligible}>{kycEligible ? "✓ VERIFIED" : participant.kycStatus === "pending" ? "KYC PENDING" : "KYC NOT VERIFIED"}</Pill> : null}
         </View>
         <Text style={{ color: "#fff", fontSize: 23, fontWeight: "800", lineHeight: 30, marginTop: 10 }}>
           {participant ? `Welcome back,\n${participant.displayName}.` : "Good errands start\nwith a good run."}
@@ -89,12 +92,25 @@ export default function Launch() {
       </Card>
 
       {!loading && !participant ? (
-        <Link href="/onboarding" asChild><Button title="Get started — verify your identity" /></Link>
+        <>
+          <Link href="/onboarding" asChild><Button title="Get started — verify your identity" /></Link>
+          <Pressable onPress={() => router.push("/device-reset")} style={{ alignSelf: "center", paddingVertical: 6 }}>
+            <Text style={{ color: colors.muted, fontSize: 12, textDecorationLine: "underline" }}>Recover existing account</Text>
+          </Pressable>
+        </>
+      ) : null}
+
+      {participant?.kycStatus === "pending" ? (
+        <Card style={{ borderColor: colors.orange, borderWidth: 2 }}>
+          <Pill active>VERIFICATION PENDING</Pill>
+          <Text style={s.body}>Your participant is saved. Resume with the same document; face enrollment unlocks only after approval.</Text>
+          <Button title="Resume identity verification" onPress={() => router.push({ pathname: "/onboarding/kyc", params: { role: participant.role, displayName: participant.displayName, market: participant.markets[0] ?? market } })} />
+        </Card>
       ) : null}
 
       {/* Signed-out participant: the cache survived but there's no live session
           (first launch after onboard, expiry, or a server-side 401). */}
-      {!loading && !sessionLoading && participant && !session ? (
+      {!loading && !sessionLoading && participant && participant.kycStatus !== "pending" && !session ? (
         <Card style={{ borderColor: colors.green, borderWidth: 2 }}>
           <Pill active>SIGNED OUT</Pill>
           <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>Welcome back, {participant.displayName}.</Text>
@@ -109,9 +125,9 @@ export default function Launch() {
         </Card>
       ) : null}
 
-      {participant && session ? <Pill active>✓ SIGNED IN</Pill> : null}
+      {transactionReady ? <Pill active>✓ SIGNED IN</Pill> : null}
 
-      {participant && session ? (
+      {transactionReady ? (
         <Pressable onPress={() => router.push("/notifications" as never)}>
           <Card>
             <View style={s.row}>
@@ -126,39 +142,41 @@ export default function Launch() {
         </Pressable>
       ) : null}
 
-      <Section title={participant ? "Continue as" : "Explore as (demo)"}>
-        <View style={{ gap: 12 }}>
-          {roles.map((role) => (
-            <Pressable key={role.name} onPress={() => router.push({ pathname: "/markets", params: { role: role.role } })}>
-                <Card style={participant?.role === role.role ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
-                  <View style={s.row}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
-                      <Text style={{ fontSize: 26 }}>{role.icon}</Text>
-                      <View style={{ flex: 1, gap: 4 }}>
-                        <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{role.name}</Text>
-                        <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18 }}>{role.text}</Text>
+      {!participant || transactionReady ? <>
+        <Section title={participant ? "Continue as" : "Explore as (demo)"}>
+          <View style={{ gap: 12 }}>
+            {visibleRoles.map((role) => (
+              <Pressable key={role.name} onPress={() => router.push({ pathname: "/markets", params: { role: role.role } })}>
+                  <Card style={participant?.role === role.role ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
+                    <View style={s.row}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
+                        <Text style={{ fontSize: 26 }}>{role.icon}</Text>
+                        <View style={{ flex: 1, gap: 4 }}>
+                          <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{role.name}</Text>
+                          <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18 }}>{role.text}</Text>
+                        </View>
                       </View>
+                      {participant?.role === role.role ? <Pill active>YOU</Pill> : null}
+                      <Text style={{ color: colors.green, fontSize: 22 }}>›</Text>
                     </View>
-                    {participant?.role === role.role ? <Pill active>YOU</Pill> : null}
-                    <Text style={{ color: colors.green, fontSize: 22 }}>›</Text>
-                  </View>
-                </Card>
-              </Pressable>
-          ))}
-        </View>
-      </Section>
-
-      <Pressable onPress={() => router.push("/markets")}>
-<Card>
-          <View style={s.row}>
-            <View>
-              <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Markets</Text>
-              <Text style={s.muted}>Join zones and switch your active market</Text>
-            </View>
-            <Text style={{ color: colors.green }}>→</Text>
+                  </Card>
+                </Pressable>
+            ))}
           </View>
-        </Card>
+        </Section>
+
+        <Pressable onPress={() => router.push("/markets")}>
+          <Card>
+            <View style={s.row}>
+              <View>
+                <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Markets</Text>
+                <Text style={s.muted}>Join zones and switch your active market</Text>
+              </View>
+              <Text style={{ color: colors.green }}>→</Text>
+            </View>
+          </Card>
         </Pressable>
+      </> : null}
       <Text style={{ color: colors.muted, fontSize: 12, textAlign: "center" }}>Internal runners · Floor Rate delivery</Text>
       {participant ? (
         <Pressable onPress={resetIdentity} style={{ alignSelf: "center", paddingVertical: 6 }}>

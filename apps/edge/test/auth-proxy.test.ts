@@ -1,8 +1,9 @@
 import { fetchMock } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { signSessionToken } from "@market-runs/domain";
 import type { Env } from "../src/config/env.js";
 import { createApp } from "../src/app/app.js";
-import { bindings } from "./helpers.js";
+import { bindings, readJson } from "./helpers.js";
 
 /**
  * The /auth/* proxy's scoped internal-token injection (ADR-0022). The
@@ -122,5 +123,28 @@ describe("/auth/* proxy x-identity-internal injection", () => {
     const listed = await getAuth("/auth/device-reset?status=pending", bindings);
     expect(listed.status).toBe(200);
     expect(queue.seen()?.["x-identity-internal"]).toBeUndefined();
+  });
+
+  it("forwards the live session on the final onboarding display-name PATCH", async () => {
+    let authorization: unknown;
+    let displayName: unknown;
+    const at = Date.now();
+    const token = await signSessionToken({
+      tokenId: "session-final-onboarding", participantId: "participant-final", role: "buyer", iat: at, exp: at + 60_000,
+    }, "market-runs-dev-session-secret");
+    fetchMock.get(IDENTITY_ORIGIN).intercept({ path: "/auth/identity/participant-final/display-name", method: "PATCH" }).reply(200, (opts) => {
+      authorization = (opts.headers as Record<string, unknown>).authorization;
+      displayName = (JSON.parse(String(opts.body)) as { displayName?: string }).displayName;
+      return { participantId: "participant-final", displayName: "Confirmed Name" };
+    });
+    const response = await createApp().fetch(new Request(`${BASE}/auth/identity/participant-final/display-name`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ displayName: "Confirmed Name" }),
+    }), bindings);
+    expect(response.status).toBe(200);
+    expect(authorization).toBe(`Bearer ${token}`);
+    expect(displayName).toBe("Confirmed Name");
+    expect((await readJson(response)).displayName).toBe("Confirmed Name");
   });
 });

@@ -1,7 +1,7 @@
 import type { ActiveRunsResponse, Cart, CheckoutAccepted, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
 import { identities, EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
-import { getActiveParticipant, participantHeaders } from "./participant";
+import { getActiveParticipant, participantHeaders, setActiveParticipant } from "./participant";
 import { clearSession, sessionHeaders } from "./auth";
 import { getActiveStore } from "./active-store";
 import { clearCartId, clearRunId, getStoredCartId, getStoredRunId, recordCartId, recordRunId } from "./cart-state";
@@ -28,18 +28,18 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,
     // A live session rides as Bearer alongside the participant headers — the
     // edge prefers a valid session, the headers remain the dev/demo path.
-    headers: { "content-type": "application/json", ...sessionHeaders(), ...participantHeaders(), ...(init?.headers ?? {}) },
+    headers: { "content-type": "application/json", ...authorization, ...participantHeaders(), ...(init?.headers ?? {}) },
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const code = String(body.error ?? "unknown");
-    if (response.status === 401 && (code === "session-expired" || code === "session-invalid")) {
-      // The server killed the cached session — drop it so screens fall back
-      // to the "sign in again" state via the session listeners.
+    if (response.status === 401 && authorization.authorization) {
+      // Any authenticated 401 kills the cached session, regardless of error code.
       void clearSession();
     }
     throw new ApiError(response.status, code, String(body.message ?? response.statusText));
@@ -97,10 +97,12 @@ export async function onboardParticipant(input: {
   idDocumentType: "bvn" | "nin";
   idDocument: string;
   market: string;
+  /** Reused only when a previous attempt returned a pending participant. */
+  participantId?: string;
 }): Promise<ParticipantRecorded> {
   const body = await command<ParticipantRecorded>({
     type: "participant.onboarded",
-    participantId: newId("participant"),
+    participantId: input.participantId ?? newId("participant"),
     ...input,
   });
   return body;
@@ -116,6 +118,7 @@ export async function joinMarket(market: string): Promise<void> {
     participantId: participant.id,
     role: participant.role,
   });
+  await setActiveParticipant({ ...participant, markets: [...new Set([...participant.markets, market])] });
 }
 
 /** The zone registry, including each market's live authenticated seller count. */
@@ -286,6 +289,17 @@ export async function checkout(
 /* ------------------------------------------------------------------ */
 /* Seller                                                              */
 /* ------------------------------------------------------------------ */
+
+/** Recover the authenticated seller's owned store after reinstall or cache loss. */
+export async function getOwnedStore(): Promise<Store | null> {
+  try {
+    const body = await request<{ store: Store }>(`/markets/${encodeURIComponent(getActiveMarket())}/store`);
+    return body.store;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
 
 /**
  * Register the device's store when joining the market (GLOSSARY: Store). The
@@ -465,13 +479,15 @@ export async function fileDispute(
  */
 export async function uploadCapture(localUri: string, runId?: string): Promise<{ ref: string; url: string }> {
   const blob = await (await fetch(localUri)).blob();
+  const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}/captures`, {
     method: "POST",
-    headers: { "content-type": blob.type || "image/jpeg", ...sessionHeaders(), ...participantHeaders(), ...(runId ? { "x-run-id": runId } : {}) },
+    headers: { "content-type": blob.type || "image/jpeg", ...authorization, ...participantHeaders(), ...(runId ? { "x-run-id": runId } : {}) },
     body: blob,
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
+    if (response.status === 401 && authorization.authorization) void clearSession();
     throw new ApiError(response.status, String(body.error ?? "unknown"), String(body.message ?? "capture upload failed"));
   }
   return { ref: String(body.ref), url: `${EDGE_URL}${String(body.url)}` };

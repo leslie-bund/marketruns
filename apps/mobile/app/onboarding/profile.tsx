@@ -16,10 +16,11 @@ export default function OnboardingProfile() {
   const [market, setMarket] = useState("Balogun");
 
   const proceed = () => {
-    if (!name.trim()) return;
+    const registeredMarket = markets.data?.find((entry) => entry.id === market);
+    if (!name.trim() || !registeredMarket) return;
     router.push({
       pathname: "/onboarding/kyc",
-      params: { role: role ?? "buyer", displayName: name.trim(), market },
+      params: { role: role ?? "buyer", displayName: name.trim(), market: registeredMarket.id },
     });
   };
 

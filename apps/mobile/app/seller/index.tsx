@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import { Link, router } from "expo-router";
 import { Text, View, Pressable} from "react-native";
-import { identities, useActiveMarket, useActiveParticipant, useActiveStore } from "../../src/api";
+import { getOwnedStore, identities, setActiveStore, useActiveMarket, useActiveParticipant, useActiveStore } from "../../src/api";
 import { PayoutAccountCard, useOpenIntents, useSellerBadges, useSellerProducts } from "../../src/features/seller";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
 
@@ -12,17 +13,37 @@ export default function SellerHome() {
   const mine = useSellerProducts(store?.name);
   const badges = useSellerBadges(store);
   const open = intents.data?.filter((intent) => intent.status === "open") ?? [];
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryAttempt, setRecoveryAttempt] = useState(0);
 
-  if (!loading && store === null) {
+  useEffect(() => {
+    if (loading || store || !participant) return;
+    let active = true;
+    setRecovering(true);
+    setRecoveryError(null);
+    void getOwnedStore()
+      .then(async (owned) => { if (owned) await setActiveStore(owned); })
+      .catch((error) => { if (active) setRecoveryError(error instanceof Error ? error.message : String(error)); })
+      .finally(() => { if (active) setRecovering(false); });
+    return () => { active = false; };
+  }, [loading, store, participant?.id, market, recoveryAttempt]);
+
+  if (!loading && recovering && store === null) {
+    return <Page eyebrow="SELLER" title="Finding your store"><Card><Text style={s.body}>Checking for an owned store in {market}…</Text></Card></Page>;
+  }
+
+  if (!loading && !recovering && store === null) {
     return (
       <Page eyebrow="SELLER" title="Join your market">
         <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}>
-          <Pill active>NO STORE ON THIS DEVICE</Pill>
+          <Pill active>NO OWNED STORE</Pill>
           <Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Create your store to start trading.</Text>
           <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
             Pick the shop items you supply — they decide which buyer intents reach you.
           </Text>
         </Card>
+        {recoveryError ? <Card><Text style={s.body}>Store recovery failed: {recoveryError}</Text><Button title="Retry recovery" secondary onPress={() => setRecoveryAttempt((value) => value + 1)} /></Card> : null}
         <Link href="/seller/join" asChild><Button title={`Join ${market}`} /></Link>
       </Page>
     );

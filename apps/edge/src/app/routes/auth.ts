@@ -86,9 +86,13 @@ async function proxyIdentity(
   const target = new URL(url.pathname + url.search, base);
   let upstream: Response;
   const hasBody = c.req.method !== "GET" && c.req.method !== "HEAD";
+  const authorization = c.req.header("authorization");
   const headers = options?.forwardInboundHeaders
     ? correlationHeaders(c, forwardableHeaders(c.req.raw.headers))
-    : correlationHeaders(c, { "content-type": c.req.header("content-type") ?? "application/json" });
+    : correlationHeaders(c, {
+        "content-type": c.req.header("content-type") ?? "application/json",
+        ...(authorization ? { authorization } : {}),
+      });
   const internalToken = c.env.IDENTITY_INTERNAL_TOKEN;
   if (internalToken && isInternalRoute(url.pathname, c.req.method)) {
     headers.set("x-identity-internal", internalToken);

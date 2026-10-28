@@ -7,7 +7,7 @@ import type {
 import { EDGE_URL, identities } from "./config";
 import { ApiError } from "./client";
 import { getActiveParticipant, participantHeaders } from "./participant";
-import { sessionHeaders } from "./auth";
+import { clearSession, sessionHeaders } from "./auth";
 
 /**
  * Payments client — the app side of the payments worker's collection/payout
@@ -30,12 +30,14 @@ import { sessionHeaders } from "./auth";
  */
 
 async function paymentsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...sessionHeaders(), ...participantHeaders(), ...(init?.headers ?? {}) },
+    headers: { "content-type": "application/json", ...authorization, ...participantHeaders(), ...(init?.headers ?? {}) },
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
+    if (response.status === 401 && authorization.authorization) void clearSession();
     throw new ApiError(response.status, String(body.error ?? "unknown"), String(body.message ?? response.statusText));
   }
   return body as T;

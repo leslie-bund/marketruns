@@ -15,8 +15,8 @@ export default function JoinMarket() {
   const vocabulary = usePoll(listVocabulary, 30000);
   const market = useActiveMarket();
   const { participant } = useActiveParticipant();
-  const [name, setName] = useState("Amina's Fresh Store");
-  const [exchangePoint, setExchangePoint] = useState(`${market} Market, Stall B14`);
+  const [name, setName] = useState("");
+  const [exchangePoint, setExchangePoint] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [custom, setCustom] = useState("");
   const [busy, setBusy] = useState(false);

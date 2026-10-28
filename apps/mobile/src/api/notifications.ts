@@ -7,17 +7,21 @@ import {
   type NotificationMarkReadResponse,
 } from "@market-runs/proto";
 import { EDGE_URL } from "./config";
-import { getSession, sessionHeaders } from "./auth";
+import { clearSession, getSession, sessionHeaders } from "./auth";
 import { participantHeaders } from "./participant";
 import { ApiError } from "./client";
 
 async function notificationRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...sessionHeaders(), ...participantHeaders(), ...(init?.headers ?? {}) },
+    headers: { "content-type": "application/json", ...authorization, ...participantHeaders(), ...(init?.headers ?? {}) },
   });
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new ApiError(response.status, String(body.error ?? "unknown"), String(body.message ?? response.statusText));
+  if (!response.ok) {
+    if (response.status === 401 && authorization.authorization) void clearSession();
+    throw new ApiError(response.status, String(body.error ?? "unknown"), String(body.message ?? response.statusText));
+  }
   return body as T;
 }
 
