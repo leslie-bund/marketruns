@@ -24,6 +24,7 @@ export default function HandoffScreen() {
   const runnerId = participant?.id ?? identities.runner.id;
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(true);
+  const [scanProblem, setScanProblem] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const camera = useRef<CameraView>(null);
@@ -35,17 +36,30 @@ export default function HandoffScreen() {
   const freshPhoto = Boolean(handoff?.photoCaptureRef && verified && handoff.photoCapturedAt != null && handoff.photoCapturedAt >= (handoff.scannedAt ?? 0));
 
   const fail = (label: string) => (error: unknown) => Alert.alert(label, error instanceof Error ? error.message : String(error));
+  const retryScan = () => {
+    setScanProblem(null);
+    setCode("");
+    setScanning(true);
+  };
   const verify = async (challenge: string) => {
     if (!run.run || busy) return;
     setBusy(true);
+    setScanProblem(null);
     try {
       await scanChallenge(run.run.id, handoffId, challenge);
       setScanning(false);
       run.refresh();
       if (delivery) Alert.alert("Code verified", "Take a new photo now, then explicitly confirm the receiver's handoff.");
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 409 && error.code === "photo-required")) fail("Verification failed")(error);
-      else { setScanning(false); run.refresh(); }
+      if (error instanceof ApiError && error.status === 409 && error.code === "photo-required") {
+        setScanning(false);
+        run.refresh();
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        setScanProblem(message);
+        setScanning(false);
+        Alert.alert("Verification failed", `${message} You can retry.`);
+      }
     } finally { setBusy(false); }
   };
 
@@ -53,7 +67,7 @@ export default function HandoffScreen() {
     if (!scanning || !run.run) return;
     const payload = parseHandoffPayload(data);
     if (!payload || payload.runId !== run.run.id || payload.handoffId !== handoffId) {
-      Alert.alert("Wrong QR", "This is not the server-issued QR for the current handoff.");
+      setScanProblem("This is not the server-issued QR for the current handoff.");
       setScanning(false);
       return;
     }
@@ -111,9 +125,10 @@ export default function HandoffScreen() {
         <Button title={busy ? "Verifying…" : "Verify delivery code"} onPress={() => code.length === 6 ? void verify(code) : Alert.alert("Enter all 6 digits")} />
       </Section> : null}
 
-      {!verified ? <Section title="Or scan buyer/seller QR">
-        {!permission ? <Text style={s.muted}>Checking camera permission…</Text> : !permission.granted ? <><Text style={s.body}>Camera access is used only for handoff QR scanning and evidence capture.</Text><Button title="Allow camera" onPress={requestPermission} /></> : (
-          <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} barcodeScannerSettings={{ barcodeTypes: ["qr"] }} onBarcodeScanned={scanning ? onScan : undefined} /></View>
+      {!verified ? <Section title={delivery ? "Or scan the receiver's QR" : "Scan the seller's QR"}>
+        {scanProblem ? <Card><Text style={s.body}>{scanProblem}</Text></Card> : null}
+        {busy ? <Text style={s.muted}>Verifying code…</Text> : !scanning ? <Button title="Retry scan" onPress={retryScan} /> : !permission ? <Text style={s.muted}>Checking camera permission…</Text> : !permission.granted ? <><Text style={s.body}>Camera access is used only for handoff QR scanning and evidence capture.</Text><Button title="Allow camera" onPress={requestPermission} /></> : (
+          <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} barcodeScannerSettings={{ barcodeTypes: ["qr"] }} onBarcodeScanned={onScan} /></View>
         )}
       </Section> : null}
 
@@ -127,7 +142,7 @@ export default function HandoffScreen() {
         run.run?.receiver?.kind === "designated" ? <Button title={busy ? "Confirming…" : "Confirm designated receiver received it"} onPress={confirm} /> : <Card><Text style={s.body}>The buyer must now tap “Confirm I received the delivery” in their Run view.</Text></Card>
       ) : null}
       {handoff?.status === "confirmed" ? <Pill active>Handoff complete · evidence locked</Pill> : null}
-      {handoff?.status !== "confirmed" && verified ? <Button title="Scan / enter another code" secondary onPress={() => setScanning(true)} /> : null}
+      {handoff?.status !== "confirmed" && verified ? <Button title="Scan / enter another code" secondary onPress={retryScan} /> : null}
     </Page>
   );
 }

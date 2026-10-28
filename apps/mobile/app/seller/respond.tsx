@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Alert, Image, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
-import { offerProduct, uploadCapture } from "../../src/api";
+import { captureUrl, offerProduct, participantHeaders, sessionHeaders, uploadCapture } from "../../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, colors } from "../../src/ui";
 
 export default function Respond() {
@@ -76,7 +76,11 @@ export default function Respond() {
         {photo ? (
           <>
             <View style={{ height: 200, overflow: "hidden", borderRadius: 18 }}>
-              <Image source={{ uri: photo.url }} style={{ flex: 1 }} resizeMode="cover" />
+              <Image
+                source={{ uri: captureUrl(photo.ref), headers: { ...sessionHeaders(), ...participantHeaders() } }}
+                style={{ flex: 1 }}
+                resizeMode="cover"
+              />
             </View>
             <Button title="Retake" secondary onPress={() => setPhoto(null)} />
           </>

@@ -44,6 +44,21 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
   app.get("/api/session", (c) => c.json({ operator: c.get("opsIdentity") }));
   app.get("/api/audit", listOpsAudit);
 
+  // Evidence links stay inside the ops authorization boundary. Participant
+  // capture reads intentionally do not recognize an ops token or browser session.
+  app.get("/api/captures/:key{.+}", async (c) => {
+    const key = decodeURIComponent(c.req.param("key"));
+    if (!key.startsWith("captures/")) return errorResponse(404, "not-found", "unknown capture");
+    const object = await c.env.ARCHIVE_BUCKET.get(key);
+    if (!object) return errorResponse(404, "not-found", "unknown capture");
+    return new Response(object.body, {
+      headers: {
+        "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+        "cache-control": "private, no-store",
+      },
+    });
+  });
+
   app.get("/api/overview", async (c) => {
     const market = c.req.query("market") ?? "Balogun";
     if (!market) return errorResponse(400, "invalid-query", "bad market");

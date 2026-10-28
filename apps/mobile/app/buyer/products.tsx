@@ -1,6 +1,6 @@
-import { Link } from "expo-router";
+import { Link, useLocalSearchParams } from "expo-router";
 import { Image, Text, View } from "react-native";
-import { captureUrl } from "../../src/api";
+import { participantHeaders, productCaptureUrl, sessionHeaders } from "../../src/api";
 import { useBuyerProducts, useMyIntents } from "../../src/features/buyer";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
 
@@ -9,8 +9,10 @@ function minutesLeft(expiresAt: number): number {
 }
 
 export default function Products() {
+  const { intentId, productId } = useLocalSearchParams<{ intentId?: string; productId?: string }>();
   const intents = useMyIntents();
-  const { products } = useBuyerProducts(intents.data, 3000);
+  const { products: discovered } = useBuyerProducts(intents.data, 3000);
+  const products = discovered.filter((product) => (!intentId || product.intentId === intentId) && (!productId || product.id === productId));
 
   return (
     <Page eyebrow="RESPONSES TO YOUR INTENTS" title="Products">
@@ -24,7 +26,7 @@ export default function Products() {
             <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
               {product.photoCaptureRef ? (
                 <Image
-                  source={{ uri: captureUrl(product.photoCaptureRef) }}
+                  source={{ uri: productCaptureUrl(product.id), headers: { ...sessionHeaders(), ...participantHeaders() } }}
                   style={{ width: 56, height: 56, borderRadius: 12, backgroundColor: "#E5EBE3" }}
                 />
               ) : null}

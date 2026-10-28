@@ -7,6 +7,13 @@ import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/u
 export default function SellerNegotiations() {
   const { store } = useActiveStore();
   const mine = useSellerProducts(store?.name);
+  const openProduct = (product: (typeof mine.products)[number]) => {
+    if (product.status === "accepted") {
+      router.push({ pathname: "/seller/trip", params: { exchangePoint: product.exchangePoint } });
+    } else {
+      router.push({ pathname: "/seller/negotiation", params: { productId: product.id } });
+    }
+  };
 
   return (
     <Page eyebrow="PRIVATE · ONE BUYER PER PRODUCT" title="Negotiations">
@@ -15,14 +22,7 @@ export default function SellerNegotiations() {
           <Card><Text style={s.muted}>No live products — respond to an intent to open a thread.</Text></Card>
         ) : null}
         {mine.products.map((product) => (
-          <Pressable
-            key={product.id}
-            onPress={() =>
-              product.status === "accepted"
-                ? router.push({ pathname: "/seller/trip", params: { exchangePoint: product.exchangePoint } })
-                : router.push({ pathname: "/seller/negotiation", params: { productId: product.id } })
-            }
-          >
+          <Pressable key={product.id} onPress={() => openProduct(product)}>
             <Card>
               <View style={s.row}>
                 <View>
@@ -33,7 +33,7 @@ export default function SellerNegotiations() {
                 </View>
                 <Pill active>{money(product.priceKobo)}</Pill>
               </View>
-              {product.status === "accepted" ? <Button title="View trip" secondary /> : null}
+              {product.status === "accepted" ? <Button title="View trip" secondary onPress={() => openProduct(product)} /> : null}
             </Card>
           </Pressable>
         ))}

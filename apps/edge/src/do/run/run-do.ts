@@ -154,6 +154,9 @@ export class RunDO extends DurableObject<Env> {
     if (request.method === "GET" && path === "/delivery-code") {
       return internalErrorGuard(() => this.deliveryCode());
     }
+    if (request.method === "POST" && path === "/delivery-code/rotate") {
+      return internalErrorGuard(() => this.rotateDeliveryCode());
+    }
     if (request.method === "GET" && path === "/handoff/challenge") {
       const handoffId = url.searchParams.get("handoffId") ?? "";
       return internalErrorGuard(() => this.handoffChallenge(handoffId));
@@ -626,6 +629,30 @@ export class RunDO extends DurableObject<Env> {
     if (this.now() >= expiresAt) return refusal("code-expired", "delivery code has expired");
     const issued = await issueDeliveryCode(this.env, run.id, issuedAt);
     return jsonResponse({ code: issued.code, expiresAt });
+  }
+
+  /** Rotate a delayed run's buyer-only secret; old codes and failed-attempt locks are invalidated together. */
+  private async rotateDeliveryCode(): Promise<Response> {
+    const run = this.requireRun();
+    if (run instanceof Response) return run;
+    if (run.status === "closed" || run.status === "aborted" || run.status === "delivered") {
+      return conflict(`run is ${run.status}; delivery code cannot be rotated`);
+    }
+    if (this.state.handoffs.some((handoff) => handoff.type === "delivery" && handoff.codeVerifiedAt !== undefined)) {
+      return conflict("delivery code was already verified and cannot be rotated");
+    }
+    const issuedAt = this.now();
+    const issued = await issueDeliveryCode(this.env, run.id, issuedAt);
+    this.state.deliveryCodeIssuedAt = issuedAt;
+    this.state.deliveryCodeExpiresAt = issuedAt + DELIVERY_CODE_TTL_MS;
+    this.state.deliveryCodeHash = issued.hash;
+    for (const handoff of this.state.handoffs) {
+      if (handoff.type === "delivery") handoff.failedCodeAttempts = 0;
+    }
+    run.handoffs = this.wireHandoffs();
+    await this.ctx.storage.put(STATE_KEY, this.state);
+    broadcast(this.ctx, this.env, { type: "run.updated", run: this.wireRun() });
+    return jsonResponse({ code: issued.code, expiresAt: this.state.deliveryCodeExpiresAt });
   }
 
   private async handoffChallenge(handoffId: string): Promise<Response> {

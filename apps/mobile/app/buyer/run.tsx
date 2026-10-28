@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { DISPUTE_WINDOW_MS } from "@market-runs/domain";
-import { ApiError, confirmHandoff, fileDispute, getDeliveryCode } from "../../src/api";
+import { ApiError, confirmHandoff, fileDispute, getDeliveryCode, rotateDeliveryCode } from "../../src/api";
 import { buyerCanConfirm, deliveryReceiverLabel, HandoffPhoto, HandoffQrCard, RunMap, StopList, TripSummaryCard, useRun } from "../../src/features/run";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
 
@@ -21,7 +21,10 @@ export default function BuyerRun() {
   const [now, setNow] = useState(Date.now());
   const [detail, setDetail] = useState("");
   const [busy, setBusy] = useState(false);
-  const [deliveryCode, setDeliveryCode] = useState<string | undefined>();
+  const [deliveryCode, setDeliveryCode] = useState<{ code: string; expiresAt: number } | null>(null);
+  const [deliveryCodeLoading, setDeliveryCodeLoading] = useState(false);
+  const [deliveryCodeError, setDeliveryCodeError] = useState<string | null>(null);
+  const [deliveryCodeExpired, setDeliveryCodeExpired] = useState(false);
   const [filed, setFiled] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,14 +34,44 @@ export default function BuyerRun() {
 
   const current = run.run;
   const currentId = current?.id ?? null;
+  const loadDeliveryCode = useCallback(async () => {
+    if (!currentId) return;
+    setDeliveryCodeLoading(true);
+    setDeliveryCodeError(null);
+    setDeliveryCodeExpired(false);
+    try {
+      setDeliveryCode(await getDeliveryCode(currentId));
+    } catch (error) {
+      setDeliveryCode(null);
+      setDeliveryCodeExpired(error instanceof ApiError && error.code === "code-expired");
+      setDeliveryCodeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDeliveryCodeLoading(false);
+    }
+  }, [currentId]);
+  const reissueDeliveryCode = async () => {
+    if (!currentId) return;
+    setDeliveryCodeLoading(true);
+    setDeliveryCodeError(null);
+    try {
+      setDeliveryCode(await rotateDeliveryCode(currentId));
+      setDeliveryCodeExpired(false);
+    } catch (error) {
+      setDeliveryCodeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDeliveryCodeLoading(false);
+    }
+  };
 
-  // A different run (new checkout) starts with a clean dispute state.
+  // A different run (new checkout) starts with a clean dispute and code state.
   useEffect(() => {
     setFiled(null);
     setDetail("");
-    setDeliveryCode(undefined);
-    if (currentId) void getDeliveryCode(currentId).then((result) => setDeliveryCode(result.code)).catch(() => setDeliveryCode(undefined));
-  }, [currentId]);
+    setDeliveryCode(null);
+    setDeliveryCodeError(null);
+    setDeliveryCodeExpired(false);
+    void loadDeliveryCode();
+  }, [currentId, loadDeliveryCode]);
 
   if (current === null) {
     return (
@@ -91,6 +124,12 @@ export default function BuyerRun() {
     );
   };
 
+  const codeExpired = deliveryCodeExpired || (deliveryCode !== null && now >= deliveryCode.expiresAt);
+  const visibleCode = deliveryCode !== null && !codeExpired ? deliveryCode : null;
+  const deliveryPrompt = current.receiver?.kind === "designated"
+    ? `Give this code to the runner at delivery to ${current.receiver.name}, your designated receiver`
+    : "Give this code to the runner only when they deliver your items";
+
   return (
     <Page eyebrow={`${current.market.toUpperCase()} · ${run.live ? "LIVE" : "POLLING"}`} title="Track your Run">
       <RunMap run={current} />
@@ -103,11 +142,17 @@ export default function BuyerRun() {
       <Section title={`Delivery to ${deliveryReceiverLabel(current)}`}>
         <Card>
           <Text style={s.body}>{current.delivery.kind === "plus-code" ? `Your location · ${current.delivery.plusCode}` : `Muster Point · ${current.delivery.name}`}</Text>
-          {deliveryCode ? <Text style={{ color: colors.ink, fontWeight: "900", fontSize: 28, letterSpacing: 6 }}>Code · {deliveryCode}</Text> : null}
+          {deliveryCodeLoading ? <Text style={s.muted}>{visibleCode ? "Issuing a new delivery code…" : "Loading secure delivery code…"}</Text> : null}
+          {visibleCode ? <>
+            <Text style={{ color: colors.ink, fontWeight: "900", fontSize: 28, letterSpacing: 6 }}>Code · {visibleCode.code}</Text>
+            <Text style={s.muted}>Expires {new Date(visibleCode.expiresAt).toLocaleString()}</Text>
+          </> : null}
+          {codeExpired ? <Text style={s.body}>This delivery code has expired. Issue a new code for this delayed run; the old code will stop working.</Text> : deliveryCodeError ? <Text style={s.body}>Could not load the delivery code: {deliveryCodeError}</Text> : null}
+          {!deliveryCodeLoading && (codeExpired || deliveryCodeError) ? <Button title={codeExpired ? "Issue new delivery code" : "Retry loading delivery code"} onPress={codeExpired ? () => void reissueDeliveryCode() : () => void loadDeliveryCode()} /> : null}
         </Card>
         {myHandoffs.map((handoff) => (
           <View key={handoff.id}>
-            <HandoffQrCard handoff={handoff} runId={current.id} challenge={deliveryCode} now={now} prompt="Share this code only with your buyer or designated receiver" />
+            <HandoffQrCard handoff={handoff} runId={current.id} challenge={visibleCode?.code} now={now} prompt={deliveryPrompt} />
             {buyerCanConfirm(handoff, current) ? <Button title={busy ? "Confirming…" : "Confirm I received the delivery"} onPress={() => {
               setBusy(true);
               void confirmHandoff(current.id, handoff.id).then(run.refresh).catch((error: unknown) => Alert.alert("Confirmation failed", error instanceof Error ? error.message : String(error))).finally(() => setBusy(false));

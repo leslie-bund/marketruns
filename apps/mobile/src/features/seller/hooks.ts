@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Intent, Product, Store } from "@market-runs/proto";
+import type { Intent, Product, Run, Store } from "@market-runs/proto";
 import { useActiveMarket, useActiveStore } from "../../api";
 import { discoverIntentsForItems } from "../../api";
 import { useLiveEvents, usePoll } from "../../api";
@@ -69,6 +69,12 @@ export function useSellerProducts(storeName: string | undefined, intervalMs = 40
  * finds the run carrying this store's products; the run refreshes instantly
  * over its WebSocket scope.
  */
+export function sellerTripBadge(run: Run | null, store: Store | null): number {
+  return run?.handoffs.filter(
+    (handoff) => handoff.exchangePoint === store?.exchangePoint && handoff.status === "pending" && handoff.scannedAt == null,
+  ).length ?? 0;
+}
+
 export function useSellerBadges(store: Store | null): { demand: number; threads: number; trip: number } {
   const intents = useOpenIntents(store?.shopItems ?? null, store?.id);
   const mine = useSellerProducts(store?.name);
@@ -76,9 +82,5 @@ export function useSellerBadges(store: Store | null): { demand: number; threads:
 
   const demand = intents.data?.filter((intent) => intent.status === "open").length ?? 0;
   const threads = mine.products.filter((product) => product.status === "negotiating").length;
-  const trip =
-    run.run?.handoffs.filter(
-      (handoff) => handoff.exchangePoint === store?.exchangePoint && handoff.status === "pending",
-    ).length ?? 0;
-  return { demand, threads, trip };
+  return { demand, threads, trip: sellerTripBadge(run.run, store) };
 }
