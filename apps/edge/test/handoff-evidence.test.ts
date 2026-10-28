@@ -74,6 +74,46 @@ describe("capture ownership and run evidence reads", () => {
   });
 });
 
+describe("product and ops evidence reads", () => {
+  it("authorizes product reads and media to the buyer and selling owner, with an ops-only proxy", async () => {
+    const market = "product-evidence";
+    const buyerId = "buyer:product-evidence";
+    const productId = "product-product-evidence";
+    const intentId = "intent-product-evidence";
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 8, 7]);
+    const uploaded = await upload(bytes, identity(SELLER, "seller"));
+    expect((await postJson("/command", {
+      type: "intent.posted", intentId, shopItem: "Tomatoes", quantity: 2, unit: "kg",
+      priceBand: { minKobo: 120_000, maxKobo: 180_000 }, market,
+    }, identity(buyerId, "buyer"))).status).toBe(200);
+    expect((await postJson(`/markets/${market}/offers`, {
+      productId, intentId, market, shopItem: "Tomatoes", quantity: 2, unit: "kg",
+      priceKobo: 165_000, sellerName: "Amina's Fresh Store", sellerParticipantId: SELLER,
+      exchangePoint: `${market} Market, Stall B14`, photoCaptureRef: uploaded.ref,
+    })).status).toBe(200);
+
+    expect((await getJson(`/products/${productId}`)).status).toBe(401);
+    expect((await getJson(`/products/${productId}`, identity("buyer:stranger", "buyer"))).status).toBe(403);
+    expect((await getJson(`/products/${productId}`, identity(buyerId, "buyer"))).status).toBe(200);
+    expect((await getJson(`/products/${productId}`, identity(SELLER, "seller"))).status).toBe(200);
+
+    const mediaPath = `/products/${productId}/capture`;
+    expect((await getJson(mediaPath)).status).toBe(401);
+    expect((await getJson(mediaPath, identity("buyer:stranger", "buyer"))).status).toBe(403);
+    for (const headers of [identity(buyerId, "buyer"), identity(SELLER, "seller")]) {
+      const media = await getJson(mediaPath, headers);
+      expect(media.status).toBe(200);
+      expect(media.headers.get("cache-control")).toBe("private, no-store");
+      expect(new Uint8Array(await media.arrayBuffer())).toEqual(bytes);
+    }
+
+    const opsPath = String(uploaded.url).replace("/captures/", "/ops/api/captures/");
+    const opsMedia = await getJson(opsPath);
+    expect(opsMedia.status).toBe(200);
+    expect(new Uint8Array(await opsMedia.arrayBuffer())).toEqual(bytes);
+  });
+});
+
 describe("signed pickup handoffs", () => {
   it("rejects bare ids and forged payloads, uses server timestamps, and freezes confirmed evidence", async () => {
     const buyerId = "buyer:pickup-security";
@@ -199,6 +239,24 @@ describe("verified code plus fresh-photo receiver flow", () => {
     expect(expired.status).toBe(409);
     expect((await readJson(expired)).error).toBe("code-expired");
     expect((await getJson(`/runs/${runId}/delivery-code`, identity(buyerId, "buyer"))).status).toBe(409);
+  });
+
+  it("lets only the buyer rotate an expired delayed-run code and invalidates the old code", async () => {
+    const buyerId = "buyer:code-rotation";
+    const { runId, code } = await driveToRun("code-rotation", buyerId, { kind: "designated", name: "Receiver" });
+    await completePickup(runId, "code-rotation");
+    await openDelivery(runId, buyerId, "rotation-delivery", "Receiver");
+    await shiftTime(runStub(runId), DELIVERY_CODE_TTL_MS + 1000);
+    expect((await postJson(`/runs/${runId}/delivery-code/rotate`, {}, identity(RUNNER, "runner"))).status).toBe(403);
+    expect((await postJson(`/runs/${runId}/delivery-code/rotate`, {}, identity("buyer:stranger", "buyer"))).status).toBe(403);
+    const rotated = await postJson(`/runs/${runId}/delivery-code/rotate`, {}, identity(buyerId, "buyer"));
+    expect(rotated.status).toBe(200);
+    const next = DeliveryCodeSchema.parse(await readJson(rotated));
+    expect(next.code).not.toBe(code);
+    expect(next.expiresAt).toBeGreaterThan(Date.now());
+    expect((await scan(runId, "rotation-delivery", code)).status).toBe(409);
+    expect((await scan(runId, "rotation-delivery", next.code)).status).toBe(200);
+    expect((await postJson(`/runs/${runId}/delivery-code/rotate`, {}, identity(buyerId, "buyer"))).status).toBe(409);
   });
 
   it("never silently auto-confirms delivery even with code and photo", async () => {

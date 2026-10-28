@@ -1,2 +1,2 @@
-export { useOpenIntents, useSellerProducts, useSellerBadges } from "./hooks";
+export { useOpenIntents, useSellerProducts, useSellerBadges, sellerTripBadge } from "./hooks";
 export { PayoutAccountCard } from "./payout";

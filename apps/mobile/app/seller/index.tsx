@@ -1,7 +1,8 @@
 import { Link, router } from "expo-router";
 import { Text, View, Pressable} from "react-native";
 import { identities, useActiveMarket, useActiveParticipant, useActiveStore } from "../../src/api";
-import { PayoutAccountCard, useOpenIntents, useSellerBadges, useSellerProducts } from "../../src/features/seller";
+import { PayoutAccountCard, sellerTripBadge, useOpenIntents, useSellerProducts } from "../../src/features/seller";
+import { useSellerRun } from "../../src/features/run";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
 
 export default function SellerHome() {
@@ -10,8 +11,15 @@ export default function SellerHome() {
   const market = useActiveMarket();
   const intents = useOpenIntents(store?.shopItems ?? null, store?.id);
   const mine = useSellerProducts(store?.name);
-  const badges = useSellerBadges(store);
+  const run = useSellerRun(store);
   const open = intents.data?.filter((intent) => intent.status === "open") ?? [];
+  // Reuse this screen's intent/product subscriptions instead of mounting the
+  // tab-badge hook's duplicate discovery sockets and pollers.
+  const badges = {
+    demand: open.length,
+    threads: mine.products.filter((product) => product.status === "negotiating").length,
+    trip: sellerTripBadge(run.run, store),
+  };
 
   if (!loading && store === null) {
     return (

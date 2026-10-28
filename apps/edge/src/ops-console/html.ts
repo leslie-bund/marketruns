@@ -1204,7 +1204,7 @@ function captureLink(ref) {
   if (ref.indexOf(prefix) === 0) {
     var key = ref.slice(prefix.length);
     var name = key.split("/").pop();
-    return '<a href="/captures/' + encodeURIComponent(key) + '" target="_blank" rel="noopener">' + esc(name) + "</a>";
+    return '<a href="/ops/api/captures/' + encodeURIComponent(key) + '" target="_blank" rel="noopener">' + esc(name) + "</a>";
   }
   return "<span>" + esc(ref) + "</span>";
 }

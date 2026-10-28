@@ -411,6 +411,15 @@ export async function getDeliveryCode(runId: string): Promise<{ code: string; ex
   return request(`/runs/${encodeURIComponent(runId)}/delivery-code`, { headers: demoBuyerHeaders() });
 }
 
+/** Buyer-only rotation for a delayed delivery; the previous code stops working immediately. */
+export async function rotateDeliveryCode(runId: string): Promise<{ code: string; expiresAt: number }> {
+  return request(`/runs/${encodeURIComponent(runId)}/delivery-code/rotate`, {
+    method: "POST",
+    headers: demoBuyerHeaders(),
+    body: "{}",
+  });
+}
+
 export async function getHandoffChallenge(runId: string, handoffId: string): Promise<string> {
   const body = await request<{ challenge: string }>(`/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoffId)}/challenge`, { headers: demoSellerHeaders() });
   return body.challenge;
@@ -480,4 +489,9 @@ export async function uploadCapture(localUri: string, runId?: string): Promise<{
 /** Read-back URL for a stored capture reference (r2://archive/captures/x.jpg → edge URL). */
 export function captureUrl(ref: string): string {
   return `${EDGE_URL}/captures/${encodeURIComponent(ref.replace(/^r2:\/\/archive\//, ""))}`;
+}
+
+/** Product media is authorized against the product's buyer or selling owner, never public by capture key. */
+export function productCaptureUrl(productId: string): string {
+  return `${EDGE_URL}/products/${encodeURIComponent(productId)}/capture`;
 }

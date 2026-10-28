@@ -110,7 +110,7 @@ export default function RunnerHome() {
         }), "Could not initiate delivery handoff")} />
       ) : null}
       {deliveryHandoff?.status === "pending" ? (
-        <Pill active>{deliveryHandoff.awaitingPhoto ? "Delivery handoff waiting on your photo evidence — no photo, no confirm" : `Delivery handoff open — scan the buyer's QR at ${deliveryLabel}, then photograph the exchange`}</Pill>
+        <Pill active>{deliveryHandoff.awaitingPhoto ? "Delivery handoff waiting on your photo evidence — no photo, no confirm" : `Delivery handoff open — ask the buyer or designated receiver for their 6-digit code at ${deliveryLabel}, then photograph the exchange`}</Pill>
       ) : null}
       <Button title={gps.sharing ? "Live location ON — stop sharing" : "Share live location (GPS)"} secondary={gps.sharing} onPress={() => setGpsWanted((wanted) => !wanted)} />
       {gps.error ? <Text style={s.muted}>{gps.error}</Text> : null}

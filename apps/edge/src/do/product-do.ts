@@ -112,8 +112,14 @@ export class ProductDO extends DurableObject<Env> {
     if (request.method === "GET" && path === "/") {
       const product = this.state.product;
       if (!product || this.state.retired) return notFound("product is retired or unknown — products are never resurrected");
-      // The read path carries the negotiation thread so clients can render history.
-      const event: ServerEvent = { type: "product.offered", product, priceHistory: this.state.priceHistory };
+      // The authorized read path carries the buyer attribution for the edge's
+      // owner check plus the negotiation thread; it is never a public product read.
+      const event: ServerEvent = {
+        type: "product.offered",
+        product,
+        priceHistory: this.state.priceHistory,
+        ...(this.state.intentBuyerId ? { buyerId: this.state.intentBuyerId } : {}),
+      };
       return jsonResponse(event);
     }
     return notFound(`ProductDO route not found: ${request.method} ${path}`);

@@ -5,10 +5,16 @@ function unique(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0 && value !== "anonymous" && value !== "buyer:anonymous" && value !== "platform"))];
 }
 
-function runLink(runId: string, recipientId: string, buyerId?: string | null, runnerId?: string | null): string {
-  if (recipientId === buyerId) return `/buyer/run?runId=${encodeURIComponent(runId)}`;
-  if (recipientId === runnerId) return `/runner?runId=${encodeURIComponent(runId)}`;
-  return `/seller/trip?runId=${encodeURIComponent(runId)}`;
+function runLink(runId: string, recipientId: string, buyerId?: string | null, runnerId?: string | null, handoffId?: string): string {
+  const run = `runId=${encodeURIComponent(runId)}`;
+  const handoff = handoffId ? `&handoffId=${encodeURIComponent(handoffId)}` : "";
+  if (recipientId === buyerId) return `/buyer/run?${run}${handoff}`;
+  if (recipientId === runnerId) return handoffId ? `/runner/handoff?${run}${handoff}` : `/runner?${run}`;
+  return `/seller/trip?${run}${handoff}`;
+}
+
+function archivedRunLink(runId: string, status: string): string {
+  return `/receipt?runId=${encodeURIComponent(runId)}&status=${encodeURIComponent(status)}`;
 }
 
 function draftsFor(
@@ -67,7 +73,7 @@ export function mapServerEvent(sourceEventId: string, occurredAt: number, input:
       return draftsFor(sourceEventId, occurredAt, event, [event.buyerId], {
         title: "New offer received",
         body: `${event.product.sellerName} offered ${event.product.shopItem}.`,
-        deepLink: `/buyer/products?intentId=${encodeURIComponent(event.product.intentId)}`,
+        deepLink: `/buyer/products?intentId=${encodeURIComponent(event.product.intentId)}&productId=${encodeURIComponent(event.product.id)}`,
         data: { productId: event.product.id, intentId: event.product.intentId },
       });
     case "negotiation.price-adjusted": {
@@ -75,9 +81,10 @@ export function mapServerEvent(sourceEventId: string, occurredAt: number, input:
       return draftsFor(sourceEventId, occurredAt, event, [recipient], {
         title: "Offer price updated",
         body: `The ${event.by} adjusted the offer price.`,
-        deepLink: `/buyer/negotiation?productId=${encodeURIComponent(event.productId)}`,
         data: { productId: event.productId },
-      });
+      }, (recipientId) => recipientId === event.sellerParticipantId
+        ? `/seller/negotiation?productId=${encodeURIComponent(event.productId)}`
+        : `/buyer/negotiation?productId=${encodeURIComponent(event.productId)}`);
     }
     case "product.retired":
       return draftsFor(sourceEventId, occurredAt, event, [event.buyerId], {
@@ -132,7 +139,7 @@ export function mapServerEvent(sourceEventId: string, occurredAt: number, input:
         title: event.type === "handoff.confirmed" ? "Handoff confirmed" : "Handoff started",
         body: event.type === "handoff.confirmed" ? "A handoff was confirmed with photo evidence." : "A handoff is awaiting confirmation.",
         data: { runId: event.runId, handoffId: event.handoffId },
-      }, (recipientId) => runLink(event.runId, recipientId, event.buyerId, event.runnerId));
+      }, (recipientId) => runLink(event.runId, recipientId, event.buyerId, event.runnerId, event.handoffId));
     }
     case "settlement.released": {
       const recipients = unique([event.buyerId, event.runnerId, ...event.sellers.map((seller) => seller.sellerId)]);
@@ -142,7 +149,7 @@ export function mapServerEvent(sourceEventId: string, occurredAt: number, input:
         body: `The ${event.mode} settlement for your run has been released for dispatch.`,
         data: { runId: event.runId, mode: event.mode },
         email: "receipt",
-      }, (recipientId) => runLink(event.runId, recipientId, event.buyerId, event.runnerId));
+      }, () => archivedRunLink(event.runId, "closed"));
     }
     case "run.retired": {
       const recipients = unique([event.buyerId, event.runnerId, ...event.settlementLegs.map((seller) => seller.sellerId)]);
@@ -150,7 +157,7 @@ export function mapServerEvent(sourceEventId: string, occurredAt: number, input:
         title: event.dispute ? "Disputed run closed" : "Run closed",
         body: `The run closed as ${event.status}.`,
         data: { runId: event.runId, status: event.status },
-      }, (recipientId) => runLink(event.runId, recipientId, event.buyerId, event.runnerId));
+      }, () => archivedRunLink(event.runId, event.status));
     }
     case "store.recorded":
       return draftsFor(sourceEventId, occurredAt, event, [event.store.sellerParticipantId], {

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import { validateLocationWithinFence } from "@market-runs/domain";
-import { LocationFixSchema } from "@market-runs/proto";
+import { LocationFixSchema, ProductOfferedSchema, type ProductOffered } from "@market-runs/proto";
 import type { Env } from "../../config/env.js";
 import { errorResponse, expectCommand, parseClientCommand, refusal } from "../../do/runtime/index.js";
 import { LEGACY_REGISTRY_NAME, participantObjectName } from "../../do/participant-do.js";
@@ -52,8 +52,47 @@ function runStub(c: Context<{ Bindings: Env }>): DurableObjectStub {
   return c.env.RUN_DO.get(c.env.RUN_DO.idFromName(decodeURIComponent(c.req.param("runId") ?? "")));
 }
 
+type ProductAccess = { body: ProductOffered } | { denied: Response };
+
+/** Only the intent's buyer or the selling owner may read a product and its media. */
+async function productForParticipant(c: Context<{ Bindings: Env }>): Promise<ProductAccess> {
+  const who = c.get("participant");
+  if (who.source === "anonymous" || who.source === "unauthenticated") {
+    return { denied: errorResponse(401, "unauthorized", "a participant identity is required to read products") };
+  }
+  const response = await productStub(c).fetch(new Request("http://do/", { headers: correlationHeaders(c) }));
+  if (!response.ok) return { denied: response };
+  const parsed = ProductOfferedSchema.safeParse(await response.json());
+  if (!parsed.success) return { denied: errorResponse(502, "bad-product-response", "product read returned an invalid projection") };
+  const allowed = who.role === "buyer"
+    ? parsed.data.buyerId === who.id
+    : who.role === "seller" && parsed.data.product.sellerParticipantId === who.id;
+  return allowed ? { body: parsed.data } : { denied: errorResponse(403, "forbidden", "product is visible only to its buyer and selling owner") };
+}
+
 export function productsRoute(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
+  app.get("/:productId/capture", async (c) => {
+    const access = await productForParticipant(c);
+    if ("denied" in access) return access.denied;
+    const ref = access.body.product.photoCaptureRef;
+    const prefix = "r2://archive/captures/";
+    if (!ref?.startsWith(prefix)) return errorResponse(404, "not-found", "product has no capture");
+    const object = await c.env.ARCHIVE_BUCKET.get(ref.slice("r2://archive/".length));
+    if (!object) return errorResponse(404, "not-found", "unknown capture");
+    return new Response(object.body, {
+      headers: {
+        "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+        "cache-control": "private, no-store",
+      },
+    });
+  });
+  app.get("/:productId", async (c) => {
+    const access = await productForParticipant(c);
+    if ("denied" in access) return access.denied;
+    if (c.req.header("upgrade")?.toLowerCase() === "websocket") return forwardTo(c, productStub(c), "/");
+    return c.json(access.body);
+  });
   app.all("/:productId", (c) => forwardTo(c, productStub(c), "/"));
   app.all("/:productId/*", (c) => forwardTo(c, productStub(c), scopeRest(c, 2)));
   return app;
@@ -122,6 +161,13 @@ export function runsRoute(): Hono<{ Bindings: Env }> {
     const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), who);
     if ("denied" in access) return access.denied;
     return runStub(c).fetch(new Request("http://do/delivery-code", { headers: correlationHeaders(c) }));
+  });
+  app.post("/:runId/delivery-code/rotate", async (c) => {
+    const who = c.get("participant");
+    if (who.role !== "buyer") return errorResponse(403, "forbidden", "only the buyer may rotate the delivery code");
+    const access = await runForParticipant(c.env, decodeURIComponent(c.req.param("runId")), who);
+    if ("denied" in access) return access.denied;
+    return runStub(c).fetch(internalPost("/delivery-code/rotate", {}, correlationHeaders(c, resolvedHeaders(c))));
   });
   app.get("/:runId/handoffs/:handoffId/challenge", async (c) => {
     const who = c.get("participant");
