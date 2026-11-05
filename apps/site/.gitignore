@@ -1,3 +1,5 @@
 .data/
+.next/
 .vercel
 .env*
+*.tsbuildinfo

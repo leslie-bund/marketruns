@@ -12,6 +12,7 @@ export interface SiteEnv {
   databasePath: string;
   nodeEnv: string;
   resendApiKey: string | undefined;
+  resendAudienceId?: string | undefined;
   resendWebhookSecret: string | undefined;
   /** From address for outgoing mail (magic links), on the Resend-verified domain. */
   resendFromEmail: string | undefined;
@@ -54,7 +55,7 @@ export function loadEnv(): SiteEnv {
   const nodeEnv = process.env.NODE_ENV ?? "development";
   const port = Number(argValue("--port") ?? argValue("-p") ?? process.env.PORT ?? 8795);
   const host = argValue("--host") ?? process.env.HOST ?? "0.0.0.0";
-  const databasePath = process.env.SITE_DATABASE_PATH ?? new URL("../.data/site.db", import.meta.url).pathname;
+  const databasePath = process.env.SITE_DATABASE_PATH ?? join(process.cwd(), ".data", "site.db");
   const configured = process.env.BETTER_AUTH_SECRET ?? "";
   const authSecret =
     configured.length >= 32
@@ -80,6 +81,7 @@ export function loadEnv(): SiteEnv {
     databasePath,
     nodeEnv,
     resendApiKey: process.env.RESEND_API_KEY || undefined,
+    resendAudienceId: process.env.RESEND_AUDIENCE_ID || undefined,
     resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET || undefined,
     resendFromEmail: process.env.RESEND_FROM_EMAIL || undefined,
     inboundEmail: process.env.INBOUND_EMAIL_ADDRESS ?? "hello@market-runs.example",

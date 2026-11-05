@@ -1,9 +1,9 @@
 import { betterAuth } from "better-auth";
 import { magicLink } from "better-auth/plugins";
 import { getMigrations } from "better-auth/db/migration";
-import { isAdminEmail, type SiteEnv } from "./env.js";
-import { sendMagicLinkEmail } from "./mailer.js";
-import type { SiteDatabase } from "./db.js";
+import { isAdminEmail, type SiteEnv } from "./env";
+import { sendMagicLinkEmail } from "./mailer";
+import type { SiteDatabase } from "./db";
 
 export type SiteAuth = ReturnType<typeof createAuth>;
 

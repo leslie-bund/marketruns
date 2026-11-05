@@ -31,6 +31,7 @@ apps/identity/     # passwordless auth worker (port 8789): proof-bound hybrid fa
 apps/biometrics/   # private Dockerized Node ONNX service (port 8791): ArcFace embeddings + MiniFASNet liveness; identity-only bearer access, no mobile route or capture persistence (ADR-0027)
 apps/payments/     # payment worker (port 8790): consumes payment.dispatch-requested, executes settlement legs via PaymentDispatcher with per-leg idempotency + DLQ, /ops Payments tab (ADR-0023); FlutterwaveDispatcher in src/flutterwave/ behind PAYMENT_DISPATCHER (ADR-0024); buyer collection — /payments/charges/confirm server-side verify, payment_holds, the refund rail (payment.refund-requested; card via provider, non-card → refund-manual), seller payout accounts (resolve-then-save, DB-first recipients) (ADR-0025)
 apps/mobile/       # Expo app — src/api (wire client barrel + cart-state store for edge-issued ids), src/features/{buyer,seller,runner,run} (role hooks + the shared run/trip surface, barrels), src/ui (theme/styles/layout/controls/format barrel)
+apps/site/         # Next.js brand site + early-access registration (Drizzle/Postgres, Resend Audience + React Email confirmation); Better Auth admin portal with visitor registrations and threaded rich-text inbox replies; Resend inbound webhook (POST /api/webhooks/resend, svix-verified) receives the Smile ID lead-pipeline email
 infra/             # wrangler configs, Drizzle migrations, dev-all.sh one-command demo stack + seed-demo.mjs (dev-servers.sh underneath), OSRM deploy
 ```
 

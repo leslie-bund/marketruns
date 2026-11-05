@@ -103,5 +103,9 @@ _Avoid_: online status (as a guarantee)
 
 ### Communication
 
+**Lead**:
+A prospective buyer, seller, runner, or partner who has explicitly asked to receive Market Runs launch and onboarding updates. A lead is not a marketplace participant and has not completed identity verification.
+_Avoid_: user, account, Smile ID applicant
+
 **Notification**:
 A durable in-app record of a marketplace, payment, security, or service event, optionally delivered in real time while connected or by transactional email. A delivery attempt does not replace the durable record or guarantee receipt.

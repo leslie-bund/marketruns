@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Webhook } from "svix";
 import { z } from "zod";
-import type { SiteEnv } from "../env.js";
-import { insertInboundEmail, type SiteDatabase } from "../db.js";
+import type { SiteEnv } from "../env";
+import { insertInboundEmail, type SiteDatabase } from "../db";
 
 /**
  * Resend inbound email (`email.received`) payload. Bodies are not inlined in the event;
