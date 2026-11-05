@@ -10,7 +10,11 @@ export function SignOutButton({ className = "text-button" }: Readonly<{ classNam
     setPending(true);
     setFailed(false);
     try {
-      const response = await fetch("/api/auth/sign-out", { method: "POST" });
+      const response = await fetch("/api/auth/sign-out", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
       if (!response.ok) throw new Error("Sign out failed");
       window.location.assign("/");
     } catch {
