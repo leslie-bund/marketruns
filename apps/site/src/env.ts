@@ -75,7 +75,7 @@ export function loadEnv(): SiteEnv {
   return {
     port,
     host,
-    baseUrl: (process.env.SITE_BASE_URL ?? `http://localhost:${port}`).replace(/\/$/, ""),
+    baseUrl: (process.env.SITE_BASE_URL ?? `http://localhost:${port}`).trim().replace(/\/+$/, ""),
     authSecret,
     databaseUrl: process.env.SITE_DATABASE_URL || undefined,
     databasePath,
