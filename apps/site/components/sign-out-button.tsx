@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { authClient } from "../src/auth-client";
 
 export function SignOutButton({ className = "text-button" }: Readonly<{ className?: string | undefined }>) {
   const [pending, setPending] = useState(false);
@@ -10,12 +11,8 @@ export function SignOutButton({ className = "text-button" }: Readonly<{ classNam
     setPending(true);
     setFailed(false);
     try {
-      const response = await fetch("/api/auth/sign-out", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      if (!response.ok) throw new Error("Sign out failed");
+      const { error } = await authClient.signOut();
+      if (error) throw new Error("Sign out failed");
       window.location.assign("/");
     } catch {
       setPending(false);

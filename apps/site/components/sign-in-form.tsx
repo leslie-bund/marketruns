@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { authClient } from "../src/auth-client";
 
 export function SignInForm() {
   const [message, setMessage] = useState("");
@@ -11,17 +12,19 @@ export function SignInForm() {
     event.preventDefault();
     setPending(true);
     setMessage("");
-    const email = new FormData(event.currentTarget).get("email");
-    const response = await fetch("/api/auth/sign-in/magic-link", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, callbackURL: "/admin/inbox" }),
-    });
-    setPending(false);
-    setSent(response.ok);
-    setMessage(response.ok
-      ? "If that address is an admin, a sign-in link is on its way. Check your inbox."
-      : "We could not start sign-in. Please try again.");
+    const email = String(new FormData(event.currentTarget).get("email") ?? "");
+    try {
+      const { error } = await authClient.signIn.magicLink({ email, callbackURL: "/admin/inbox" });
+      setSent(!error);
+      setMessage(!error
+        ? "If that address is an admin, a sign-in link is on its way. Check your inbox."
+        : "We could not start sign-in. Please try again.");
+    } catch {
+      setSent(false);
+      setMessage("We could not start sign-in. Please try again.");
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
