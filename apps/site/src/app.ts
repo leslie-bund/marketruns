@@ -38,14 +38,14 @@ export function buildApp(env: SiteEnv, site: SiteDatabase): SiteApp {
   }
 
   app.get("/", async (c) => {
-    const user = await currentUser(c.req.raw.headers);
+    const user = await currentUser(new Headers(c.req.header()));
     return c.html(landingPage(env, user !== null && isAdminEmail(env, user.email)));
   });
   app.get("/sign-in", (c) => c.html(signInPage(env)));
   app.get("/sign-up", (c) => c.redirect("/sign-in"));
 
   app.get("/inbox", async (c) => {
-    const user = await currentUser(c.req.raw.headers);
+    const user = await currentUser(new Headers(c.req.header()));
     if (!user) return c.redirect("/sign-in");
     if (!isAdminEmail(env, user.email)) return c.html(forbiddenPage(env, user.email), 403);
     return c.html(inboxPage(env, await listInboundEmails(site), user.email));
