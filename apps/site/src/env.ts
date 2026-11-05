@@ -51,12 +51,16 @@ export function isAdminEmail(env: SiteEnv, email: string): boolean {
   return env.adminEmails.includes(email.trim().toLowerCase());
 }
 
+function envValue(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
+}
+
 export function loadEnv(): SiteEnv {
-  const nodeEnv = process.env.NODE_ENV ?? "development";
-  const port = Number(argValue("--port") ?? argValue("-p") ?? process.env.PORT ?? 8795);
-  const host = argValue("--host") ?? process.env.HOST ?? "0.0.0.0";
-  const databasePath = process.env.SITE_DATABASE_PATH ?? join(process.cwd(), ".data", "site.db");
-  const configured = process.env.BETTER_AUTH_SECRET ?? "";
+  const nodeEnv = envValue("NODE_ENV") ?? "development";
+  const port = Number(argValue("--port") ?? argValue("-p") ?? envValue("PORT") ?? 8795);
+  const host = argValue("--host") ?? envValue("HOST") ?? "0.0.0.0";
+  const databasePath = envValue("SITE_DATABASE_PATH") ?? join(process.cwd(), ".data", "site.db");
+  const configured = envValue("BETTER_AUTH_SECRET") ?? "";
   const authSecret =
     configured.length >= 32
       ? configured
@@ -65,7 +69,7 @@ export function loadEnv(): SiteEnv {
             throw new Error("BETTER_AUTH_SECRET must be a random secret of at least 32 characters");
           })()
         : devSecret(databasePath);
-  const adminEmails = (process.env.ADMIN_EMAILS ?? "")
+  const adminEmails = (envValue("ADMIN_EMAILS") ?? "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter((e) => e.length > 0);
@@ -75,16 +79,16 @@ export function loadEnv(): SiteEnv {
   return {
     port,
     host,
-    baseUrl: (process.env.SITE_BASE_URL ?? `http://localhost:${port}`).trim().replace(/\/+$/, ""),
+    baseUrl: (envValue("SITE_BASE_URL") ?? `http://localhost:${port}`).replace(/\/+$/, ""),
     authSecret,
-    databaseUrl: process.env.SITE_DATABASE_URL || undefined,
+    databaseUrl: envValue("SITE_DATABASE_URL"),
     databasePath,
     nodeEnv,
-    resendApiKey: process.env.RESEND_API_KEY || undefined,
-    resendAudienceId: process.env.RESEND_AUDIENCE_ID || undefined,
-    resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET || undefined,
-    resendFromEmail: process.env.RESEND_FROM_EMAIL || undefined,
-    inboundEmail: process.env.INBOUND_EMAIL_ADDRESS ?? "hello@market-runs.example",
+    resendApiKey: envValue("RESEND_API_KEY"),
+    resendAudienceId: envValue("RESEND_AUDIENCE_ID"),
+    resendWebhookSecret: envValue("RESEND_WEBHOOK_SECRET"),
+    resendFromEmail: envValue("RESEND_FROM_EMAIL"),
+    inboundEmail: envValue("INBOUND_EMAIL_ADDRESS") ?? "hello@market-runs.example",
     adminEmails,
   };
 }
