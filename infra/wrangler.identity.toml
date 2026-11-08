@@ -64,6 +64,10 @@ SMILEID_ENV = "sandbox"
 binding = "IDENTITY_CAPTURES"
 bucket_name = "market-runs-identity-captures-staging"
 
+[[env.staging.services]]
+binding = "EDGE_SERVICE"
+service = "market-runs-edge-staging"
+
 [[env.staging.hyperdrive]]
 binding = "HYPERDRIVE"
 id = "2469ee7722ac4e328386a7279795628a"

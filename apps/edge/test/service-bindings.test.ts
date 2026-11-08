@@ -28,6 +28,31 @@ describe("deployed Worker service bindings", () => {
     expect(seenToken).toBe(env.PAYMENTS_INTERNAL_TOKEN);
   });
 
+  it("uses the identity binding for onboarding proof issuance", async () => {
+    const participantId = `binding-onboard-${Date.now()}`;
+    let seenUrl = "";
+    const service = {
+      fetch: async (input: RequestInfo | URL) => {
+        seenUrl = String(input);
+        return Response.json({
+          participantId, enrollmentProof: "p".repeat(64), kycStatus: "preverified",
+          displayName: "Binding Test", verifiedLegalName: null, expiresAt: Date.now() + 60_000,
+        });
+      },
+    } as unknown as Fetcher;
+    const env = withEnv({ IDENTITY_SERVICE: service, IDENTITY_INTERNAL_TOKEN: "test-service-token", ID_DOCUMENT_HMAC_SECRET: "test-document-secret" });
+    const response = await createApp().fetch(new Request("http://edge/command", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        type: "participant.onboarded", participantId, role: "buyer", displayName: "Binding Test",
+        email: "binding@example.com", consentAt: Date.now(), consentVersion: "kyc-onboarding-v1",
+        idDocumentType: "bvn", idDocument: "12345678901", market: "Balogun",
+      }),
+    }), env);
+    expect(response.status).toBe(200);
+    expect((await response.json()).enrollmentProof).toBe("p".repeat(64));
+    expect(seenUrl).toBe(`${env.IDENTITY_URL}/auth/enrollment-proof`);
+  });
+
   it("uses the identity binding for provider callbacks", async () => {
     let seenUrl = "";
     const service = {

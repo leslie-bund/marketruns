@@ -7,7 +7,7 @@ services:
     name: market-runs-biometrics-staging
     runtime: image
     image:
-      url: docker.io/leslie-bund/market-runs-biometrics:staging
+      url: docker.io/lesbundu/market-runs-biometrics:staging
     plan: 1c-2g
     healthCheckPath: /healthz
     envVars:

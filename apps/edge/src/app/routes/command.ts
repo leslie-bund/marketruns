@@ -29,7 +29,8 @@ async function enrollmentProof(env: Env, recorded: ParticipantRecorded): Promise
   const { participant } = recorded;
   if (participant.kycStatus !== "verified" && participant.kycStatus !== "preverified") return "";
   try {
-    const response = await fetch(`${env.IDENTITY_URL ?? "http://localhost:8789"}/auth/enrollment-proof`, {
+    const target = new URL("/auth/enrollment-proof", env.IDENTITY_URL ?? "http://localhost:8789");
+    const init = {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -41,7 +42,8 @@ async function enrollmentProof(env: Env, recorded: ParticipantRecorded): Promise
         displayName: participant.displayName,
         kycStatus: participant.kycStatus,
       }),
-    });
+    };
+    const response = env.IDENTITY_SERVICE ? await env.IDENTITY_SERVICE.fetch(target, init) : await fetch(target, init);
     if (!response.ok) return errorResponse(502, "identity-unavailable", "identity enrollment proof could not be issued");
     const parsed = EnrollmentProofResponseSchema.safeParse(await response.json());
     if (!parsed.success || parsed.data.participantId !== participant.id) {

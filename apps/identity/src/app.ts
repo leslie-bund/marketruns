@@ -57,12 +57,14 @@ export async function reconcileCoreKyc(env: Env, input: IdentityKycRequest): Pro
     if (isDeployed(env)) throw new Error("IDENTITY_INTERNAL_TOKEN is required for core KYC reconciliation");
     return;
   }
-  const response = await fetch(new URL("/internal/identity/kyc", env.EDGE_URL), {
+  const target = new URL("/internal/identity/kyc", env.EDGE_URL);
+  const init = {
     method: "POST",
     headers: { "content-type": "application/json", "x-identity-internal": env.IDENTITY_INTERNAL_TOKEN },
     body: JSON.stringify(input),
-    redirect: "error",
-  });
+    redirect: "error" as const,
+  };
+  const response = env.EDGE_SERVICE ? await env.EDGE_SERVICE.fetch(target, init) : await fetch(target, init);
   if (!response.ok) throw new Error(`core KYC reconciliation failed with status ${response.status}`);
   const recorded = IdentityKycResponseSchema.safeParse(await response.json().catch(() => null));
   if (!recorded.success || recorded.data.participant.id !== input.participantId || recorded.data.participant.kycStatus !== "verified") {

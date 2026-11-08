@@ -7,6 +7,8 @@ export interface Env extends DatabaseEnv {
   IDENTITY_INTERNAL_TOKEN?: string;
   /** Public edge origin for identity → core KYC reconciliation. */
   EDGE_URL?: string;
+  /** Native deployed Worker-to-Worker edge path; URL remains the local fallback. */
+  EDGE_SERVICE?: Fetcher;
   FACE_VERIFIER?: string;
   FACE_MATCH_THRESHOLD?: string;
   BIOMETRICS_SERVICE_URL?: string;
