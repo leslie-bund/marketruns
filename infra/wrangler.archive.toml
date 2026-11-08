@@ -54,3 +54,7 @@ queue = "payment-dispatch-staging"
 [[env.staging.r2_buckets]]
 binding = "ARCHIVE_BUCKET"
 bucket_name = "market-runs-archive-staging"
+
+[[env.staging.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "2469ee7722ac4e328386a7279795628a"

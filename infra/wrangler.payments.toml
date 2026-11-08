@@ -42,7 +42,7 @@ PAYMENT_DISPATCHER = "stub"
 name = "market-runs-payments-staging"
 
 [env.staging.vars]
-PAYMENT_DISPATCHER = "stub"
+PAYMENT_DISPATCHER = "flutterwave"
 
 [[env.staging.queues.consumers]]
 queue = "payment-dispatch-staging"
@@ -58,3 +58,7 @@ queue = "notification-events-staging"
 [[env.staging.queues.producers]]
 binding = "PAYMENT_QUEUE"
 queue = "payment-dispatch-staging"
+
+[[env.staging.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "2469ee7722ac4e328386a7279795628a"

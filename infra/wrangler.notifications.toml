@@ -25,8 +25,9 @@ EDGE_URL = "http://localhost:8787"
 name = "market-runs-notifications-staging"
 
 [env.staging.vars]
+RESEND_FROM_EMAIL = "Market Runs <hello@updates.marketruns.org>"
 NOTIFICATIONS_ENV = "staging"
-EDGE_URL = "https://edge-staging.example.com"
+EDGE_URL = "https://market-runs-edge-staging.leslie-bund.workers.dev"
 
 [[env.staging.queues.consumers]]
 queue = "notification-events-staging"
@@ -34,3 +35,7 @@ max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 5
 dead_letter_queue = "notification-events-dlq-staging"
+
+[[env.staging.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "2469ee7722ac4e328386a7279795628a"

@@ -52,6 +52,10 @@ bucket_name = "market-runs-identity-captures"
 name = "market-runs-identity-staging"
 
 [env.staging.vars]
+EDGE_URL = "https://market-runs-edge-staging.leslie-bund.workers.dev"
+BIOMETRICS_SERVICE_URL = "https://market-runs-biometrics-staging.onrender.com"
+SMILEID_PRIVACY_NOTICE_URL = "https://www.marketruns.org/privacy"
+SMILEID_CALLBACK_URL = "https://market-runs-edge-staging.leslie-bund.workers.dev/callbacks/smileid"
 IDENTITY_ENV = "staging"
 FACE_VERIFIER = "hybrid"
 SMILEID_ENV = "sandbox"
@@ -59,3 +63,7 @@ SMILEID_ENV = "sandbox"
 [[env.staging.r2_buckets]]
 binding = "IDENTITY_CAPTURES"
 bucket_name = "market-runs-identity-captures-staging"
+
+[[env.staging.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "2469ee7722ac4e328386a7279795628a"
