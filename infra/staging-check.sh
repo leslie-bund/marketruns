@@ -64,7 +64,7 @@ if [[ "${FACE_VERIFIER:-}" == hybrid ]]; then
   )
 fi
 if [[ "${PAYMENT_DISPATCHER:-}" == flutterwave ]]; then
-  REQUIRED_STATE+=(FLUTTERWAVE_PUBLIC_KEY GOOGLE_MAPS_API_KEY)
+  REQUIRED_STATE+=(FLUTTERWAVE_PUBLIC_KEY GOOGLE_MAPS_API_KEY RECONCILE_PROVIDER_SINCE)
 fi
 for name in "${REQUIRED_STATE[@]}"; do
   if [[ -z "${!name:-}" ]]; then
@@ -246,8 +246,16 @@ fi
 
 REPORT=$(mktemp)
 trap 'rm -f "$REPORT"' EXIT
-if DATABASE_URL="$DATABASE_URL" FLUTTERWAVE_SECRET_KEY="$FLUTTERWAVE_SECRET_KEY" \
-  node infra/reconcile.mjs --json --market="$LAUNCH_MARKET" >"$REPORT" 2>/dev/null; then
+run_reconciliation() {
+  if [[ "$PAYMENT_DISPATCHER" == flutterwave ]]; then
+    DATABASE_URL="$DATABASE_URL" FLUTTERWAVE_SECRET_KEY="$FLUTTERWAVE_SECRET_KEY" \
+      node infra/reconcile.mjs --json --market="$LAUNCH_MARKET" --provider-since="$RECONCILE_PROVIDER_SINCE"
+  else
+    DATABASE_URL="$DATABASE_URL" FLUTTERWAVE_SECRET_KEY="$FLUTTERWAVE_SECRET_KEY" \
+      node infra/reconcile.mjs --json --market="$LAUNCH_MARKET"
+  fi
+}
+if run_reconciliation >"$REPORT" 2>/dev/null; then
   :
 else
   fail "reconciliation command"

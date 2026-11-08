@@ -2,13 +2,50 @@
   "expo": {
     "name": "Market Runs",
     "slug": "market-runs",
+    "owner": "leslie-bund",
     "scheme": "marketruns",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "plugins": ["expo-router", ["expo-camera", { "cameraPermission": "Market Runs uses the camera to scan Handoff QR challenges and capture evidence.", "microphonePermission": false }], ["expo-location", { "locationWhenInUseUsageDescription": "Market Runs uses your precise foreground location to verify runner presence, claims, pickups, and deliveries.", "isIosBackgroundLocationEnabled": false, "isAndroidBackgroundLocationEnabled": false }], "expo-secure-store", "expo-status-bar"],
-    "experiments": { "typedRoutes": true },
-    "ios": { "supportsTablet": true, "bundleIdentifier": "ng.marketruns.app" },
-    "android": { "edgeToEdgeEnabled": true, "package": "ng.marketruns.app", "permissions": ["CAMERA"] }
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Market Runs uses the camera to scan Handoff QR challenges and capture evidence.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUseUsageDescription": "Market Runs uses your precise foreground location to verify runner presence, claims, pickups, and deliveries.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      "expo-secure-store",
+      "expo-status-bar"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ng.marketruns.app"
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "package": "ng.marketruns.app",
+      "permissions": [
+        "CAMERA"
+      ]
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a86f12c4-ad45-4f26-87d1-d395e9457efc"
+      }
+    }
   }
 }

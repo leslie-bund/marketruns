@@ -317,6 +317,9 @@ cd "$REPO_ROOT" || fail_setup "Run from the market-runs repository."
 mkdir -p "$(dirname "$ENV_FILE")"
 chmod 700 "$(dirname "$ENV_FILE")" 2>/dev/null || true
 [[ ! -f "$ENV_FILE" ]] || chmod 600 "$ENV_FILE"
+if ! _existing RECONCILE_PROVIDER_SINCE >/dev/null; then
+  write_env RECONCILE_PROVIDER_SINCE "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+fi
 
 banner "Market Runs staging provisioning"
 

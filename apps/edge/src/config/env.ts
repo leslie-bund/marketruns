@@ -42,6 +42,10 @@ export interface Env {
   PAYMENTS_REQUIRED?: string;
   /** Identity service base URL for the /auth/* proxy (dev default: http://localhost:8789). */
   IDENTITY_URL?: string;
+  /** Native deployed Worker-to-Worker identity path; URL proxy remains the local fallback. */
+  IDENTITY_SERVICE?: Fetcher;
+  /** Native deployed Worker-to-Worker payments path; URL proxy remains the local fallback. */
+  PAYMENTS_SERVICE?: Fetcher;
   /**
    * HMAC-SHA256 secret for identity session tokens, SHARED with the identity
    * worker so the edge verifies sessions locally (no per-request round trip).

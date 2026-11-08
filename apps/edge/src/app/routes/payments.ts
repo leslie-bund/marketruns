@@ -103,12 +103,13 @@ async function proxyPayments(
     headers.set("x-participant-role", who.role);
   }
 
+  const init = {
+    method: c.req.method,
+    headers,
+    body: hasBody ? await c.req.raw.clone().arrayBuffer() : null,
+  };
   try {
-    upstream = await fetch(target, {
-      method: c.req.method,
-      headers,
-      body: hasBody ? await c.req.raw.clone().arrayBuffer() : null,
-    });
+    upstream = c.env.PAYMENTS_SERVICE ? await c.env.PAYMENTS_SERVICE.fetch(target, init) : await fetch(target, init);
   } catch {
     return errorResponse(503, "payments-unavailable", `payments service at ${base} did not respond`);
   }

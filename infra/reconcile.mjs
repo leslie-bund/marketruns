@@ -31,6 +31,7 @@
 
 import { createRequire } from "node:module";
 import { loadDevVars } from "./dev-vars.mjs";
+import { filterProviderRowsSince } from "./provider-baseline.mjs";
 
 loadDevVars();
 
@@ -57,6 +58,7 @@ function parseArgs(argv) {
     pendingMinutes: 30,
     heldHours: 24,
     maxAttempts: DEFAULT_MAX_ATTEMPTS,
+    providerSince: null,
     help: false,
   };
   for (const arg of argv) {
@@ -66,6 +68,14 @@ function parseArgs(argv) {
     else if (arg.startsWith("--pending-minutes=")) opts.pendingMinutes = intArg(arg, "--pending-minutes");
     else if (arg.startsWith("--held-hours=")) opts.heldHours = intArg(arg, "--held-hours");
     else if (arg.startsWith("--max-attempts=")) opts.maxAttempts = intArg(arg, "--max-attempts");
+    else if (arg.startsWith("--provider-since=")) {
+      const value = arg.slice("--provider-since=".length);
+      if (!Number.isFinite(Date.parse(value))) {
+        console.error(`--provider-since needs a valid ISO timestamp, got: ${arg}`);
+        process.exit(2);
+      }
+      opts.providerSince = new Date(value).toISOString();
+    }
     else {
       console.error(`unknown argument: ${arg} (see --help)`);
       process.exit(2);
@@ -93,6 +103,7 @@ Options:
   --market=NAME          scope all checks to one market (runs_archive.market_id / payment_dispatches.market)
   --pending-minutes=N    WARN on pending/sent/queued dispatches older than N minutes (default 30)
   --held-hours=N         WARN on holds still 'held' older than N hours (default 24)
+  --provider-since=ISO   exclude provider rows created before this deployment baseline
   --max-attempts=N       retryable 'failed' dispatch with attempts >= N is exhausted → FAIL (default 6 = queue max_retries 5 + 1);
                          a non-retryable failure is a FAIL immediately
 
@@ -543,6 +554,12 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
     return check;
   }
 
+  const transferBaseline = filterProviderRowsSince(transfers, opts.providerSince);
+  transfers = transferBaseline.rows;
+  const transactionBaseline = filterProviderRowsSince(transactions, opts.providerSince);
+  transactions = transactionBaseline.rows;
+  const providerBaselineExcluded = transferBaseline.excluded + transactionBaseline.excluded;
+
   const transferByReference = new Map();
   for (const t of transfers) {
     if (t.reference) transferByReference.set(bareReference(String(t.reference)), t);
@@ -647,6 +664,7 @@ async function checkVendor(sql, opts, dispatches, holds, secretKey) {
     dispatchesMatched: matched,
     stubSkipped,
     providerOrphans,
+    providerBaselineExcluded,
     transactionsFetched: transactions.length,
     holdsMatched,
   };
@@ -667,7 +685,7 @@ async function main() {
 
   const report = {
     generatedAt: new Date().toISOString(),
-    scope: { market: opts.market ?? "all" },
+    scope: { market: opts.market ?? "all", providerSince: opts.providerSince },
     thresholds: { pendingMinutes: opts.pendingMinutes, heldHours: opts.heldHours, maxAttempts: opts.maxAttempts },
     checks: [],
     ok: true,

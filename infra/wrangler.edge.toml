@@ -123,10 +123,15 @@ bucket_name = "market-runs-archive-staging"
 binding = "MARKET_CONFIG"
 id = "712212413f85478f997b7d736ec21d61"
 
-# If migrating a proxy to a Cloudflare Service binding, declare it under the
-# same environment, e.g. [[env.staging.services]] with binding/service names,
-# and update that proxy seam to fetch the binding. A services declaration alone
-# does not replace these URL reads.
+# Native Worker-to-Worker paths. Public URLs stay configured for mobile and
+# provider callbacks; local development continues using the URL proxies.
+[[env.staging.services]]
+binding = "IDENTITY_SERVICE"
+service = "market-runs-identity-staging"
+
+[[env.staging.services]]
+binding = "PAYMENTS_SERVICE"
+service = "market-runs-payments-staging"
 
 [[env.staging.hyperdrive]]
 binding = "HYPERDRIVE"

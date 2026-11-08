@@ -97,12 +97,13 @@ async function proxyIdentity(
   if (internalToken && isInternalRoute(url.pathname, c.req.method)) {
     headers.set("x-identity-internal", internalToken);
   }
+  const init = {
+    method: c.req.method,
+    headers,
+    body: hasBody ? await c.req.raw.clone().arrayBuffer() : null,
+  };
   try {
-    upstream = await fetch(target, {
-      method: c.req.method,
-      headers,
-      body: hasBody ? await c.req.raw.clone().arrayBuffer() : null,
-    });
+    upstream = c.env.IDENTITY_SERVICE ? await c.env.IDENTITY_SERVICE.fetch(target, init) : await fetch(target, init);
   } catch {
     return errorResponse(503, "identity-unavailable", `identity service at ${base} did not respond`);
   }

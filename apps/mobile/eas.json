@@ -5,6 +5,7 @@
   "build": {
     "staging": {
       "distribution": "internal",
+      "environment": "preview",
       "env": {
         "APP_ENV": "staging"
       },
