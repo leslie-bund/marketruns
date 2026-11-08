@@ -1,0 +1,23 @@
+# Bearer auth protects biometric endpoints; Render's HTTPS endpoint may still be
+# publicly routable, and GET /healthz is intentionally unauthenticated.
+# The image contains the existing ArcFace/MiniFASNet weights at /models.
+# Build and push the image from apps/biometrics; no persistent disk is required.
+services:
+  - type: web
+    name: market-runs-biometrics-staging
+    runtime: image
+    image:
+      url: ghcr.io/leslie-bund/market-runs-biometrics:staging
+    plan: 1c-2g
+    healthCheckPath: /healthz
+    envVars:
+      - key: BIND_ADDRESS
+        value: 0.0.0.0
+      - key: FACE_MODEL_PATH
+        value: /models/w600k_r50.onnx
+      - key: LIVENESS_MODEL_PATH
+        value: /models/MiniFASNetV2.onnx
+      - key: LIVENESS_THRESHOLD
+        value: "0.8"
+      - key: BIOMETRICS_INTERNAL_TOKEN
+        sync: false

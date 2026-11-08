@@ -79,6 +79,14 @@ describe("flutterwaveConfig", () => {
     expect(() => flutterwaveConfig({})).toThrow(message);
     expect(() => flutterwaveConfig({ FLUTTERWAVE_SECRET_KEY: "   " })).toThrow(message);
   });
+
+  it("rejects the test accelerator with a live key", () => {
+    expect(() => flutterwaveConfig({
+      FLUTTERWAVE_SECRET_KEY: "FLWSECK-live-key",
+      FLUTTERWAVE_TEST_MODE: "1",
+    })).toThrow(/FLUTTERWAVE_TEST_MODE requires an FLWSECK_TEST- secret key/);
+    expect(flutterwaveConfig({ FLUTTERWAVE_SECRET_KEY: "FLWSECK-live-key" }).testMode).toBe(false);
+  });
 });
 
 describe("FlutterwaveDispatcher request mapping", () => {

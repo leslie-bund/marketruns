@@ -149,6 +149,25 @@ describe("payment dispatch consumer", () => {
     expect([...store.rows.values()].every((row) => row.status === "sent")).toBe(true);
     expect(message.acked).toBe(true);
   });
+
+  it.each([
+    ["run", { runId: "run:cart:Balogun:buyer:other" }],
+    ["recipient", { legs: [{ account: "seller" as const, partyId: "seller:attacker", amountKobo: 148_500, memo: "Seller settlement" }, ...sampleDispatchRequest().legs.slice(1)] }],
+    ["amount", { legs: [{ account: "seller" as const, partyId: "seller:amina", amountKobo: 1, memo: "Seller settlement" }, ...sampleDispatchRequest().legs.slice(1)] }],
+  ])("rejects an idempotency-key replay with a changed %s", async (_field, overrides) => {
+    const store = new InMemoryDispatchStore();
+    const dispatcher = new ScriptedDispatcher({});
+    const request = sampleDispatchRequest();
+    await handleDispatchRequested(store, dispatcher, new FakeMessage("m-1"), request);
+
+    const replay = new FakeMessage("m-2");
+    await expect(
+      handleDispatchRequested(store, dispatcher, replay, sampleDispatchRequest(overrides)),
+    ).rejects.toThrow(/idempotency.*conflict/i);
+
+    expect(dispatcher.calls).toHaveLength(3);
+    expect(replay.acked).toBe(false);
+  });
 });
 
 describe("retryDelaySeconds", () => {

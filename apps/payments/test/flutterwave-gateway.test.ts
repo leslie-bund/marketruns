@@ -109,11 +109,102 @@ describe("FlutterwaveGateway.refundCharge", () => {
     expect(failed.failureReason).toContain("already fully refunded");
   });
 
+  it.each([
+    ["network failure", "provider-unreachable"],
+    ["malformed envelope", "provider-response-unparseable"],
+    ["success without a refund id", "provider-response-missing-refund"],
+  ])("marks a %s indeterminate rather than definitely failed", async (scenario, reason) => {
+    const impl = scenario === "network failure"
+      ? async (): Promise<Response> => { throw new Error("socket reset"); }
+      : fetchMock([{
+          match: "https://api.flutterwave.com/v3/transactions/9049104/refund",
+          body: scenario === "malformed envelope" ? "not an envelope" : { status: "success", data: {} },
+        }]).impl;
+    const result = await new FlutterwaveGateway(CONFIG, impl).refundCharge("9049104", 100_000, "Buyer refund x");
+
+    expect(result.status).toBe("indeterminate");
+    expect(result.failureReason).toContain(reason);
+  });
+
   it("supportsRefund is card-only (non-card has no API rail)", () => {
     const gateway = new FlutterwaveGateway(CONFIG, fetchMock([]).impl);
     expect(gateway.supportsRefund("card")).toBe(true);
     expect(gateway.supportsRefund("bank_transfer")).toBe(false);
     expect(gateway.supportsRefund("ussd")).toBe(false);
+  });
+});
+
+describe("FlutterwaveGateway.reconcileRefund", () => {
+  const request = { providerTxId: "9049104", amountKobo: 100_000, comments: "Buyer refund x" };
+  const entry = (overrides: Record<string, unknown> = {}) => ({
+    id: 555,
+    transaction_id: 9049104,
+    amount_refunded: 1000,
+    status: "processing",
+    comment: "Buyer refund x",
+    flw_ref: "flw-ref-555",
+    created_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  });
+  const gatewayWith = (body: unknown) => {
+    const mock = fetchMock([{ match: "https://api.flutterwave.com/v3/refunds", body }]);
+    return { gateway: new FlutterwaveGateway(CONFIG, mock.impl), calls: mock.calls };
+  };
+
+  it("adopts one exact accepted refund without treating provider completed as final receipt", async () => {
+    const { gateway, calls } = gatewayWith({ status: "success", data: [entry({ status: "completed" })] });
+
+    await expect(gateway.reconcileRefund(request)).resolves.toEqual({
+      status: "found",
+      refund: { status: "processing", providerRef: `${REFUND_PROVIDER_REF_PREFIX}555` },
+    });
+    expect(calls[0]?.url).toBe("https://api.flutterwave.com/v3/refunds?id=9049104");
+    expect((calls[0]?.init?.headers as Record<string, string>).authorization).toBe("Bearer FLWSECK_TEST-fake");
+  });
+
+  it("rounds harmless provider decimal noise when matching an exact refund", async () => {
+    const { gateway } = gatewayWith({ status: "success", data: [entry({ amount_refunded: 1000.0000000001 })] });
+
+    await expect(gateway.reconcileRefund(request)).resolves.toEqual({
+      status: "found",
+      refund: { status: "processing", providerRef: `${REFUND_PROVIDER_REF_PREFIX}555` },
+    });
+  });
+
+  it("reports no accepted refund when the lookup is empty or has only failed candidates", async () => {
+    for (const data of [[], [entry({ status: "failed" })]]) {
+      const { gateway } = gatewayWith({ status: "success", data });
+      await expect(gateway.reconcileRefund(request)).resolves.toEqual({ status: "not-found" });
+    }
+  });
+
+  it.each([
+    ["malformed data", { status: "success", data: [{}] }],
+    ["provider error", { status: "error", message: "temporarily unavailable", data: null }],
+  ])("returns indeterminate for %s", async (_scenario, body) => {
+    const { gateway } = gatewayWith(body);
+    const result = await gateway.reconcileRefund(request);
+    expect(result.status).toBe("indeterminate");
+    expect(result).toHaveProperty("failureReason");
+  });
+
+  it("returns indeterminate when the lookup network fails", async () => {
+    const gateway = new FlutterwaveGateway(CONFIG, async (): Promise<Response> => { throw new Error("offline"); });
+    const result = await gateway.reconcileRefund(request);
+    expect(result).toMatchObject({ status: "indeterminate" });
+    expect(result).toHaveProperty("failureReason", expect.stringContaining("reconciliation-provider-unreachable"));
+  });
+
+  it.each([
+    ["multiple exact matches", [entry(), entry({ id: 556 })]],
+    ["a different accepted amount", [entry({ amount_refunded: 999 })]],
+    ["a different accepted comment", [entry({ comment: "another refund" })]],
+    ["accepted history for another transaction", [entry({ transaction_id: 999 })]],
+  ])("blocks %s as a conflict", async (_scenario, data) => {
+    const { gateway } = gatewayWith({ status: "success", data });
+    const result = await gateway.reconcileRefund(request);
+    expect(result.status).toBe("conflict");
+    expect(result).toHaveProperty("failureReason", expect.stringContaining("reconciliation-conflict"));
   });
 });
 

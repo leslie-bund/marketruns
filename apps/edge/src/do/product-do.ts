@@ -12,6 +12,7 @@ import {
   acceptHibernatedWebSocket,
   broadcast,
   conflict,
+  errorResponse,
   expectCommand,
   handleWebSocketClose,
   handleWebSocketError,
@@ -22,6 +23,7 @@ import {
   notFound,
   parseClientCommand,
   parseInternal,
+  refusal,
   serializeEvent,
 } from "./runtime/index.js";
 import { STATE_KEY } from "./state.js";
@@ -33,6 +35,7 @@ import type {
 import { IntentLookupResponseSchema, OfferProductRequestSchema, RetireProductRequestSchema } from "./schemas.js";
 import { fetchInternal, internalPost } from "./transport.js";
 import { cartIdForBuyer } from "../config/ids.js";
+import { headerAuthAllowed } from "../registry/index.js";
 
 interface PriceMove {
   by: "buyer" | "seller";
@@ -45,7 +48,7 @@ interface ProductState {
   /** The market of the intent this product answers; determines its cart. */
   market?: string;
   intentExpiresAt?: number;
-  /** The intent's buyer (when the wire carried one), for archive attribution. */
+  /** The intent's buyer (when the wire carried one), for acceptance authorization and attribution. */
   intentBuyerId?: string | undefined;
   priceHistory: PriceMove[];
   retired: boolean;
@@ -227,14 +230,16 @@ export class ProductDO extends DurableObject<Env> {
   }
 
   /**
-   * Accept-once. The first accept transitions the product to "accepted"
-   * exactly once; every later accept is 409, and accepts after retirement are
-   * rejected (products are retired, never resurrected).
+   * Accept-once by the intent's buyer only. The first accept transitions the
+   * product to "accepted" exactly once; every later accept is 409, including
+   * after the original product TTL because the cart clock now owns retirement.
    *
    * The acceptance lands in the buyer's own cart (`cart:<market>:<buyerId>`):
-   * the buyer identity is the header-resolved caller when present, else the
-   * intent's recorded buyer, else the anonymous fallback — never purely
-   * client-claimed on the accept wire.
+   * the buyer identity is the header-resolved caller when present, else — only
+   * in the explicit header-auth demo — the intent's recorded buyer or anonymous
+   * fallback, never purely client-claimed on the accept wire. Deployed callers
+   * require a buyer session. Unaccepted products also enforce their
+   * expiry synchronously rather than waiting for the retirement alarm.
    */
   private async accept(command: ProductAccepted, callerBuyerId?: string): Promise<Response> {
     const product = this.state.product;
@@ -251,6 +256,18 @@ export class ProductDO extends DurableObject<Env> {
       return conflict(`product ${product.id} is ${product.status} and can no longer be accepted`);
     }
 
+    if ((callerBuyerId === undefined || callerBuyerId === "unauthenticated") && !headerAuthAllowed(this.env)) {
+      return errorResponse(401, "unauthorized", "a buyer session is required to accept this product");
+    }
+    const buyerId = callerBuyerId ?? this.state.intentBuyerId ?? "buyer:anonymous";
+    const originatingBuyerId = this.state.intentBuyerId ?? "buyer:anonymous";
+    if (buyerId !== originatingBuyerId) {
+      return errorResponse(403, "forbidden", "only the buyer who posted the intent can accept this product");
+    }
+    if (this.now() >= product.expiresAt) {
+      return refusal("product-expired", `product ${product.id} expired with its intent and cannot be accepted`);
+    }
+
     const market = this.state.market;
     if (!market) return conflict("product has no market and cannot enter a cart");
 
@@ -259,7 +276,6 @@ export class ProductDO extends DurableObject<Env> {
     product.status = "accepted";
     await this.ctx.storage.put(STATE_KEY, this.state);
 
-    const buyerId = callerBuyerId ?? this.state.intentBuyerId ?? "buyer:anonymous";
     const cartId = cartIdForBuyer(market, buyerId);
     const cartStub = this.env.CART_DO.get(this.env.CART_DO.idFromName(cartId));
     const appendBody: CartAppendRequest = { cartId, market, buyerId, product };

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
 
 export function RegistrationForm() {
@@ -46,7 +47,8 @@ export function RegistrationForm() {
         </select>
       </label>
       <label>Anything we should know?<textarea name="message" rows={4} maxLength={2000} placeholder="Your market, location, or what you would like Market Runs to help with" /></label>
-      <label className="consent-field"><input name="consent" type="checkbox" value="true" required /><span>I agree to receive Market Runs launch and onboarding emails. I can unsubscribe at any time.</span></label>
+      <label className="consent-field"><input name="consent" type="checkbox" value="true" required /><span>I agree to receive Market Runs launch and onboarding emails.</span></label>
+      <p className="form-privacy">You can opt out at any time by emailing <a href="mailto:info@updates.marketruns.org">info@updates.marketruns.org</a>. See how we handle your details in our <Link href="/privacy">Privacy Notice</Link>.</p>
       <button className="button" type="submit" disabled={status === "submitting"}>{status === "submitting" ? "Registering…" : "Register my interest"}</button>
       <p className={status === "error" ? "form-message error" : "form-message success"} role="status">{message}</p>
     </form>

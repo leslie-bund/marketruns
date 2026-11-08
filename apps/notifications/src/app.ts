@@ -9,20 +9,23 @@ import { validateNotificationsTopology } from "./topology.js";
 
 export interface NotificationsAppOptions {
   internalToken?: string | undefined;
-}
-
-function authorized(request: Request, token?: string): boolean {
-  return !token || request.headers.get("x-notification-internal") === token;
+  allowHeaderAuth?: boolean;
 }
 
 function jsonError(status: number, error: string, message: string): Response {
   return Response.json({ error, message }, { status });
 }
 
-async function route(store: NotificationStore, request: Request, options: NotificationsAppOptions): Promise<Response> {
+async function route(store: NotificationStore, request: Request, options?: NotificationsAppOptions): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ ok: true, service: "market-runs-notifications" });
-  if (!authorized(request, options.internalToken)) return jsonError(401, "unauthorized", "valid internal authentication is required");
+  if (options?.internalToken) {
+    if (request.headers.get("x-notification-internal") !== options.internalToken) {
+      return jsonError(401, "unauthorized", "valid internal authentication is required");
+    }
+  } else if (options && options.allowHeaderAuth !== true) {
+    return jsonError(503, "notification-auth-unconfigured", "NOTIFICATION_INTERNAL_TOKEN is required");
+  }
   const recipientId = request.headers.get("x-participant-id");
   if (!recipientId) return jsonError(400, "recipient-required", "trusted participant attribution is required");
 
@@ -44,7 +47,7 @@ async function route(store: NotificationStore, request: Request, options: Notifi
   return jsonError(404, "not-found", `no route: ${request.method} ${url.pathname}`);
 }
 
-export function createNotificationsApp(store: NotificationStore, providers: NotificationProviders, options: NotificationsAppOptions = {}) {
+export function createNotificationsApp(store: NotificationStore, providers: NotificationProviders, options?: NotificationsAppOptions) {
   return {
     fetch: (request: Request) => route(store, request, options),
     async queue(batch: MessageBatch<unknown>): Promise<void> {
@@ -55,10 +58,14 @@ export function createNotificationsApp(store: NotificationStore, providers: Noti
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    validateNotificationsTopology(env);
+    try {
+      validateNotificationsTopology(env);
+    } catch (error) {
+      return jsonError(503, "notification-topology-unconfigured", error instanceof Error ? error.message : String(error));
+    }
     const { db, client } = createDatabase(env);
     try {
-      return await route(new DrizzleNotificationStore(db), request, { internalToken: env.NOTIFICATION_INTERNAL_TOKEN });
+      return await route(new DrizzleNotificationStore(db), request, { internalToken: env.NOTIFICATION_INTERNAL_TOKEN, allowHeaderAuth: env.ALLOW_HEADER_AUTH === "true" });
     } finally {
       await client.end();
     }
@@ -72,7 +79,7 @@ export default {
         resendFromEmail: env.RESEND_FROM_EMAIL,
         edgeUrl: env.EDGE_URL,
         edgeInternalToken: env.NOTIFICATION_INTERNAL_TOKEN,
-      }), { internalToken: env.NOTIFICATION_INTERNAL_TOKEN });
+      }), { internalToken: env.NOTIFICATION_INTERNAL_TOKEN, allowHeaderAuth: env.ALLOW_HEADER_AUTH === "true" });
       await app.queue(batch);
     } finally {
       await client.end();

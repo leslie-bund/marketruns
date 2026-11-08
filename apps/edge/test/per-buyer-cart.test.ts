@@ -94,6 +94,26 @@ describe("per-buyer cart and run keys", () => {
     expect(eventA.runId).not.toBe(eventB.runId);
   });
 
+  it("rejects acceptance by a buyer other than the intent owner", async () => {
+    expect((await postIntent("iso-owner-intent", "iso-owner", "buyer:iso-owner")).status).toBe(200);
+    expect((await offerProduct("iso-owner-product", "iso-owner-intent", "iso-owner")).status).toBe(200);
+
+    const stolen = await postJson(
+      "/command",
+      { type: "product.accepted", productId: "iso-owner-product" },
+      "buyer:iso-attacker",
+    );
+    expect(stolen.status).toBe(403);
+
+    const mine = await postJson(
+      "/command",
+      { type: "product.accepted", productId: "iso-owner-product" },
+      "buyer:iso-owner",
+    );
+    expect(mine.status).toBe(200);
+    expect(String((await readJson(mine)).cart.id)).toBe("cart:iso-owner:buyer:iso-owner");
+  });
+
   it("the header-keyed cart read returns the caller's own cart", async () => {
     const cartId = await driveToCart("isr", "buyer:isr-a", "a");
     const mine = await getJson("/markets/isr/cart", "buyer:isr-a");

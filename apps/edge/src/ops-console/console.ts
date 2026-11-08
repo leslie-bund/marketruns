@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PaymentRefundResolutionRequestSchema, PaymentRefundResolutionSchema } from "@market-runs/proto";
 import { Hono } from "hono";
 import type { Context, Next } from "hono";
 import type { Env } from "../config/env.js";
@@ -17,6 +18,7 @@ import { OPS_LOGIN_HTML } from "./login.js";
 import { telemetryRoutes } from "./telemetry.js";
 import { marketsAdminRoutes } from "./markets-admin.js";
 import { databaseConfigured } from "./db.js";
+import { paymentsAuthConfigured, paymentsServiceHeaders } from "../config/payments-auth.js";
 
 /**
  * Minimal ops console (ADR-0013), mounted at /ops. A single embedded HTML
@@ -107,9 +109,93 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
   app.post("/api/admin/payments/:dispatchId/replay", requireOpsRole("admin"), async (c) => {
     const id = decodeURIComponent(c.req.param("dispatchId"));
     const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
-    const response = await fetch(new URL(`/dispatches/${encodeURIComponent(id)}/replay`, base), { method: "POST", headers: correlationHeaders(c) }).catch(() => null);
+    if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+    const headers = paymentsServiceHeaders(c.env, correlationHeaders(c));
+    const response = await fetch(new URL(`/dispatches/${encodeURIComponent(id)}/replay`, base), { method: "POST", headers }).catch(() => null);
     if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
     if (response.ok) await auditOps(c, { action: "payment-dispatch.replay", entityType: "payment-dispatch", entityId: id, summary: `Replayed failed dispatch ${id} through the existing dispatcher` });
+    return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
+  });
+
+  app.post("/api/admin/payments/:dispatchId/sync", requireOpsRole("admin"), async (c) => {
+    const id = decodeURIComponent(c.req.param("dispatchId"));
+    const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
+    if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+    const headers = paymentsServiceHeaders(c.env, correlationHeaders(c));
+    const response = await fetch(new URL(`/dispatches/${encodeURIComponent(id)}/sync`, base), { method: "POST", headers }).catch(() => null);
+    if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
+    if (response.ok) await auditOps(c, { action: "payment-dispatch.sync", entityType: "payment-dispatch", entityId: id, summary: `Synced current provider status for dispatch ${id} without a new transfer` });
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        "content-type": response.headers.get("content-type") ?? "application/json",
+        "x-request-id": response.headers.get("x-request-id") ?? c.get("requestId"),
+      },
+    });
+  });
+
+  app.post("/api/admin/refunds/:refundId/resolution", requireOpsRole("admin"), async (c) => {
+    const id = decodeURIComponent(c.req.param("refundId"));
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return errorResponse(400, "invalid-body", "request body is not valid JSON");
+    }
+    const parsed = PaymentRefundResolutionSchema.safeParse(raw);
+    if (!parsed.success) {
+      return errorResponse(400, "invalid-body", "request body failed refund-resolution validation", { issues: parsed.error.issues });
+    }
+    const request = PaymentRefundResolutionRequestSchema.parse({
+      resolvedBy: c.get("opsIdentity").id,
+      resolution: parsed.data,
+    });
+    const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
+    if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+    const headers = paymentsServiceHeaders(c.env, correlationHeaders(c, { "content-type": "application/json" }));
+    const response = await fetch(new URL(`/payments/refunds/${encodeURIComponent(id)}/resolution`, base), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(request),
+    }).catch(() => null);
+    if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
+    let resolutionCommitted = response.ok;
+    if (!resolutionCommitted && parsed.data.action === "allow-retry" && response.status === 502) {
+      const failure = await response.clone().json().catch(() => null) as { resolutionCommitted?: unknown } | null;
+      resolutionCommitted = failure?.resolutionCommitted === true;
+    }
+    if (resolutionCommitted) {
+      await auditOps(c, {
+        action: `payment-refund.${parsed.data.action}`,
+        entityType: "payment-refund",
+        entityId: id,
+        summary: `Resolved refund ${id} with ${parsed.data.action}`,
+        metadata: {
+          action: parsed.data.action,
+          status: "status" in parsed.data ? parsed.data.status : parsed.data.action === "complete-manual" ? "completed" : "failed",
+          providerRef: "providerRef" in parsed.data ? parsed.data.providerRef : null,
+          evidenceRef: parsed.data.evidenceRef,
+          note: parsed.data.note,
+        },
+      });
+    }
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        "content-type": response.headers.get("content-type") ?? "application/json",
+        "x-request-id": response.headers.get("x-request-id") ?? c.get("requestId"),
+      },
+    });
+  });
+
+  app.post("/api/admin/settlements/:settlementRecordId/redrive", requireOpsRole("admin"), async (c) => {
+    const id = decodeURIComponent(c.req.param("settlementRecordId"));
+    const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
+    if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+    const headers = paymentsServiceHeaders(c.env, correlationHeaders(c));
+    const response = await fetch(new URL(`/settlements/${encodeURIComponent(id)}/redrive`, base), { method: "POST", headers }).catch(() => null);
+    if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
+    if (response.ok) await auditOps(c, { action: "settlement.redrive", entityType: "settlement", entityId: id, summary: `Re-drove payment execution for settlement ${id}` });
     return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
   });
 
@@ -120,7 +206,11 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     const target = new URL("/reputation", c.env.OPS_ARCHIVE_URL);
     target.search = new URL(c.req.url).search;
     try {
-      const upstream = await fetch(target, { headers: correlationHeaders(c) });
+      const upstream = await fetch(target, {
+        headers: correlationHeaders(c, {
+          ...(c.env.ARCHIVE_INTERNAL_TOKEN ? { "x-archive-internal": c.env.ARCHIVE_INTERNAL_TOKEN } : {}),
+        }),
+      });
       return new Response(upstream.body, {
         status: upstream.status,
         headers: {

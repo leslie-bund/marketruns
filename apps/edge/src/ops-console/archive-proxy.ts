@@ -9,15 +9,30 @@ import {
   OpsHealthSchema,
   PaymentDispatchViewSchema,
   PaymentHoldViewSchema,
+  PaymentRecoveryItemSchema,
   PaymentRefundViewSchema,
   SettlementViewSchema,
 } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
 import { errorResponse } from "../do/runtime/index.js";
 import { correlationHeaders } from "../app/middleware/request-id.js";
+import { paymentsAuthConfigured, paymentsServiceHeaders } from "../config/payments-auth.js";
+import { requireOpsRole } from "./auth.js";
 
 /** Dev default for the payments worker (wrangler dev of apps/payments); override with PAYMENTS_URL. */
 const PAYMENTS_URL_DEFAULT = "http://localhost:8790";
+
+/** Payments returns compact {items,total}; validate the items through the shared admin-list schema. */
+const PaymentRecoveryAdminListSchema = z.preprocess((raw) => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const envelope = raw as { items?: unknown; limit?: unknown; offset?: unknown };
+  if (!Array.isArray(envelope.items)) return raw;
+  return {
+    ...envelope,
+    limit: envelope.limit ?? Math.max(1, envelope.items.length),
+    offset: envelope.offset ?? 0,
+  };
+}, AdminListSchema(PaymentRecoveryItemSchema)).transform(({ items, total }) => ({ items, total }));
 
 /**
  * Response headers for a proxied call: JSON plus the upstream's correlation id
@@ -53,6 +68,9 @@ export function archiveAdminRoutes(): Hono<{ Bindings: Env }> {
   // serves /dispatches itself — the console just proxies (PAYMENTS_URL, dev
   // default above). Same failure contract, payments-* error codes.
   app.get("/admin/payments", (c) => proxyPayments(c, "/dispatches", AdminListSchema(PaymentDispatchViewSchema)));
+  // Recovery is an operator action queue, not a read-only oversight list.
+  app.get("/admin/recovery", requireOpsRole("admin"), (c) =>
+    proxyPayments(c, "/recovery", PaymentRecoveryAdminListSchema));
   // Collection side: holds + refunds (charge verification, checkout gating,
   // the buyer-refund rail) — same proxy contract as /admin/payments.
   app.get("/admin/holds", (c) => proxyPayments(c, "/payments/holds", AdminListSchema(PaymentHoldViewSchema)));
@@ -68,11 +86,14 @@ async function proxyPayments<S extends z.ZodTypeAny>(
   schema: S,
 ): Promise<Response> {
   const base = c.env.PAYMENTS_URL ?? PAYMENTS_URL_DEFAULT;
+  if (!paymentsAuthConfigured(c.env)) {
+    return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+  }
   const target = new URL(path, base);
   target.search = new URL(c.req.url).search;
   let upstream: Response;
   try {
-    upstream = await fetch(target, { headers: correlationHeaders(c) });
+    upstream = await fetch(target, { headers: paymentsServiceHeaders(c.env, correlationHeaders(c)) });
   } catch {
     return errorResponse(503, "payments-unavailable", `payments service at ${base} did not respond`);
   }
@@ -107,7 +128,11 @@ async function proxyArchive<S extends z.ZodTypeAny>(
   target.search = new URL(c.req.url).search;
   let upstream: Response;
   try {
-    upstream = await fetch(target, { headers: correlationHeaders(c) });
+    upstream = await fetch(target, {
+      headers: correlationHeaders(c, {
+        ...(c.env.ARCHIVE_INTERNAL_TOKEN ? { "x-archive-internal": c.env.ARCHIVE_INTERNAL_TOKEN } : {}),
+      }),
+    });
   } catch {
     return errorResponse(503, "archive-unavailable", `archive service at ${c.env.OPS_ARCHIVE_URL} did not respond`);
   }

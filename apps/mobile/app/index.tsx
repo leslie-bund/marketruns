@@ -8,6 +8,7 @@ import {
   clearSession,
   EDGE_URL,
   setActiveParticipant,
+  signOut,
   useActiveMarket,
   useActiveParticipant,
   useAuthSession,
@@ -29,6 +30,7 @@ export default function Launch() {
   const { credential } = useDeviceCredential();
   const notifications = useNotificationSummary();
   const [signingIn, setSigningIn] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const market = useActiveMarket();
   const health = usePoll(async () => {
     const response = await fetch(`${EDGE_URL}/healthz`);
@@ -65,6 +67,18 @@ export default function Launch() {
       Alert.alert("Device key failed", error instanceof Error ? error.message : String(error));
     } finally {
       setSigningIn(false);
+    }
+  };
+
+  const signOutAccount = async () => {
+    setSigningOut(true);
+    try {
+      await signOut();
+      router.replace("/");
+    } catch (error) {
+      Alert.alert("Sign out failed", error instanceof Error ? error.message : String(error));
+    } finally {
+      setSigningOut(false);
     }
   };
 
@@ -126,6 +140,13 @@ export default function Launch() {
       ) : null}
 
       {transactionReady ? <Pill active>✓ SIGNED IN</Pill> : null}
+
+      {participant && session ? (
+        <Section title="Account">
+          <Text style={s.muted}>Sign out on this device. Your participant and market activity stay intact.</Text>
+          <Button title={signingOut ? "Signing out…" : "Sign out"} secondary disabled={signingOut} onPress={() => void signOutAccount()} />
+        </Section>
+      ) : null}
 
       {transactionReady ? (
         <Pressable onPress={() => router.push("/notifications" as never)}>

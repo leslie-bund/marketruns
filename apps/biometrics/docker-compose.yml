@@ -2,16 +2,15 @@ services:
   biometrics:
     build: .
     environment:
-      BIOMETRICS_INTERNAL_TOKEN: ${BIOMETRICS_INTERNAL_TOKEN:?required}
+      # Identity's service credential is the container's internal credential.
+      BIOMETRICS_INTERNAL_TOKEN: ${BIOMETRICS_SERVICE_TOKEN:?required}
       FACE_MODEL_PATH: /models/w600k_r50.onnx
       LIVENESS_MODEL_PATH: /models/MiniFASNetV2.onnx
       LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.8}
       BIND_ADDRESS: 0.0.0.0
-    volumes:
-      - ${BIOMETRIC_MODEL_DIR:?required}:/models:ro
-    expose:
-      - "8791"
-    # Deliberately no ports: reachable only by identity on this internal network.
+    ports:
+      # Identity runs on the host in local dev; never expose LAN interfaces.
+      - "127.0.0.1:8792:8791"
     networks: [identity-internal]
 networks:
   identity-internal:

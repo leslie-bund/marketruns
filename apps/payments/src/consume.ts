@@ -37,6 +37,22 @@ export function retryDelaySeconds(attempts: number): number {
   return Math.min(BASE_RETRY_DELAY_SECONDS * 2 ** Math.max(0, attempts - 1), MAX_RETRY_DELAY_SECONDS);
 }
 
+/** Bind an existing idempotency row to the exact immutable execution request it first authorized. */
+export function assertDispatchRowMatches(row: DispatchRow, expected: DispatchRow): void {
+  const matches = row.id === expected.id
+    && row.idempotencyKey === expected.idempotencyKey
+    && row.settlementRecordId === expected.settlementRecordId
+    && row.runId === expected.runId
+    && row.market === expected.market
+    && row.account === expected.account
+    && row.partyId === expected.partyId
+    && row.amountKobo === expected.amountKobo
+    && row.memo === expected.memo;
+  if (!matches) {
+    throw new Error(`idempotency conflict: ${expected.idempotencyKey} does not match the durable dispatch request`);
+  }
+}
+
 export async function handleDispatchRequested(
   store: DispatchStore,
   dispatcher: PaymentDispatcher,
@@ -62,6 +78,7 @@ export async function handleDispatchRequested(
       row = await store.byIdempotencyKey(pending.idempotencyKey);
     }
     if (!row) throw new Error(`dispatch row for leg ${index} of ${value.idempotencyKey} vanished after insert`);
+    assertDispatchRowMatches(row, pending);
     // Replay of an already-executed leg: the durable record says the money
     // moved (or was accepted by the provider) — never dispatch twice.
     // "completed" is terminal-settled; "sent"/"queued" are in-flight and
@@ -131,25 +148,43 @@ export async function handleDispatchRequested(
     return;
   }
 
-  // Every leg is executed or in-flight: the run's collected hold is released
-  // (held → released). A partially-refunded/refunded hold keeps its refund
-  // state — release() never overwrites it.
-  if (holds) {
-    for (const hold of await holds.byRun(value.runId)) {
-      await holds.release(hold.id);
-      if (notify && hold.status === "held") {
-        await notify(paymentNotification({
-          sourceEventId: `payment.hold-released:${hold.id}`,
-          sourceEventType: "payment.hold-released",
-          recipientId: hold.buyerId,
-          title: "Payment hold released",
-          body: "Your held payment was released for settlement dispatch.",
-          runId: value.runId,
-          cartId: hold.cartId,
-          status: "released",
-        }));
-      }
+  await releaseHoldsWhenRunDispatched(store, value.runId, holds, notify);
+  message.ack();
+}
+
+/**
+ * Release a run's collected holds only after every durable dispatch row is
+ * executed or in-flight. Zero rows, pending rows, and failed rows all block.
+ * A partially-refunded/refunded hold keeps its refund state — release() never
+ * overwrites it. Queue consumption and successful ops replay share this guard.
+ */
+export async function releaseHoldsWhenRunDispatched(
+  store: DispatchStore,
+  runId: string,
+  holds?: HoldStore,
+  notify?: PaymentNotificationSink,
+): Promise<boolean> {
+  if (!holds) return false;
+  const rows = await store.byRun(runId);
+  const allDispatched = rows.length > 0 && rows.every(
+    (row) => row.status === "sent" || row.status === "queued" || row.status === "completed",
+  );
+  if (!allDispatched) return false;
+
+  for (const hold of await holds.byRun(runId)) {
+    await holds.release(hold.id);
+    if (notify && hold.status === "held") {
+      await notify(paymentNotification({
+        sourceEventId: `payment.hold-released:${hold.id}`,
+        sourceEventType: "payment.hold-released",
+        recipientId: hold.buyerId,
+        title: "Payment hold released",
+        body: "Your held payment was released for settlement dispatch.",
+        runId,
+        cartId: hold.cartId,
+        status: "released",
+      }));
     }
   }
-  message.ack();
+  return true;
 }

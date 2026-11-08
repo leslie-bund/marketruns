@@ -261,7 +261,7 @@ function expectedLedgerLegs(outcome, ids) {
   return legs;
 }
 
-/** Mirrors apps/edge/src/do/run/payment-dispatch.ts: sellers (amount>0) in outcome order, then runner, then platform. */
+/** Mirrors packages/domain/src/payment-execution.ts: sellers (amount>0) in outcome order, then runner, then platform. */
 function expectedDispatchLegs(outcome, ids) {
   const legs = [];
   for (const s of outcome.sellers) {
@@ -752,12 +752,16 @@ async function assertDb(label, sql, ctx) {
       ? JSON.stringify({ id: row.id, raised_by: row.raised_by_participant_id, status: row.status, evidence_refs: row.evidence_refs })
       : "null";
     check(
-      `${label}: disputes row materialized at run retirement with the merged photo evidence (L2 doctrine)`,
+      `${label}: dispute resolved by settlement with its original raiser, reason, and merged photo evidence preserved`,
       disputes.length === 1 &&
         row.id === `${ctx.runId}:dispute` &&
+        row.settlement_record_id === recordId &&
         row.raised_by_participant_id === ctx.buyerId &&
         row.reason === ctx.reason &&
-        row.status === "open" &&
+        row.status === "resolved" &&
+        row.resolved_at?.getTime() === settlement.released_at.getTime() &&
+        row.ambiguous === (ctx.inputs.dispute?.ambiguous ?? true) &&
+        kobo(row.absorbed_loss_kobo) === ctx.outcome.platformLossKobo &&
         ctx.photoRefs.every((ref) => row.evidence_refs.includes(ref)),
       `row ${rowSummary}`,
     );

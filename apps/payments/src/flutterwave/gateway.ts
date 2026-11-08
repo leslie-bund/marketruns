@@ -53,6 +53,16 @@ const RefundDataSchema = z.object({
   status: z.string().optional(),
 });
 
+const RefundHistoryDataSchema = z.array(z.object({
+  id: z.union([z.number(), z.string()]),
+  transaction_id: z.union([z.number(), z.string()]),
+  amount_refunded: z.union([z.number(), z.string()]),
+  status: z.string(),
+  comment: z.string(),
+  flw_ref: z.string().optional(),
+  created_at: z.string().optional(),
+}));
+
 const BanksDataSchema = z.array(
   z.object({
     code: z.union([z.number(), z.string()]),
@@ -126,24 +136,86 @@ export class FlutterwaveGateway implements ChargeGateway {
         },
       );
     } catch (error) {
-      // Network failure: the refund MAY have been initiated. Retrying is safe
-      // for a FULL refund (provider dedupes per transaction); partial-refund
-      // retries risk double-refunding, so the caller's replay path must check
-      // provider state first — recorded honestly as failed here.
-      return { status: "failed", failureReason: `provider-unreachable: ${String(error)}` };
+      // Network failure: the refund MAY have been initiated. No v3 dedupe is
+      // assumed for full or partial refunds; redelivery must reconcile first.
+      return { status: "indeterminate", failureReason: `provider-unreachable: ${String(error)}` };
     }
     const parsed = EnvelopeSchema.safeParse(await readJson(response));
     if (!parsed.success) {
-      return { status: "failed", failureReason: `provider-response-unparseable: HTTP ${response.status}` };
+      return { status: "indeterminate", failureReason: `provider-response-unparseable: HTTP ${response.status}` };
     }
     if (parsed.data.status !== "success") {
       return { status: "failed", failureReason: parsed.data.message ?? `HTTP ${response.status}` };
     }
     const data = RefundDataSchema.safeParse(parsed.data.data);
     if (!data.success) {
-      return { status: "failed", failureReason: "provider-response-missing-refund" };
+      return { status: "indeterminate", failureReason: "provider-response-missing-refund" };
     }
     return { status: "processing", providerRef: `${REFUND_PROVIDER_REF_PREFIX}${String(data.data.id)}` };
+  }
+
+  /** Read provider refund history before retrying an ambiguous refund attempt. */
+  async reconcileRefund(query: { providerTxId: string; amountKobo: number; comments: string }) {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(
+        `${this.config.baseUrl}/v3/refunds?id=${encodeURIComponent(query.providerTxId)}`,
+        { headers: { authorization: `Bearer ${this.config.secretKey}` } },
+      );
+    } catch (error) {
+      return { status: "indeterminate" as const, failureReason: `reconciliation-provider-unreachable: ${String(error)}` };
+    }
+    const parsed = EnvelopeSchema.safeParse(await readJson(response));
+    if (!parsed.success) {
+      return { status: "indeterminate" as const, failureReason: `reconciliation-response-unparseable: HTTP ${response.status}` };
+    }
+    if (parsed.data.status !== "success") {
+      return {
+        status: "indeterminate" as const,
+        failureReason: `reconciliation-provider-error: ${parsed.data.message ?? `HTTP ${response.status}`}`,
+      };
+    }
+    const history = RefundHistoryDataSchema.safeParse(parsed.data.data);
+    if (!history.success) {
+      return { status: "indeterminate" as const, failureReason: "reconciliation-response-unparseable: invalid refund data" };
+    }
+
+    const exactMatches: Array<(typeof history.data)[number]> = [];
+    for (const candidate of history.data) {
+      const naira = Number(candidate.amount_refunded);
+      const kobo = naira * KOBO_PER_NAIRA;
+      const roundedKobo = Math.round(kobo);
+      if (!Number.isFinite(kobo) || Math.abs(kobo - roundedKobo) > 1e-7 || !Number.isSafeInteger(roundedKobo)) {
+        return { status: "indeterminate" as const, failureReason: "reconciliation-response-unparseable: invalid refund amount" };
+      }
+      // Only a definite provider failure is non-blocking. Any other status is
+      // accepted history; unknown accepted states block rather than risking a POST.
+      if (candidate.status.toLowerCase() === "failed") continue;
+      if (!["processing", "completed"].includes(candidate.status.toLowerCase())) {
+        return { status: "conflict" as const, failureReason: `reconciliation-conflict: unexpected accepted status "${candidate.status}"` };
+      }
+      const exact = String(candidate.transaction_id) === query.providerTxId
+        && roundedKobo === query.amountKobo
+        && candidate.comment === query.comments;
+      if (!exact) {
+        return { status: "conflict" as const, failureReason: "reconciliation-conflict: unexpected accepted refund history" };
+      }
+      exactMatches.push(candidate);
+    }
+    if (exactMatches.length > 1) {
+      return { status: "conflict" as const, failureReason: "reconciliation-conflict: multiple exact accepted refunds" };
+    }
+    const match = exactMatches[0];
+    if (!match) return { status: "not-found" as const };
+    return {
+      status: "found" as const,
+      refund: {
+        // No documented final customer-receipt status is assumed here. Even a
+        // provider "completed" candidate stays processing internally.
+        status: "processing" as const,
+        providerRef: `${REFUND_PROVIDER_REF_PREFIX}${String(match.id)}`,
+      },
+    };
   }
 
   /** The refund rail targets card charges; every other method is an ops-manual refund. */

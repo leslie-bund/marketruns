@@ -6,6 +6,7 @@ import {
   ApiError,
   checkout,
   confirmCharge,
+  getActiveMarket,
   getActiveParticipant,
   getCart,
   getCartDeliveryOptions,
@@ -13,11 +14,13 @@ import {
   newTxRef,
   paymentsConfigured,
   quoteCart,
+  recordRunId,
   useActiveCartIds,
   useCheckoutPayment,
   usePoll,
   type PaymentAttempt,
 } from "../../src/api";
+import { checkoutRecoveryRunId } from "../../src/features/buyer/checkout-recovery";
 import { FlutterwavePayButton } from "../../src/features/buyer/payment";
 import { receiverSelection } from "../../src/features/run";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, money, s } from "../../src/ui";
@@ -161,6 +164,15 @@ export default function Checkout() {
       .catch((error: unknown) => setPaymentProblem(message(error)));
   }, [quote?.quoteId, outstandingKobo, activeAttempt?.txRef, activeAttempt?.stage, activeAttempt?.amountKobo, paymentLoading, busy, cartId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const recoverCheckout = async (error: unknown, beforeNavigate?: () => Promise<void>): Promise<boolean> => {
+    const runId = checkoutRecoveryRunId(error);
+    if (!runId) return false;
+    await recordRunId(getActiveMarket(), runId);
+    if (beforeNavigate) await beforeNavigate();
+    router.replace({ pathname: "/buyer/run", params: { runId } });
+    return true;
+  };
+
   const finishCheckout = async (refs = heldRefs) => {
     if (!quote || !deliveryValid()) return;
     setBusy(true);
@@ -179,6 +191,7 @@ export default function Checkout() {
         ...(result.deliveryCode ? { deliveryCode: result.deliveryCode } : {}),
       });
     } catch (error) {
+      if (await recoverCheckout(error, clearPayment)) return;
       if (error instanceof ApiError && error.code === "payment-hold-insufficient") {
         const shortfall = typeof error.details.shortfallKobo === "number" ? error.details.shortfallKobo : outstandingKobo;
         setPaymentProblem(`The confirmed holds are ${money(shortfall)} short. Pay only that top-up; existing holds will be reused.`);
@@ -318,6 +331,7 @@ export default function Checkout() {
       const result = await checkout(delivery(), undefined, receiverSelection(receiverKind, receiverName));
       setAccepted({ runId: result.runId, floorRateKobo: result.floorRateKobo, runnerId: result.runnerId, ...(result.deliveryCode ? { deliveryCode: result.deliveryCode } : {}) });
     } catch (error) {
+      if (await recoverCheckout(error)) return;
       setCheckoutProblem(`Checkout refused: ${message(error)}`);
     } finally {
       setBusy(false);

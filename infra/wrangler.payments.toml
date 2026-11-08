@@ -17,6 +17,10 @@ dead_letter_queue = "payment-dispatch-dlq"
 binding = "NOTIFICATION_QUEUE"
 queue = "notification-events"
 
+[[queues.producers]]
+binding = "PAYMENT_QUEUE"
+queue = "payment-dispatch"
+
 [vars]
 # "stub" keeps zero-secret dev working. The Flutterwave dispatcher is chosen
 # via infra/.dev.vars (PAYMENT_DISPATCHER = "flutterwave" + the vendor keys —
@@ -24,8 +28,8 @@ queue = "notification-events"
 # gitignored (ADR-0009: vendor config lives only in the quarantine module).
 PAYMENT_DISPATCHER = "stub"
 
-# Payout-account participant auth fails closed without PAYMENTS_INTERNAL_TOKEN.
-# Set the same secret on edge and payments for any deployed/session flow.
+# All non-webhook HTTP routes fail closed without PAYMENTS_INTERNAL_TOKEN.
+# Set the same secret on edge and payments for every deployed flow.
 # Local header-auth demo additionally requires ALLOW_HEADER_AUTH = "true" on
 # BOTH workers (prefer infra/.dev.vars; never enable it in deployed posture).
 
@@ -50,3 +54,7 @@ dead_letter_queue = "payment-dispatch-dlq-staging"
 [[env.staging.queues.producers]]
 binding = "NOTIFICATION_QUEUE"
 queue = "notification-events-staging"
+
+[[env.staging.queues.producers]]
+binding = "PAYMENT_QUEUE"
+queue = "payment-dispatch-staging"

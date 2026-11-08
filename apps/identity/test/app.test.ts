@@ -11,12 +11,22 @@ const IMAGE_A = Buffer.alloc(256, 7).toString("base64");
 const IMAGE_B = Buffer.alloc(256, 9).toString("base64");
 const FRAMES = Array.from({ length: 7 }, (_, i) => Buffer.alloc(32, i + 1).toString("base64"));
 const consent = () => ({ version: BIOMETRIC_CONSENT_VERSION, granted: true as const, grantedAt: Date.now() });
+const STAGING_SECRETS = {
+  IDENTITY_INTERNAL_TOKEN: "i".repeat(32),
+  IDENTITY_SESSION_SECRET: "s".repeat(32),
+  IDENTITY_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
+} satisfies Partial<Env>;
 function makeApp(env: Partial<Env> = {}, passkey = false) {
   const store = createMemoryStore();
   const app = createIdentityApp({ store, faceVerifier: new StubFaceVerifier(), passkeyVerifier: passkey ? new DevStubPasskeyVerifier() : null });
   type Wire = Omit<Response, "json"> & { json(): Promise<any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
   const call = (path: string, body?: unknown, headers: Record<string, string> = {}, method?: string): Promise<Wire> => app.fetch(new Request(`http://identity.test${path}`, {
-    method: method ?? (body === undefined ? "GET" : "POST"), headers: { "content-type": "application/json", ...headers },
+    method: method ?? (body === undefined ? "GET" : "POST"),
+    headers: {
+      "content-type": "application/json",
+      ...(env.IDENTITY_INTERNAL_TOKEN ? { "x-identity-internal": env.IDENTITY_INTERNAL_TOKEN } : {}),
+      ...headers,
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }), env as Env) as Promise<Wire>;
   return { store, call };
@@ -63,13 +73,29 @@ describe("proof-bound enrollment and login", () => {
     expect(limited.status).toBe(429); expect((await limited.json()).error).toBe("too-many-attempts");
   });
   it("keeps staging preverified distinct and preserves the production KYC gate", async () => {
-    const staging = makeApp({ IDENTITY_ENV: "staging" }); const preverified = await proof(staging.call, "p-stage", "preverified");
+    const staging = makeApp({ IDENTITY_ENV: "staging", ...STAGING_SECRETS }); const preverified = await proof(staging.call, "p-stage", "preverified");
     expect((await staging.call("/auth/face/enroll", { participantId: "p-stage", enrollmentProof: preverified, image: IMAGE_A, livenessImages: FRAMES, consent: consent() })).status).toBe(200);
     const production = makeApp({ IDENTITY_ENV: "production", IDENTITY_INTERNAL_TOKEN: "i".repeat(32), IDENTITY_SESSION_SECRET: "s".repeat(32), IDENTITY_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64") });
     expect((await production.call("/auth/enrollment-proof", { participantId: "p-1", role: "buyer", displayName: "A", kycStatus: "preverified" }, { "x-identity-internal": "i".repeat(32) })).status).toBe(403);
   });
+  it("requires internal authentication for enrollment and fails closed when staging omits its token", async () => {
+    const secured = makeApp({ IDENTITY_INTERNAL_TOKEN: "secret" });
+    const enrollmentProof = await proof(secured.call);
+    const body = { participantId: "p-1", enrollmentProof, image: IMAGE_A, livenessImages: FRAMES, consent: consent() };
+    expect((await secured.call("/auth/face/enroll", body, { "x-identity-internal": "wrong" })).status).toBe(403);
+    expect((await secured.call("/auth/face/enroll", body)).status).toBe(200);
+
+    const missingToken = makeApp({
+      IDENTITY_ENV: "staging",
+      IDENTITY_SESSION_SECRET: STAGING_SECRETS.IDENTITY_SESSION_SECRET,
+      IDENTITY_ENCRYPTION_KEY: STAGING_SECRETS.IDENTITY_ENCRYPTION_KEY,
+    });
+    expect((await missingToken.call("/auth/enrollment-proof", {
+      participantId: "p-stage", role: "buyer", displayName: "Amina", kycStatus: "preverified",
+    })).status).toBe(503);
+  });
   it("rejects duplicate identity proof requests that attempt to change role", async () => {
-    const { call, store } = makeApp({ IDENTITY_ENV: "staging" });
+    const { call, store } = makeApp({ IDENTITY_ENV: "staging", ...STAGING_SECRETS });
     await proof(call, "p-fixed-role", "preverified");
     const duplicate = await call("/auth/enrollment-proof", { participantId: "p-fixed-role", role: "runner", displayName: "Amina", kycStatus: "preverified" });
     expect(duplicate.status).toBe(409);
@@ -100,7 +126,7 @@ describe("device credentials and recovery", () => {
   });
   it("public callers cannot create an ops reset", async () => {
     const { call } = makeApp({ IDENTITY_INTERNAL_TOKEN: "secret" });
-    expect((await call("/auth/device-reset", { participantId: "p-1", reason: "lost" })).status).toBe(403);
+    expect((await call("/auth/device-reset", { participantId: "p-1", reason: "lost" }, { "x-identity-internal": "wrong" })).status).toBe(403);
   });
   it("retains the dev FIDO gate behind the same proof requirement", async () => {
     const { call } = makeApp({}, true); const enrollmentProof = await proof(call);

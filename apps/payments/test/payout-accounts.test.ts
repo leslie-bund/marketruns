@@ -24,6 +24,9 @@ class AccountGateway implements ChargeGateway {
   async refundCharge(): Promise<ChargeRefundResult> {
     throw new Error("not used");
   }
+  async reconcileRefund() {
+    return { status: "not-found" as const };
+  }
   supportsRefund(): boolean {
     return false;
   }

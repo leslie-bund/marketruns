@@ -41,6 +41,23 @@ Phones outside your Wi-Fi need a tunnel on **both** sides:
 
 Camera access is requested only where a capture happens (onboarding face, runner handoff evidence). The app never requests photo-library access. Buyer delivery locations are Plus Codes or a Muster Point. Runner GPS is foreground-only; background location is disabled.
 
+## Staging and production packaging
+
+The app uses `ng.marketruns.app` as its iOS bundle identifier and Android package. `app.config.js` merges `app.json`, keeps iOS on Apple Maps, and injects the Android Google Maps key from `GOOGLE_MAPS_API_KEY`.
+
+Configure `EXPO_PUBLIC_EDGE_URL` and `GOOGLE_MAPS_API_KEY` as EAS project environment variables for the target build environment. Neither value is stored in `app.json`, `eas.json`, or `.env.example`. Staging and production configuration fails fast when either value is missing, so a staged binary cannot silently use the local development backend or an empty maps key. Local Metro and Expo Go do not require either variable.
+
+```bash
+# Internal Android APK / iOS staging build
+npx eas-cli build --profile staging --platform android
+npx eas-cli build --profile staging --platform ios
+
+# Store production build
+npx eas-cli build --profile production --platform all
+```
+
+Before the first remote build, link the app to an EAS project and configure Android/iOS signing credentials when prompted. These steps require the project owner's Expo, Google Play, and Apple Developer accounts.
+
 ## Checks and device validation
 
 ```bash

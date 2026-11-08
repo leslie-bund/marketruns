@@ -219,6 +219,7 @@ const disputedRun: RunRetired = {
   handoffs: [
     {
       id: "h-1",
+      type: "pickup",
       exchangePoint: "Balogun Market, Stall B14",
       counterparty: "seller",
       status: "confirmed",

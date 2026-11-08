@@ -53,6 +53,9 @@ export function notificationsRoute(): Hono<{ Bindings: Env }> {
     if (who.source === "anonymous" || who.source === "unauthenticated" || who.role === "ops") {
       return errorResponse(401, "authentication-required", "a participant identity is required");
     }
+    if (!c.env.NOTIFICATION_INTERNAL_TOKEN && !headerAuthAllowed(c.env)) {
+      return errorResponse(503, "notification-auth-unconfigured", "NOTIFICATION_INTERNAL_TOKEN is required");
+    }
     const target = new URL("/notifications", c.env.NOTIFICATIONS_URL ?? DEFAULT_NOTIFICATIONS_URL);
     for (const key of ["limit", "offset", "unread"]) {
       const value = c.req.query(key);
@@ -70,6 +73,9 @@ export function notificationsRoute(): Hono<{ Bindings: Env }> {
     const who = c.get("participant");
     if (who.source === "anonymous" || who.source === "unauthenticated" || who.role === "ops") {
       return errorResponse(401, "authentication-required", "a participant identity is required");
+    }
+    if (!c.env.NOTIFICATION_INTERNAL_TOKEN && !headerAuthAllowed(c.env)) {
+      return errorResponse(503, "notification-auth-unconfigured", "NOTIFICATION_INTERNAL_TOKEN is required");
     }
     return fetch(`${c.env.NOTIFICATIONS_URL ?? DEFAULT_NOTIFICATIONS_URL}/notifications/read`, {
       method: "POST",
@@ -93,6 +99,9 @@ export function internalNotificationsRoute(): Hono<{ Bindings: Env }> {
     if (configured && c.req.header("x-notification-internal") !== configured) {
       return errorResponse(401, "unauthorized", "valid notification internal authentication is required");
     }
+    if (!configured && !headerAuthAllowed(c.env)) {
+      return errorResponse(503, "notification-auth-unconfigured", "NOTIFICATION_INTERNAL_TOKEN is required");
+    }
     let body: unknown;
     try { body = await c.req.json(); } catch { return errorResponse(400, "invalid-body", "request body is not valid JSON"); }
     const parsed = NotificationSchema.safeParse(body);
@@ -107,8 +116,11 @@ export function notificationContactRoute(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
   app.get("/:participantId", async (c) => {
     const configured = c.env.NOTIFICATION_INTERNAL_TOKEN;
-    if ((!configured && !headerAuthAllowed(c.env)) || (configured && c.req.header("x-notification-internal") !== configured)) {
+    if (configured && c.req.header("x-notification-internal") !== configured) {
       return errorResponse(401, "unauthorized", "valid notification internal authentication is required");
+    }
+    if (!configured && !headerAuthAllowed(c.env)) {
+      return errorResponse(503, "notification-auth-unconfigured", "NOTIFICATION_INTERNAL_TOKEN is required");
     }
     const participant = await coreRegistry(c.env).participant(c.req.param("participantId"));
     if (!participant?.email) return errorResponse(404, "contact-not-found", "participant has no notification email");

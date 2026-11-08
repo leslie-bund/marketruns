@@ -43,3 +43,19 @@ SMILEID_ENV = "production"
 [[env.production.r2_buckets]]
 binding = "IDENTITY_CAPTURES"
 bucket_name = "market-runs-identity-captures"
+
+# Hybrid staging is completed by infra/staging-setup.sh: it adds the real Smile
+# ID callback/privacy URLs, private biometrics origin, identity EDGE_URL, and
+# Hyperdrive id, then puts SMILEID_PARTNER_ID, SMILEID_API_KEY, and
+# BIOMETRICS_SERVICE_TOKEN with wrangler secret put. No public R2 domain.
+[env.staging]
+name = "market-runs-identity-staging"
+
+[env.staging.vars]
+IDENTITY_ENV = "staging"
+FACE_VERIFIER = "hybrid"
+SMILEID_ENV = "sandbox"
+
+[[env.staging.r2_buckets]]
+binding = "IDENTITY_CAPTURES"
+bucket_name = "market-runs-identity-captures-staging"

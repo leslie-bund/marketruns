@@ -62,6 +62,8 @@ export interface DispatchStore {
   byProviderRef(providerRef: string): Promise<DispatchRow | null>;
   /** Match an inbound provider reference alias (ADR-0024 amendment). */
   byProviderReference(providerReference: string): Promise<DispatchRow | null>;
+  /** Every durable dispatch row for a run, without pagination (hold finalization guard). */
+  byRun(runId: string): Promise<DispatchRow[]>;
   /** Record a dispatcher outcome: status + providerRef/failureReason, attempts + 1. */
   recordResult(id: string, result: DispatchTransferResult): Promise<void>;
   /**
@@ -195,6 +197,11 @@ export class DrizzleDispatchStore implements DispatchStore {
       .where(eq(paymentDispatches.providerReference, providerReference))
       .limit(1);
     return (rows[0] as DispatchRow | undefined) ?? null;
+  }
+
+  async byRun(runId: string): Promise<DispatchRow[]> {
+    const rows = await this.db.select().from(paymentDispatches).where(eq(paymentDispatches.runId, runId));
+    return rows as DispatchRow[];
   }
 
   async recordResult(id: string, result: DispatchTransferResult): Promise<void> {

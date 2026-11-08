@@ -28,12 +28,18 @@ export interface ChargeVerification {
 export interface ChargeRefundResult {
   /**
    * "processing" = the provider accepted the refund (card refunds settle in
-   * days); "completed" = confirmed landed; "failed" = rejected / not executed.
+   * days); "completed" = confirmed landed; "failed" = definitely rejected;
+   * "indeterminate" = the request may have been accepted and must be reconciled.
    */
-  status: "processing" | "completed" | "failed";
+  status: "processing" | "completed" | "failed" | "indeterminate";
   providerRef?: string;
   failureReason?: string;
 }
+
+export type ChargeRefundReconciliationResult =
+  | { status: "found"; refund: ChargeRefundResult & { status: "processing" | "completed"; providerRef: string } }
+  | { status: "not-found" }
+  | { status: "indeterminate" | "conflict"; failureReason: string };
 
 export interface ChargeGateway {
   /** Verify a charge server-side by transaction id or txRef; null = unknown to the provider. */
@@ -43,6 +49,12 @@ export interface ChargeGateway {
    * original charge; a value = partial refund of exactly that many kobo.
    */
   refundCharge(providerTxId: string, amountKobo: number | null, comments: string): Promise<ChargeRefundResult>;
+  /** Reconcile an ambiguous attempt against exact provider refund history before any new POST. */
+  reconcileRefund(query: {
+    providerTxId: string;
+    amountKobo: number;
+    comments: string;
+  }): Promise<ChargeRefundReconciliationResult>;
   /**
    * Whether the provider's refund rail supports this payment method. Honest
    * by design: methods without an API rail (non-card collections; a bank

@@ -22,12 +22,15 @@ const BASE = "http://edge";
 const IDENTITY_ORIGIN = "http://localhost:8789";
 const TOKEN = "edge-identity-internal-test-token";
 
-/** An env that behaves like the test bindings but with IDENTITY_INTERNAL_TOKEN set. */
-function withInternalToken(token: string): Env {
+/** Test bindings with explicit overrides, independent of real local .dev.vars secrets. */
+function withEnv(overrides: Record<string, string | undefined>): Env {
   return new Proxy(bindings, {
     get: (target, prop, receiver) =>
-      prop === "IDENTITY_INTERNAL_TOKEN" ? token : Reflect.get(target, prop, receiver),
+      typeof prop === "string" && prop in overrides ? overrides[prop] : Reflect.get(target, prop, receiver),
   }) as Env;
+}
+function withInternalToken(token: string | undefined): Env {
+  return withEnv({ IDENTITY_INTERNAL_TOKEN: token });
 }
 
 type SeenHeaders = Record<string, string>;
@@ -115,12 +118,12 @@ describe("/auth/* proxy x-identity-internal injection", () => {
 
   it("sends nothing on the guarded routes when IDENTITY_INTERNAL_TOKEN is unset (dev posture)", async () => {
     const decision = interceptPost("/auth/device-reset/req-2/decision");
-    const response = await postAuth("/auth/device-reset/req-2/decision", bindings);
+    const response = await postAuth("/auth/device-reset/req-2/decision", withInternalToken(undefined));
     expect(response.status).toBe(200);
     expect(decision.seen()?.["x-identity-internal"]).toBeUndefined();
 
     const queue = interceptGet("/auth/device-reset?status=pending");
-    const listed = await getAuth("/auth/device-reset?status=pending", bindings);
+    const listed = await getAuth("/auth/device-reset?status=pending", withInternalToken(undefined));
     expect(listed.status).toBe(200);
     expect(queue.seen()?.["x-identity-internal"]).toBeUndefined();
   });
@@ -141,7 +144,7 @@ describe("/auth/* proxy x-identity-internal injection", () => {
       method: "PATCH",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ displayName: "Confirmed Name" }),
-    }), bindings);
+    }), withEnv({ IDENTITY_SESSION_SECRET: "market-runs-dev-session-secret" }));
     expect(response.status).toBe(200);
     expect(authorization).toBe(`Bearer ${token}`);
     expect(displayName).toBe("Confirmed Name");

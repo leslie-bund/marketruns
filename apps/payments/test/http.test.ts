@@ -1,13 +1,27 @@
 import { describe, expect, it } from "vitest";
+import type { NotificationTransition } from "@market-runs/proto";
 import { createPaymentsApp } from "../src/index.js";
 import { StubDispatcher, type DispatchTransferResult, type PaymentDispatcher } from "../src/dispatcher.js";
-import { dispatchRow } from "../src/store.js";
-import { InMemoryDispatchStore, sampleDispatchRequest } from "./helpers.js";
+import { dispatchRow, type DispatchRow } from "../src/store.js";
+import {
+  InMemoryDispatchStore,
+  InMemoryHoldStore,
+  InMemoryRefundStore,
+  InMemorySettlementStore,
+  sampleDispatchRequest,
+  sampleHold,
+} from "./helpers.js";
 
 class ScriptedDispatcher implements PaymentDispatcher {
   constructor(private readonly result: DispatchTransferResult) {}
   async dispatchTransfer(): Promise<DispatchTransferResult> {
     return this.result;
+  }
+}
+
+class ZeroRunRowsDispatchStore extends InMemoryDispatchStore {
+  async byRun(): Promise<DispatchRow[]> {
+    return [];
   }
 }
 
@@ -76,7 +90,7 @@ describe("payments HTTP surface", () => {
 
   it("POST /dispatches/:id/replay re-dispatches a failed row through the dispatcher", async () => {
     const store = await seededStore("failed");
-    const app = createPaymentsApp(store, new StubDispatcher());
+    const app = createPaymentsApp(store, new StubDispatcher(), { settlements: new InMemorySettlementStore() });
 
     const response = await app.fetch(
       new Request("http://payments/dispatches/run:cart:Balogun:buyer:1:dispatch:1/replay", { method: "POST" }),
@@ -88,9 +102,148 @@ describe("payments HTTP surface", () => {
     expect(view.attempts).toBe(2); // the failed attempt plus the replay
   });
 
+  it("releases the run hold and notifies the buyer when replay recovers the last failed leg", async () => {
+    const store = await seededStore("sent");
+    const id = "run:cart:Balogun:buyer:1:dispatch:1";
+    await store.recordStatus(id, { status: "failed", failureReason: "recipient-unresolved", retryable: false });
+    const holds = new InMemoryHoldStore();
+    const hold = sampleHold();
+    await holds.insertIfAbsent(hold);
+    const notifications: NotificationTransition[] = [];
+    const app = createPaymentsApp(store, new StubDispatcher(), {
+      settlements: new InMemorySettlementStore(),
+      collections: { holds, refunds: new InMemoryRefundStore(), gateway: null },
+      notify: async (transition) => {
+        notifications.push(transition);
+      },
+    });
+
+    const response = await app.fetch(new Request(`http://payments/dispatches/${id}/replay`, { method: "POST" }));
+
+    expect(response.status).toBe(200);
+    expect((await holds.byId(hold.id))?.status).toBe("released");
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      sourceEventId: `payment.hold-released:${hold.id}`,
+      sourceEventType: "payment.hold-released",
+      recipientId: hold.buyerId,
+      title: "Payment hold released",
+      body: "Your held payment was released for settlement dispatch.",
+      data: { status: "released", runId: hold.runId, cartId: hold.cartId },
+    });
+  });
+
+  it.each(["pending", "failed"] as const)("keeps the hold held after replay while another leg is %s", async (blockingStatus) => {
+    const store = await seededStore("sent");
+    const id = "run:cart:Balogun:buyer:1:dispatch:1";
+    await store.recordStatus(id, { status: "failed", failureReason: "recipient-unresolved", retryable: false });
+    await store.recordStatus("run:cart:Balogun:buyer:1:dispatch:0", { status: blockingStatus });
+    const holds = new InMemoryHoldStore();
+    const hold = sampleHold();
+    await holds.insertIfAbsent(hold);
+    const notifications: NotificationTransition[] = [];
+    const app = createPaymentsApp(store, new StubDispatcher(), {
+      settlements: new InMemorySettlementStore(),
+      collections: { holds, refunds: new InMemoryRefundStore(), gateway: null },
+      notify: async (transition) => {
+        notifications.push(transition);
+      },
+    });
+
+    const response = await app.fetch(new Request(`http://payments/dispatches/${id}/replay`, { method: "POST" }));
+
+    expect(response.status).toBe(200);
+    expect((await holds.byId(hold.id))?.status).toBe("held");
+    expect(notifications).toEqual([]);
+  });
+
+  it("keeps the hold held when the post-replay run has zero dispatch rows", async () => {
+    const store = new ZeroRunRowsDispatchStore();
+    const row = dispatchRow(sampleDispatchRequest(), 0);
+    await store.insertPending(row);
+    const holds = new InMemoryHoldStore();
+    const hold = sampleHold();
+    await holds.insertIfAbsent(hold);
+    const notifications: NotificationTransition[] = [];
+    const app = createPaymentsApp(store, new StubDispatcher(), {
+      settlements: new InMemorySettlementStore(),
+      collections: { holds, refunds: new InMemoryRefundStore(), gateway: null },
+      notify: async (transition) => {
+        notifications.push(transition);
+      },
+    });
+
+    const response = await app.fetch(new Request(`http://payments/dispatches/${row.id}/replay`, { method: "POST" }));
+
+    expect(response.status).toBe(200);
+    expect((await holds.byId(hold.id))?.status).toBe("held");
+    expect(notifications).toEqual([]);
+  });
+
+  it("keeps the hold held and sends no release notification when replay fails", async () => {
+    const store = await seededStore("sent");
+    const id = "run:cart:Balogun:buyer:1:dispatch:1";
+    await store.recordStatus(id, { status: "failed", failureReason: "recipient-unresolved", retryable: false });
+    const holds = new InMemoryHoldStore();
+    const hold = sampleHold();
+    await holds.insertIfAbsent(hold);
+    const notifications: NotificationTransition[] = [];
+    const app = createPaymentsApp(store, new ScriptedDispatcher({ status: "failed", failureReason: "still down" }), {
+      settlements: new InMemorySettlementStore(),
+      collections: { holds, refunds: new InMemoryRefundStore(), gateway: null },
+      notify: async (transition) => {
+        notifications.push(transition);
+      },
+    });
+
+    const response = await app.fetch(new Request(`http://payments/dispatches/${id}/replay`, { method: "POST" }));
+
+    expect(response.status).toBe(502);
+    expect((await holds.byId(hold.id))?.status).toBe("held");
+    expect(notifications).toEqual([]);
+  });
+
+  it("keeps the hold held and sends no release notification for an in-flight replay 409", async () => {
+    const store = await seededStore("sent");
+    const id = "run:cart:Balogun:buyer:1:dispatch:1";
+    const holds = new InMemoryHoldStore();
+    const hold = sampleHold();
+    await holds.insertIfAbsent(hold);
+    const notifications: NotificationTransition[] = [];
+    const app = createPaymentsApp(store, new StubDispatcher(), {
+      settlements: new InMemorySettlementStore(),
+      collections: { holds, refunds: new InMemoryRefundStore(), gateway: null },
+      notify: async (transition) => {
+        notifications.push(transition);
+      },
+    });
+
+    const response = await app.fetch(new Request(`http://payments/dispatches/${id}/replay`, { method: "POST" }));
+
+    expect(response.status).toBe(409);
+    expect((await holds.byId(hold.id))?.status).toBe("held");
+    expect(notifications).toEqual([]);
+  });
+
+  it("refuses to replay a stored row that disagrees with its durable settlement", async () => {
+    const store = await seededStore("failed");
+    const id = "run:cart:Balogun:buyer:1:dispatch:0";
+    const tampered = (await store.byId(id))!;
+    tampered.amountKobo = 1;
+    store.rows.set(id, tampered);
+    const app = createPaymentsApp(store, new StubDispatcher(), { settlements: new InMemorySettlementStore() });
+
+    const response = await app.fetch(new Request(`http://payments/dispatches/${id}/replay`, { method: "POST" }));
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toBe("settlement-mismatch");
+    expect((await store.byId(id))?.attempts).toBe(1);
+    expect((await store.byId(id))?.amountKobo).toBe(1);
+  });
+
   it("replay 409s an already-sent row and 404s an unknown id", async () => {
     const store = await seededStore("sent");
-    const app = createPaymentsApp(store, new StubDispatcher());
+    const app = createPaymentsApp(store, new StubDispatcher(), { settlements: new InMemorySettlementStore() });
 
     const conflict = await app.fetch(
       new Request("http://payments/dispatches/run:cart:Balogun:buyer:1:dispatch:0/replay", { method: "POST" }),
@@ -105,7 +258,9 @@ describe("payments HTTP surface", () => {
 
   it("replay that fails again returns 502 with the still-failed view", async () => {
     const store = await seededStore("failed");
-    const app = createPaymentsApp(store, new ScriptedDispatcher({ status: "failed", failureReason: "still down" }));
+    const app = createPaymentsApp(store, new ScriptedDispatcher({ status: "failed", failureReason: "still down" }), {
+      settlements: new InMemorySettlementStore(),
+    });
 
     const response = await app.fetch(
       new Request("http://payments/dispatches/run:cart:Balogun:buyer:1:dispatch:0/replay", { method: "POST" }),
@@ -115,6 +270,34 @@ describe("payments HTTP surface", () => {
     expect(body.error).toBe("dispatch-failed");
     expect(body.dispatch.status).toBe("failed");
     expect(body.dispatch.attempts).toBe(2);
+  });
+
+  it.each([
+    ["GET", "/dispatches"],
+    ["POST", "/dispatches/run:cart:Balogun:buyer:1:dispatch:0/replay"],
+    ["POST", "/dispatches/sync"],
+    ["POST", "/payments/charges/confirm"],
+    ["GET", "/payments/holds"],
+    ["GET", "/payments/holds/tx-ref"],
+    ["POST", "/payments/holds/tx-ref/bind"],
+    ["GET", "/payments/refunds"],
+    ["POST", "/payments/refunds/refund%3Asettlement-1/resolution"],
+    ["GET", "/payments/banks"],
+  ])("requires the internal token for %s %s", async (method, path) => {
+    const app = createPaymentsApp(new InMemoryDispatchStore(), new StubDispatcher(), {
+      participantAuth: { internalToken: "internal-test-token" },
+    });
+
+    const missing = await app.fetch(new Request(`http://payments${path}`, { method }));
+    const forged = await app.fetch(
+      new Request(`http://payments${path}`, {
+        method,
+        headers: { "x-payments-internal": "forged-token" },
+      }),
+    );
+
+    expect(missing.status).toBe(401);
+    expect(forged.status).toBe(401);
   });
 
   it("unknown routes 404 in the wire error shape", async () => {

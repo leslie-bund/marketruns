@@ -78,10 +78,10 @@ _Avoid_: payout, reconciliation
 The execution of a settlement's payment legs against payment providers, after the settlement decision. A dispatch carries the settlement record's legs verbatim and never decides money. Reserved for money movement only — never a synonym for a run or delivery.
 
 **Payment Hold**:
-A buyer's charge confirmed server-side and held against their cart before checkout (`payment_holds`: held → released | partially-refunded | refunded | failed). When payments are required, a checkout must bind a confirmed hold covering goods plus delivery; a confirmed hold survives a failed checkout and is reusable on retry.
+A buyer's charge confirmed server-side and held against their cart before checkout (`payment_holds`: held → released | partially-refunded | refunded | failed). When payments are required, a checkout must bind a confirmed hold covering goods plus delivery; a confirmed hold survives a failed checkout and is reusable on retry. Queue execution and successful Ops replay release it only when at least one dispatch row exists and every leg is sent, queued, or completed; pending or failed legs keep it held.
 
 **Refund**:
-The return of buyer money decided by the settlement, executed by the payments worker after the decision — by provider refund for card charges, or an honest terminal `refund-manual` state for methods the system cannot return money through. A refund, like a dispatch, never decides money.
+The return of buyer money decided by the settlement, executed by the payments worker after the decision — by provider refund for card charges, an honest `refund-manual` state for methods the system cannot return money through, or `refund-review` when conflicting provider history blocks safe automatic execution. Ambiguous attempts reconcile against provider history before any retry. Admin resolution records write-once evidence and may accept existing provider/manual refunds or permit canonical retry; it never edits the settlement amount. A refund, like a dispatch, never decides money.
 _Avoid_: reversal, chargeback
 
 **Payout Account**:

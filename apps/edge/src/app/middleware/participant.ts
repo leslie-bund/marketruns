@@ -2,7 +2,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { verifySessionToken } from "@market-runs/domain";
 import type { Env } from "../../config/env.js";
 import { errorResponse } from "../../do/runtime/index.js";
-import { canTransact, coreRegistry, headerAuthAllowed } from "../../registry/index.js";
+import { canTransact, coreRegistry, headerAuthAllowed, preverifiedTransactionsAllowed } from "../../registry/index.js";
 
 /** The single identity seam: resolved id and role are authoritative regardless of auth source. */
 export type Role = "buyer" | "seller" | "runner" | "ops";
@@ -73,7 +73,7 @@ export async function requireTransactionRole(
   }
   const profile = await coreRegistry(c.env).participant(who.id);
   if (!profile || profile.role !== role) return errorResponse(403, "forbidden", "the session does not match the durable participant profile");
-  if (!canTransact(profile.kycStatus, headerAuthAllowed(c.env))) {
+  if (!canTransact(profile.kycStatus, preverifiedTransactionsAllowed(c.env))) {
     return errorResponse(403, "kyc-required", "verified KYC is required before transacting");
   }
   return null;

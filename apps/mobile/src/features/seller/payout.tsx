@@ -13,23 +13,25 @@ import {
 import { Button, Card, Field, Label, Pill, colors, s } from "../../ui";
 
 /**
- * The seller's payout account (GLOSSARY: settlement pays sellers out — this is
- * the account the seller's leg lands in). The account is ALWAYS verified with
- * the provider before saving: "Verify account" resolves the number to a name
- * (422 = unresolvable, never stored), the seller confirms the NAME, and only
- * then Save persists. The "change" path revokes, then re-adds.
+ * The participant's payout account (GLOSSARY: settlement pays sellers and
+ * runners out — this is the account their leg lands in). The account is ALWAYS
+ * verified with the provider before saving: "Verify account" resolves the
+ * number to a name (422 = unresolvable, never stored), the participant confirms
+ * the NAME, and only then Save persists. The "change" path revokes, then re-adds.
  *
- * Shared by the join flow (after store registration) and the seller home —
- * one component, one contract. Never blocks selling: with no account the home
- * shows a gentle prompt card and the store trades on.
+ * Shared by seller onboarding/home and runner home — one component, one
+ * contract. Never blocks marketplace work: with no account the home shows a
+ * gentle prompt card and the participant can continue.
  */
 export function PayoutAccountCard({
   participantId,
+  recipientRole = "seller",
   /** "prompt" (home): no account → gentle card behind a tap. "form" (join): straight into the form. */
   emptyState = "prompt",
   onSaved,
 }: {
   participantId: string;
+  recipientRole?: "seller" | "runner";
   emptyState?: "prompt" | "form";
   onSaved?: () => void;
 }) {
@@ -77,7 +79,7 @@ export function PayoutAccountCard({
         <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>
           {account.accountName} — <BankName code={account.bankCode} /> {maskAccountNumber(account.accountNumber)}
         </Text>
-        <Text style={s.muted}>Settlement pays your seller leg into this account.</Text>
+        <Text style={s.muted}>Settlement pays your {recipientRole} leg into this account.</Text>
         <Button
           title="Change payout account"
           secondary
@@ -97,7 +99,9 @@ export function PayoutAccountCard({
       <Card>
         <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Where do your payouts go?</Text>
         <Text style={s.body}>
-          You can list and sell right away — but settlement needs a verified bank account to pay you.
+          {recipientRole === "runner"
+            ? "You can claim runs right away — but settlement needs a verified bank account to pay you."
+            : "You can list and sell right away — but settlement needs a verified bank account to pay you."}
         </Text>
         <Button title="Add payout account" secondary onPress={() => setEditing(true)} />
       </Card>

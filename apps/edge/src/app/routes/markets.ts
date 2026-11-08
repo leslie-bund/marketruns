@@ -153,7 +153,13 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     target.searchParams.set("kind", "live");
     target.searchParams.set("limit", "200");
     let upstream: Response;
-    try { upstream = await fetch(target, { headers: correlationHeaders(c) }); }
+    try {
+      upstream = await fetch(target, {
+        headers: correlationHeaders(c, {
+          ...(c.env.ARCHIVE_INTERNAL_TOKEN ? { "x-archive-internal": c.env.ARCHIVE_INTERNAL_TOKEN } : {}),
+        }),
+      });
+    }
     catch { return degraded("live run discovery is unavailable: the live_runs index did not respond"); }
     if (!upstream.ok) return degraded(`live run discovery is unavailable: the live_runs index answered ${upstream.status}`);
     let raw: unknown;

@@ -20,7 +20,7 @@ const INTERNAL_TOKEN = "edge-identity-internal-test-token";
 const OPS_TOKEN = "ops-test-token";
 
 /** Test bindings with selected env vars overridden. */
-function withEnv(overrides: Record<string, string>): Env {
+function withEnv(overrides: Record<string, string | undefined>): Env {
   return new Proxy(bindings, {
     get: (target, prop, receiver) =>
       typeof prop === "string" && prop in overrides ? overrides[prop] : Reflect.get(target, prop, receiver),
@@ -94,7 +94,7 @@ describe("ops console device-reset proxies", () => {
         return JSON.stringify({ requests: [] });
       });
 
-    const response = await getOps("/ops/api/device-resets?status=pending", bindings);
+    const response = await getOps("/ops/api/device-resets?status=pending", withEnv({ IDENTITY_INTERNAL_TOKEN: undefined }));
     expect(response.status).toBe(200);
     expect(seen?.["x-identity-internal"]).toBeUndefined();
   });

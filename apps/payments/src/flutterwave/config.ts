@@ -53,6 +53,9 @@ export function flutterwaveConfig(env: FlutterwaveEnv): FlutterwaveConfig {
   const baseUrl = (env.FLUTTERWAVE_BASE_URL?.trim() || FLUTTERWAVE_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const testModeRaw = env.FLUTTERWAVE_TEST_MODE?.trim();
   const testMode = testModeRaw !== undefined && testModeRaw !== "" && testModeRaw !== "0" && testModeRaw.toLowerCase() !== "false";
+  if (testMode && !secretKey.startsWith("FLWSECK_TEST-")) {
+    throw new Error("FLUTTERWAVE_TEST_MODE requires an FLWSECK_TEST- secret key; the test accelerator is forbidden with live keys");
+  }
   return {
     secretKey,
     webhookSecretHash: webhookSecretHash === "" ? null : webhookSecretHash,

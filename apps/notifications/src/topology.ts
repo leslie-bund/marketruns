@@ -1,10 +1,13 @@
 import type { Env } from "./env.js";
 
-/** Queue delivery must not silently call a developer's loopback edge. */
-export function validateNotificationsTopology(env: Pick<Env, "NOTIFICATIONS_ENV" | "EDGE_URL">): void {
+/** Queue delivery must not silently call a developer's loopback edge or fail open without service auth. */
+export function validateNotificationsTopology(env: Pick<Env, "NOTIFICATIONS_ENV" | "EDGE_URL" | "NOTIFICATION_INTERNAL_TOKEN">): void {
   if (!env.NOTIFICATIONS_ENV || env.NOTIFICATIONS_ENV === "development" || env.NOTIFICATIONS_ENV === "test") return;
   if (env.NOTIFICATIONS_ENV !== "staging" && env.NOTIFICATIONS_ENV !== "production") {
     throw new Error("NOTIFICATIONS_ENV must be development, test, staging, or production");
+  }
+  if (!env.NOTIFICATION_INTERNAL_TOKEN) {
+    throw new Error(`NOTIFICATION_INTERNAL_TOKEN is required when NOTIFICATIONS_ENV=${env.NOTIFICATIONS_ENV}`);
   }
   if (!env.EDGE_URL) throw new Error(`EDGE_URL is required when NOTIFICATIONS_ENV=${env.NOTIFICATIONS_ENV}`);
   let url: URL;

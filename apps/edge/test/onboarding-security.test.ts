@@ -110,7 +110,7 @@ describe("secure first-run onboarding", () => {
       iat: at,
       exp: at + 60_000,
     }, SESSION_SECRET);
-    const response = await postCommand(command("participant-other", "runner"), bindings, { authorization: `Bearer ${token}` });
+    const response = await postCommand(command("participant-other", "runner"), withEnv({ IDENTITY_SESSION_SECRET: SESSION_SECRET }), { authorization: `Bearer ${token}` });
     expect(response.status).toBe(403);
   });
 

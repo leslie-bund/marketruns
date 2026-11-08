@@ -224,6 +224,32 @@ export async function persistMessage(
     }
     case "settlement.released": {
       await tx.insert(settlementRecords).values(settlementRecordRow(message)).onConflictDoNothing();
+      const recordId = settlementRecordId(message.runId);
+      const resolvedAt = new Date(message.releasedAt);
+      const ambiguous = message.mode === "disputed" ? (message.inputs.dispute?.ambiguous ?? true) : false;
+      const resolution = {
+        settlementRecordId: recordId,
+        ambiguous,
+        absorbedLossKobo: message.platformLossKobo,
+        status: "resolved",
+        resolvedAt,
+      };
+      const resolvedDisputes = await tx
+        .update(disputes)
+        .set(resolution)
+        .where(eq(disputes.runId, message.runId))
+        .returning({ id: disputes.id });
+      if (message.mode === "disputed" && resolvedDisputes.length === 0) {
+        await tx.insert(disputes).values({
+          id: disputeId(message.runId),
+          runId: message.runId,
+          ...resolution,
+          raisedByParticipantId: "unknown",
+          reason: "",
+          evidenceRefs: [],
+          createdAt: resolvedAt,
+        }).onConflictDoNothing();
+      }
       const rows = ledgerRows(message);
       if (rows.length > 0) {
         await tx.insert(ledgerEntries).values(rows).onConflictDoNothing();

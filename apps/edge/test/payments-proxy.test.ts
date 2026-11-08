@@ -111,19 +111,76 @@ describe("/payments payout-account participant forwarding", () => {
     expect(upstream.seen()?.["x-payments-internal"]).toBeUndefined();
   });
 
-  it("does not add participant auth to charge confirmation", async () => {
+  it.each([
+    ["GET", "/payments/holds"],
+    ["GET", "/payments/holds/tx-ref"],
+    ["POST", "/payments/holds/tx-ref/bind"],
+    ["GET", "/payments/refunds"],
+    ["POST", "/payments/refunds/refund-1/resolution"],
+    ["GET", "/payments/charges/confirm"],
+    ["POST", "/payments/banks"],
+    ["GET", "/payments/charges/confirm/extra"],
+  ])("does not expose non-client payment route %s %s through the public proxy", async (method, path) => {
+    const response = await createApp().fetch(
+      new Request(`${BASE}${path}`, { method }),
+      withEnv({ ALLOW_HEADER_AUTH: undefined, PAYMENTS_INTERNAL_TOKEN: INTERNAL_TOKEN }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("adds service auth but not participant auth to charge confirmation", async () => {
     const upstream = intercept("/payments/charges/confirm", "POST");
     const response = await createApp().fetch(
       new Request(`${BASE}/payments/charges/confirm`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-payments-internal": "client-forged-token",
+          "x-participant-id": "buyer:attacker",
+          "x-participant-role": "buyer",
+        },
         body: JSON.stringify({ txRef: "tx", expectedAmountKobo: 100, buyerId: "buyer:1", cartId: "cart:1" }),
       }),
       withEnv({ ALLOW_HEADER_AUTH: undefined, PAYMENTS_INTERNAL_TOKEN: INTERNAL_TOKEN }),
     );
 
     expect(response.status).toBe(200);
-    expect(upstream.seen()?.["x-payments-internal"]).toBeUndefined();
+    expect(upstream.seen()?.["x-payments-internal"]).toBe(INTERNAL_TOKEN);
     expect(upstream.seen()?.["x-participant-id"]).toBeUndefined();
+    expect(upstream.seen()?.["x-participant-role"]).toBeUndefined();
+  });
+
+  it("fails closed before charge confirmation when deployed service auth is missing", async () => {
+    const response = await createApp().fetch(
+      new Request(`${BASE}/payments/charges/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ txRef: "tx", expectedAmountKobo: 100, buyerId: "buyer:1", cartId: "cart:1" }),
+      }),
+      withEnv({ ALLOW_HEADER_AUTH: undefined, PAYMENTS_INTERNAL_TOKEN: undefined }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { error: string }).error).toBe("payments-auth-unconfigured");
+  });
+
+  it("allows banks with configured service auth and strips spoofed identity headers", async () => {
+    const upstream = intercept("/payments/banks");
+    const response = await createApp().fetch(
+      new Request(`${BASE}/payments/banks`, {
+        headers: {
+          "x-payments-internal": "client-forged-token",
+          "x-participant-id": "seller:attacker",
+          "x-participant-role": "seller",
+        },
+      }),
+      withEnv({ ALLOW_HEADER_AUTH: undefined, PAYMENTS_INTERNAL_TOKEN: INTERNAL_TOKEN }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstream.seen()?.["x-payments-internal"]).toBe(INTERNAL_TOKEN);
+    expect(upstream.seen()?.["x-participant-id"]).toBeUndefined();
+    expect(upstream.seen()?.["x-participant-role"]).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@ The client collects the charge (Flutterwave Standard, webview, via the official 
 
 ## The hold lifecycle
 
-`payment_holds` (migration 0007) is the money-in ledger: `txRef` unique, `providerTxId`, `cartId`, `buyerId`, `amountKobo`, and status `held → released | partially-refunded | refunded | failed`. A confirmed hold is bound to the run at checkout (hold → `runId`), and a confirmed hold is **reusable** — a checkout retry after a failure presents "payment confirmed" rather than charging the buyer twice. *[Amended: the retry path is completed in ADR-0026 — a retry against a cart that already retired at checkout now answers 409 `cart-already-checked-out` with the runId (the checkout tombstone), so a lost checkout response recovers its run and can never seed a second one.]*
+`payment_holds` (migration 0007) is the money-in ledger: `txRef` unique, `providerTxId`, `cartId`, `buyerId`, `amountKobo`, and status `held → released | partially-refunded | refunded | failed`. A confirmed hold is bound to the run at checkout (hold → `runId`), and a confirmed hold is **reusable** — a checkout retry after a failure presents "payment confirmed" rather than charging the buyer twice. *[Amended: the retry path is completed in ADR-0026 — a retry against a cart that already retired at checkout now answers 409 `cart-already-checked-out` with the runId (the checkout tombstone), so a lost checkout response recovers its run and can never seed a second one.]* Queue execution and successful Ops replay share one release guard: at least one dispatch row must exist and every leg must be `sent`, `queued`, or `completed`; pending or failed legs keep the hold blocked.
 
 ## Checkout gating is opt-in, and dev stays unpaid
 
@@ -16,7 +16,7 @@ Proto `checkout.requested` gained an optional `paymentRef`. When the edge env `P
 
 ## The refund rail: method determines honesty
 
-RunDO emits `payment.refund-requested` whenever the settlement computes `buyerRefundKobo > 0`. The payments worker consumes it and the refund path is method-dependent, recorded honestly:
+After the archive commits a settlement whose outcome carries `buyerRefundKobo > 0`, it emits `payment.refund-requested` with the canonical idempotency key (ADR-0029). The payments worker consumes it and the refund path is method-dependent, recorded honestly:
 
 | Charge method | Refund path |
 |---|---|
@@ -25,11 +25,21 @@ RunDO emits `payment.refund-requested` whenever the settlement computes `buyerRe
 
 The non-card row is the same gap class payouts once had before ADR-0024's recipient seam: the system doesn't hold the destination account, so rather than fudging it the refund lands as an explicit, honest terminal state. `payment_refunds` (migration 0007) makes exactly-once structural — `settlementRecordId` unique, one refund record per settlement by construction. Refund-exceeds-hold and provider failures go to `failed` with backoff and the DLQ, same posture as dispatch (ADR-0023).
 
+## Ambiguous provider outcomes reconcile before retry
+
+A network failure, malformed response, or accepted response without a refund id is `indeterminate`, never proof that no refund occurred. The first attempt records `failed` and retries; before any subsequent refund POST, the worker calls `GET /v3/refunds?id=<original-transaction-id>` and reconciles exact transaction, kobo amount, and settlement comment. One exact accepted match is adopted with its provider reference and no second POST. A lookup with no accepted refund permits one new attempt; another lookup failure retries the lookup only.
+
+Multiple exact matches, unexpected accepted history, or conflicting states become terminal-for-automation `refund-review` (migration 0017). Queue redelivery and settlement re-drive skip those rows until Ops establishes provider truth. Full and partial refunds use the same guard because v3 refund deduplication is not assumed. Reconciliation reads provider state only—it never changes the settlement's amount or creates a new money decision.
+
+ADR-0030 adds the operator resolution path: a write-once evidence record can accept an existing provider refund, complete a manual refund, or permit a reviewed retry. Accept/manual resolution updates refund and hold state atomically; retry commits first and then enqueues only the canonical request. It never accepts an amount or calls the provider directly.
+
 ## Payout accounts: resolve-then-save, DB-first
 
 ADR-0024's `DevRecipientResolver` — env map plus Flutterwave test accounts — is now the *fallback*, not the mechanism. Seller onboarding collects payout details the way the provider wants them: `GET /payments/banks` (6-hour cache) → `POST /payments/payout-accounts/resolve` (provider account-name lookup, so the seller confirms the name the bank returns) → `POST /payments/payout-accounts` (save). The `payout_accounts` table (migration 0007) is the store, and the `RecipientResolver` resolution order is now **DB-first, env-map fallback, test accounts last**. Selling is never blocked on it — the seller home shows the masked account with a change path, and an unresolved recipient still fails honestly as `recipient-unresolved`.
 
-Payout-account management accepts participant identity only from the edge's resolved session, carried with `PAYMENTS_INTERNAL_TOKEN`; the payments worker requires seller/runner role and exact participant equality for resolve/save/read/revoke. Client-supplied ids cannot select another participant's account, missing deployed auth fails closed, and saved-account responses mask all but the last four digits. The explicitly gated `ALLOW_HEADER_AUTH=true` demo remains available only when enabled on both workers. Charge confirmation and provider webhooks do not use participant authentication.
+Every non-webhook payment-worker HTTP route requires edge-to-worker service authentication through `PAYMENTS_INTERNAL_TOKEN`; missing deployed configuration fails closed. The public edge proxy exposes only charge confirmation, the bank directory, and payout-account management—internal hold/refund reads and run binding are reachable only through CartDO or the guarded Ops proxies. Client-supplied internal and participant headers are never trusted. Provider webhooks remain public only through their own provider-hash verification, while charge confirmation uses service authentication but no participant identity.
+
+Payout-account management additionally accepts participant identity only from the edge's resolved session; the payments worker requires seller/runner role and exact participant equality for resolve/save/read/revoke. Client-supplied ids cannot select another participant's account, and saved-account responses mask all but the last four digits. The explicitly gated `ALLOW_HEADER_AUTH=true` demo remains available only when enabled on both workers.
 
 ## The estimated-delivery caveat
 

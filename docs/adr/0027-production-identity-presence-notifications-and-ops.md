@@ -42,6 +42,12 @@ Authentication is participant-keyed **1:1** comparison against the enrolled encr
 
 **Rationale:** staff administration and participant authentication have different trust and recovery models. Sharing a library must not collapse that boundary.
 
+## Internal worker reads require service authentication
+
+**Decision:** the archive's `/reputation` and `/admin/*` reads and the notification worker's participant read/delivery routes require independent internal credentials, not merely privacy through the Ops proxy. `ARCHIVE_INTERNAL_TOKEN`, `NOTIFICATION_INTERNAL_TOKEN`, and the other deployed service secrets fail closed when absent; wrong or missing credentials are rejected. Health checks remain public, and tokenless access exists only in the explicit local header-auth demo. Edge proxies and active-run discovery inject the configured credentials rather than forwarding client-supplied internal headers.
+
+**Rationale:** an authenticated Ops console does not make a directly reachable internal worker safe. Deployed authorization must hold at each worker boundary, with least privilege and no development-secret fallback.
+
 ## Notifications are durable in-app, realtime WebSocket, and email
 
 **Decision:** notifications have durable in-app records, realtime delivery over authenticated WebSocket connections, and transactional email through Resend. WebSocket delivery is best-effort when connected; disconnection does not erase the durable in-app record. Email covers receipts, security notices, and approved service communications. **Expo Push is not integrated yet**, and no push-delivery guarantee is made.

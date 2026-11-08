@@ -17,17 +17,17 @@ export interface Env {
   RUN_DO: DurableObjectNamespace<RunDO>;
   PARTICIPANT_DO: DurableObjectNamespace<ParticipantDO>;
   ARCHIVE_QUEUE: Queue;
-  /** Payment dispatch requests (payment.dispatch-requested) → apps/payments consumer. */
-  PAYMENT_QUEUE: Queue;
   /** Trusted lifecycle events → durable notifications worker. Optional in legacy unit-test envs. */
   NOTIFICATION_QUEUE?: Queue;
   ARCHIVE_BUCKET: R2Bucket;
   MARKET_CONFIG: KVNamespace;
-  /** Archive service base URL for the ops console reputation panel (dev: wrangler dev of apps/archive). */
+  /** Archive service base URL for Ops reads and participant active-run discovery. */
   OPS_ARCHIVE_URL?: string;
+  /** Shared edge → archive secret injected on reputation and admin read calls. */
+  ARCHIVE_INTERNAL_TOKEN?: string;
   /** Payments service base URL for the ops console payments proxy (dev default: http://localhost:8790). */
   PAYMENTS_URL?: string;
-  /** Shared edge → payments secret for resolved-participant payout-account routes. */
+  /** Shared edge → payments secret for public client proxies, checkout holds, and ops payment calls. */
   PAYMENTS_INTERNAL_TOKEN?: string;
   /** Durable notification read API and participant realtime callback. */
   NOTIFICATIONS_URL?: string;
@@ -55,7 +55,7 @@ export interface Env {
   /** Neon direct connection for CLI/dev; deployed Workers use Hyperdrive. */
   DATABASE_URL?: string;
   HYPERDRIVE?: { connectionString: string };
-  /** Key for HMAC-SHA256 BVN/NIN digests; raw identity numbers are never persisted. */
+  /** Key for HMAC-SHA256 BVN/NIN digests; dev-key fallback requires explicit ALLOW_HEADER_AUTH=true. */
   ID_DOCUMENT_HMAC_SECRET?: string;
   /**
    * Shared secret for the identity worker's internal routes (face enrollment,

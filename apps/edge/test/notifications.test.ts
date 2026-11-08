@@ -129,6 +129,48 @@ describe("internal notification contact lookup", () => {
       ALLOW_HEADER_AUTH: "false",
       NOTIFICATION_INTERNAL_TOKEN: undefined,
     });
-    expect(noProductionSecret.status).toBe(401);
+    expect(noProductionSecret.status).toBe(503);
+    expect(await noProductionSecret.json()).toMatchObject({ error: "notification-auth-unconfigured" });
+  });
+});
+
+describe("internal notification delivery authentication", () => {
+  function deliveryRequest(token?: string): Request {
+    return new Request("http://edge/internal/notifications/deliver", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { "x-notification-internal": token } : {}),
+      },
+      body: JSON.stringify({
+        id: "notification:delivery-auth",
+        recipientId: "buyer:delivery-auth",
+        sourceEventId: "event:delivery-auth",
+        sourceEventType: "payment.hold-placed",
+        dedupeKey: "delivery-auth",
+        category: "payment",
+        title: "Delivery authentication",
+        body: "Internal delivery test",
+        data: {},
+        createdAt: Date.now(),
+        readAt: null,
+      }),
+    });
+  }
+
+  it("fails closed without service auth unless the explicit header-auth demo is enabled", async () => {
+    const missing = await createApp().fetch(deliveryRequest(), {
+      ...bindings,
+      ALLOW_HEADER_AUTH: "false",
+      NOTIFICATION_INTERNAL_TOKEN: undefined,
+    } as Env);
+    expect(missing.status).toBe(503);
+
+    const demo = await createApp().fetch(deliveryRequest(), {
+      ...bindings,
+      ALLOW_HEADER_AUTH: "true",
+      NOTIFICATION_INTERNAL_TOKEN: undefined,
+    } as Env);
+    expect(demo.status).toBe(200);
   });
 });

@@ -8,7 +8,7 @@ Cart ids are `cart:<market>:<buyerId>`; the run stays 1:1 with its cart, so `run
 
 The buyer identity behind an accept resolves in order: the header-resolved caller, else the intent's recorded buyer, else `buyer:anonymous`. The last branch is deliberate continuity — anonymous, header-less flows collapse into one shared anonymous cart per market, which behaves exactly like the old `cart:<market>`, so unonboarded exploration and the ops-console demo driver keep working. CartDO refuses cross-buyer checkout with 409: the id on `checkout.requested` must be this cart's id, and the buyer must be this cart's buyer.
 
-**Honest caveat — acceptance attribution is not enforced.** The resolution order above decides *whose cart* the product lands in, but nothing restricts acceptance to the intent's buyer: a different identified buyer accepting against someone else's intent lands the product in the accepter's own cart. That is accepted dev-stage behavior (GLOSSARY's "only the buyer who posted the intent participates" is enforced socially, not in code) and tightens when real auth lands.
+**Acceptance attribution is enforced.** The resolution order above decides both *who may accept* and *whose cart* receives the product. A different identified buyer receives 403 before accept-once state or cart state changes; the originating buyer can still accept afterward. Only the explicitly gated header-auth demo may use header-less inheritance, so unonboarded exploration and the ops-console demo keep working without creating a deployed bypass; deployed acceptance requires a buyer session. ProductDO also checks the unaccepted product's expiry synchronously at accept time, closing the pre-alarm post-TTL window; accepted products retain `already-accepted` replay precedence because the cart clock then owns retirement.
 
 ## The close gate rolls forward for auto-generated configs only
 
@@ -41,6 +41,6 @@ Disputes are attributed: the edge adopts the header-resolved caller as `raisedBy
 
 - One open cart per buyer per market; anonymous flows share the anonymous cart and behave as before. Mobile keeps edge-issued ids in its cart-state store and never derives them.
 - ADR-0015's seam is now load-bearing — cart/run keying, dispute attribution, and run discovery all depend on the identity it resolves. This sharpens, but does not change, the swap surface: still `resolveParticipant` alone.
-- Acceptance is not yet restricted to the intent's buyer; recorded here so the gap is closed deliberately, not discovered in production.
+- Acceptance is restricted to the intent's buyer and to unexpired products at the ProductDO command boundary; discovery scope is no longer the only enforcement, and the header-less demo fallback is preserved explicitly.
 - The close-gate rollover and runner-sees-all visibility are dev-stage postures tied to ADR-0013's phase; both are revisited when markets gain operators and the trip auction ships.
 - The archive contract grows the `runnerId`/`kind` filters additively; the live-run index's staleness and unavailability are tolerated by design, never papered over.

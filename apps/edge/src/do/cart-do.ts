@@ -29,6 +29,7 @@ import { fetchInternal, internalPost } from "./transport.js";
 import { routeTrip } from "./routing.js";
 import type { TripRoute } from "./routing.js";
 import { cartIdForBuyer, runIdForCart } from "../config/ids.js";
+import { paymentsAuthConfigured, paymentsServiceHeaders } from "../config/payments-auth.js";
 
 /** Dev default for the payments worker; override with PAYMENTS_URL. */
 const PAYMENTS_URL_DEFAULT = "http://localhost:8790";
@@ -580,9 +581,14 @@ export class CartDO extends DurableObject<Env> {
     paymentRef: string,
     context: { cartId: string; buyerId: string },
   ): Promise<PaymentHoldView | Response> {
+    if (!paymentsAuthConfigured(this.env)) {
+      return errorResponse(502, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required; checkout is not completed");
+    }
     let upstream: Response;
     try {
-      upstream = await fetch(`${this.paymentsBaseUrl()}/payments/holds/${encodeURIComponent(paymentRef)}`);
+      upstream = await fetch(`${this.paymentsBaseUrl()}/payments/holds/${encodeURIComponent(paymentRef)}`, {
+        headers: paymentsServiceHeaders(this.env),
+      });
     } catch {
       return errorResponse(502, "payments-unavailable", "the payments service did not respond; checkout is not completed");
     }
@@ -619,10 +625,14 @@ export class CartDO extends DurableObject<Env> {
 
   /** Bind a verified hold to its run (post-seed). Failures are logged, never checkout-blocking. */
   private async bindHoldToRun(paymentRef: string, runId: string): Promise<void> {
+    if (!paymentsAuthConfigured(this.env)) {
+      console.error(JSON.stringify({ event: "payment.hold_bind_failed", paymentRef, runId, error: "payments-auth-unconfigured" }));
+      return;
+    }
     try {
       const bound = await fetch(`${this.paymentsBaseUrl()}/payments/holds/${encodeURIComponent(paymentRef)}/bind`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: paymentsServiceHeaders(this.env, { "content-type": "application/json" }),
         body: JSON.stringify({ runId }),
       });
       if (!bound.ok) {

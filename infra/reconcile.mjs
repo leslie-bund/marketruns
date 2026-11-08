@@ -279,8 +279,8 @@ async function checkHoldConservation(sql, opts, settlementsByRun) {
 }
 
 /**
- * Check 3 — dispatch completeness. The edge builds legs in settlement order
- * (apps/edge/src/do/run/payment-dispatch.ts): sellers (amount > 0) in outcome
+ * Check 3 — dispatch completeness. The archive builds legs in settlement order
+ * (packages/domain/src/payment-execution.ts): sellers (amount > 0) in outcome
  * order, then runner, then platform; the consumer persists per-leg rows keyed
  * `settlement:<settlementRecordId>:leg:<index>`. Rebuild the expected legs
  * from the stored outcome and require an exact per-leg amount match.
@@ -413,6 +413,11 @@ async function checkRefundRail(sql, opts, settlements, holdIdSet, runHasHold) {
     if (r.status === "refund-manual") {
       warn(check, "payment_refunds", r.id, { amount, holdId: r.hold_id },
         "refund-manual: no API rail for this payment method — ops must refund the buyer by hand (REPORTED, not a discrepancy)");
+      continue;
+    }
+    if (r.status === "refund-review") {
+      warn(check, "payment_refunds", r.id, { amount, attempts: r.attempts, failureReason: r.failure_reason },
+        "refund-review: provider history conflicts with the durable request — automatic redrives skip it; ops must reconcile before any further attempt");
       continue;
     }
     if (r.status === "failed") {

@@ -16,15 +16,21 @@ import type {
   HoldRow,
   HoldStore,
 } from "../src/holds.js";
-import type {
-  RefundExecutionResult,
-  RefundListFilter,
-  RefundListParams,
-  RefundRow,
-  RefundStore,
+import {
+  isRefundResolutionStateValid,
+  refundResolutionRow,
+  sameRefundResolution,
+  type RefundExecutionResult,
+  type RefundListFilter,
+  type RefundListParams,
+  type RefundResolutionCommand,
+  type RefundResolutionResult,
+  type RefundRow,
+  type RefundStore,
 } from "../src/refunds.js";
 import type { PayoutAccountRow, PayoutAccountStore } from "../src/payout-accounts.js";
 import type { QueueMessageLike } from "../src/consume.js";
+import type { SettlementAuthorization, SettlementStore } from "../src/settlement.js";
 
 /**
  * In-memory DispatchStore double: the same idempotency contract as
@@ -66,6 +72,10 @@ export class InMemoryDispatchStore implements DispatchStore {
       if (row.providerReference === providerReference) return { ...row };
     }
     return null;
+  }
+
+  async byRun(runId: string): Promise<DispatchRow[]> {
+    return [...this.rows.values()].filter((row) => row.runId === runId).map((row) => ({ ...row }));
   }
 
   async recordResult(id: string, result: DispatchTransferResult): Promise<void> {
@@ -221,6 +231,10 @@ export class InMemoryHoldStore implements HoldStore {
   }
 }
 
+function copyRefundRow(row: RefundRow): RefundRow {
+  return { ...row, resolution: row.resolution ? { ...row.resolution } : null };
+}
+
 export class InMemoryRefundStore implements RefundStore {
   readonly rows = new Map<string, RefundRow>();
 
@@ -228,24 +242,26 @@ export class InMemoryRefundStore implements RefundStore {
     for (const existing of this.rows.values()) {
       if (existing.settlementRecordId === row.settlementRecordId && existing.holdId === row.holdId) return false;
     }
-    this.rows.set(row.id, { ...row });
+    this.rows.set(row.id, copyRefundRow(row));
     return true;
   }
 
   async bySettlementRecordId(settlementRecordId: string): Promise<RefundRow | null> {
     for (const row of this.rows.values()) {
-      if (row.settlementRecordId === settlementRecordId) return { ...row };
+      if (row.settlementRecordId === settlementRecordId) return copyRefundRow(row);
     }
     return null;
   }
 
   async forSettlement(settlementRecordId: string): Promise<RefundRow[]> {
-    return [...this.rows.values()].filter((row) => row.settlementRecordId === settlementRecordId).map((row) => ({ ...row }));
+    return [...this.rows.values()]
+      .filter((row) => row.settlementRecordId === settlementRecordId)
+      .map(copyRefundRow);
   }
 
   async byId(id: string): Promise<RefundRow | null> {
     const row = this.rows.get(id);
-    return row ? { ...row } : null;
+    return row ? copyRefundRow(row) : null;
   }
 
   async recordResult(id: string, result: RefundExecutionResult): Promise<void> {
@@ -256,6 +272,30 @@ export class InMemoryRefundStore implements RefundStore {
     if (result.failureReason !== undefined) row.failureReason = result.failureReason;
     row.attempts += 1;
     row.updatedAt = new Date();
+  }
+
+  async resolve(id: string, command: RefundResolutionCommand): Promise<RefundResolutionResult> {
+    const row = this.rows.get(id);
+    if (!row) return { outcome: "not-found", refund: null };
+    const resolution = refundResolutionRow(id, command);
+    // No await occurs between the check and write, matching the parent-row lock
+    // in DrizzleRefundStore for concurrent in-memory calls.
+    if (row.resolution) {
+      return sameRefundResolution(row.resolution, resolution)
+        ? { outcome: "replayed", refund: copyRefundRow(row) }
+        : { outcome: "conflict", refund: copyRefundRow(row) };
+    }
+    if (!isRefundResolutionStateValid(row.status, resolution.action)) {
+      return { outcome: "invalid-state", refund: copyRefundRow(row) };
+    }
+    row.status = resolution.status;
+    if (resolution.action !== "allow-retry") {
+      row.providerRef = resolution.providerRef;
+      row.failureReason = null;
+    }
+    row.updatedAt = command.resolvedAt;
+    row.resolution = resolution;
+    return { outcome: "applied", refund: copyRefundRow(row) };
   }
 
   async committedForHold(holdId: string): Promise<number> {
@@ -272,7 +312,7 @@ export class InMemoryRefundStore implements RefundStore {
         (filter.status == null || row.status === filter.status),
     );
     return {
-      items: matched.slice(params.offset, params.offset + params.limit).map((row) => ({ ...row })),
+      items: matched.slice(params.offset, params.offset + params.limit).map(copyRefundRow),
       total: matched.length,
     };
   }
@@ -330,4 +370,45 @@ export function sampleRefundRequest(overrides: Partial<PaymentRefundRequested> =
     idempotencyKey: "refund:run:cart:Balogun:buyer:1:settlement",
     ...overrides,
   };
+}
+
+/** Durable authorization matching sampleDispatchRequest and sampleRefundRequest. */
+export function sampleSettlementAuthorization(
+  overrides: Partial<SettlementAuthorization> = {},
+): SettlementAuthorization {
+  return {
+    settlementRecordId: "run:cart:Balogun:buyer:1:settlement",
+    runId: "run:cart:Balogun:buyer:1",
+    market: "Balogun",
+    buyerId: "buyer:1",
+    runnerId: "runner:internal",
+    outcome: {
+      sellers: [{ sellerId: "seller:amina", amountKobo: 148_500 }],
+      runnerKobo: 160_000,
+      platformKobo: 26_500,
+      buyerRefundKobo: 100_000,
+      platformLossKobo: 0,
+    },
+    ...overrides,
+  };
+}
+
+export class InMemorySettlementStore implements SettlementStore {
+  private readonly records: Map<string, SettlementAuthorization>;
+
+  constructor(records: SettlementAuthorization[] = [sampleSettlementAuthorization()]) {
+    this.records = new Map(records.map((record) => [record.settlementRecordId, record]));
+  }
+
+  async byId(settlementRecordId: string): Promise<SettlementAuthorization | null> {
+    const record = this.records.get(settlementRecordId);
+    return record ? structuredClone(record) : null;
+  }
+
+  async list(filter: { market?: string | null }): Promise<SettlementAuthorization[]> {
+    return [...this.records.values()]
+      .filter((record) => filter.market == null || record.market === filter.market)
+      .sort((a, b) => a.settlementRecordId.localeCompare(b.settlementRecordId))
+      .map((record) => structuredClone(record));
+  }
 }

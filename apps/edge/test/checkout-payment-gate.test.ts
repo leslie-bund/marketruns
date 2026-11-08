@@ -124,19 +124,28 @@ describe("CartDO checkout payment gate", () => {
     expect((await readJson(refused)).error).toBe("payment-hold-insufficient");
   });
 
-  it("gate ON: a covering hold passes checkout and gets bound to the run", async () => {
+  it("gate ON: a covering hold passes checkout and gets bound to the run with service auth", async () => {
     const kase = testCase("4");
     cases.push(kase);
     await freshCart(kase);
+    await runInDurableObject(cartStub(kase.cartId), async (instance) => {
+      (instance as unknown as { env: { PAYMENTS_INTERNAL_TOKEN?: string } }).env.PAYMENTS_INTERNAL_TOKEN = "cart-payments-internal-test-token";
+    });
     const pool = fetchMock.get(PAYMENTS_ORIGIN);
+    let verifyHeaders: Record<string, string> | undefined;
     pool
       .intercept({ path: `/payments/holds/${kase.txRef}`, method: "GET" })
-      .reply(200, JSON.stringify(holdView(kase)), { headers: { "content-type": "application/json" } });
+      .reply(200, (opts) => {
+        verifyHeaders = opts.headers as Record<string, string>;
+        return JSON.stringify(holdView(kase));
+      }, { headers: { "content-type": "application/json" } });
     let bindBody: unknown = null;
+    let bindHeaders: Record<string, string> | undefined;
     pool
       .intercept({ path: `/payments/holds/${kase.txRef}/bind`, method: "POST" })
       .reply(200, (opts) => {
         bindBody = opts.body;
+        bindHeaders = opts.headers as Record<string, string>;
         return JSON.stringify({ status: "bound" });
       });
 
@@ -147,6 +156,8 @@ describe("CartDO checkout payment gate", () => {
     expect(body.type).toBe("checkout.accepted");
     expect(body.runId).toBe(`run:cart:pg-4:buyer:anonymous`);
     expect(JSON.parse(String(bindBody))).toEqual({ runId: `run:${kase.cartId}` });
+    expect(verifyHeaders?.["x-payments-internal"]).toBe("cart-payments-internal-test-token");
+    expect(bindHeaders?.["x-payments-internal"]).toBe("cart-payments-internal-test-token");
   });
 
   it("gate ON: exact top-up holds aggregate and every hold binds to the run", async () => {

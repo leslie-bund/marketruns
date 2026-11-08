@@ -6,7 +6,20 @@ import { setTimeout as delay } from "node:timers/promises";
 const root = new URL("..", import.meta.url).pathname;
 const database = `market_runs_rehearsal_${Date.now().toString(36)}`;
 const databaseUrl = `postgres://postgres:postgres@localhost:54322/${database}`;
-const env = { ...process.env, DATABASE_URL: databaseUrl };
+// A rehearsal is an isolated test fixture, never a real-vendor session. These
+// explicit values override both the caller's shell and infra/.dev.vars (the dev
+// scripts forward them as Wrangler --var values). Empty Flutterwave credentials
+// also prevent e2e-session/reconcile from reloading the real local key and
+// performing provider reads during this temporary run.
+const env = {
+  ...process.env,
+  DATABASE_URL: databaseUrl,
+  PAYMENT_DISPATCHER: "stub",
+  FACE_VERIFIER: "stub",
+  PAYMENTS_REQUIRED: "",
+  FLUTTERWAVE_SECRET_KEY: "",
+  FLUTTERWAVE_TEST_MODE: "",
+};
 let child;
 let finished = false;
 let databaseCreated = false;

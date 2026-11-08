@@ -4,7 +4,7 @@ ADR-0007 made the settlement function the only place money moves; ADR-0008 price
 
 ## The flow
 
-At settlement release, RunDO emits a `payment.dispatch-requested` queue message carrying the legs straight from the settlement record — seller payouts, runner payout, platform fee. The payments worker consumes it, and a `PaymentDispatcher` abstraction (ADR-0009, same doctrine as KYC and face verification) executes each leg against a provider. The shipped implementation is `StubDispatcher`, which returns deterministic `stub:<sha>` references — enough to exercise idempotency, retries, and the ops surface end to end before a PSP is chosen.
+At settlement release, RunDO emits only the archive events. The archive persists `run.retired` and `settlement.released` in one transaction, then builds `payment.dispatch-requested` from the committed settlement and archived run and enqueues it before acknowledging the settlement archive message (ADR-0029). The payments worker consumes it, and a `PaymentDispatcher` abstraction (ADR-0009, same doctrine as KYC and face verification) executes each leg against a provider. The shipped implementation is `StubDispatcher`, which returns deterministic `stub:<sha>` references — enough to exercise idempotency, retries, and the ops surface end to end before a PSP is chosen.
 
 ## Refunds stay on the hold
 
@@ -17,11 +17,17 @@ Buyer refunds are **deliberately not dispatched.** A refund is not a payout; it 
 - Per-leg idempotency keys, `settlement:<id>:leg:<n>` — replaying a settlement replays nothing twice.
 - The key column is `UNIQUE`; inserts are `onConflictDoNothing` — a duplicate delivery is a no-op by construction, not by check-then-act.
 
-Retries use backoff up to `max_retries` 5, then dead-letter to `payment-dispatch-dlq`. The DLQ is deliberate and contrasts with the archive consumer, which has none — money execution gets a DLQ because a silently dropped payout leg is unrecoverable in a way a dropped snapshot is not.
+Retries use backoff up to `max_retries` 5, then dead-letter to `payment-dispatch-dlq`. The archive queue likewise has five retries and `archive-snapshots-dlq` (ADR-0029): neither a settlement emission trigger nor its payment execution may disappear silently.
+
+## Durable authorization precedes execution
+
+Idempotency is replay protection, not proof that the first request was authorized. Before any dispatch row, refund row, hold transition, notification, or provider call, the payments worker now loads the immutable `settlement_records` outcome joined to its `runs_archive` run and rebuilds the expected execution request through the same pure projection the archive uses for emission (`packages/domain/payment-execution`). Settlement id, run, market, buyer/runner, ordered payout legs, recipients, kobo amounts, memos, and idempotency keys must match exactly; only correlation `requestId` is excluded.
+
+Because the archive and payment queues are independent, a settlement that is not visible yet retries without side effects. An existing settlement that does not authorize the message is a permanent mismatch and is acknowledged without execution. Existing dispatch rows must also match the canonical request, including during Ops replay, so an idempotency key cannot be reused with changed run, recipient, or amount. This adds no arithmetic and no second money decision: the archived settlement outcome remains the only authorization.
 
 ## The ops surface
 
-`GET /dispatches` lists, `POST /dispatches/:id/replay` re-executes a dead-lettered or failed leg (idempotency keys make replay safe), and the edge proxies a read at `GET /ops/api/admin/payments` into the ops console's new **Payments tab** — settlement money is now observable from decision to execution in one place.
+`GET /dispatches` lists, `POST /dispatches/:id/replay` re-executes a dead-lettered or failed leg (idempotency keys make replay safe), and the edge proxies a read at `GET /ops/api/admin/payments` into the ops console's **Payments tab**. Successful replay also performs the same run-wide hold reconciliation as queue consumption: release only when every durable leg is sent, queued, or completed; any pending or failed sibling keeps the hold blocked. For in-flight rows, `POST /dispatches/:id/sync` polls the current provider status without executing another transfer or incrementing attempts, and Ops exposes it admin-only as **Sync provider status**. `GET /recovery` groups dispatch, refund, hold, and canonical missing-execution issues by settlement so the admin **Recovery** tab presents one attention queue with the same existing actions. ADR-0029 adds settlement-level `POST /settlements/:id/redrive`, proxied admin-only through Ops, which re-enqueues canonical requests without accepting money-bearing input or calling a provider directly.
 
 ## The vendor decision stays open — with the research recorded
 

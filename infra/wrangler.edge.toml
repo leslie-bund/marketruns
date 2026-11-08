@@ -24,11 +24,6 @@ new_sqlite_classes = ["ParticipantDO"]
 binding = "ARCHIVE_QUEUE"
 queue = "archive-snapshots"
 
-# Settlement payout legs → apps/payments consumer (ADR-0007 execution side).
-[[queues.producers]]
-binding = "PAYMENT_QUEUE"
-queue = "payment-dispatch"
-
 [[queues.producers]]
 binding = "NOTIFICATION_QUEUE"
 queue = "notification-events"
@@ -61,11 +56,14 @@ PAYMENTS_URL = "http://localhost:8790"
 # code change); keep NOTIFICATION_INTERNAL_TOKEN in wrangler secrets.
 NOTIFICATIONS_URL = "http://localhost:8791"
 
-# Secrets stay out of this file — set them with wrangler:
+# Secrets stay out of this file — set them with wrangler; all are required by staging validation:
 #   wrangler secret put IDENTITY_SESSION_SECRET   # on BOTH edge and identity
-#   wrangler secret put IDENTITY_INTERNAL_TOKEN   # on BOTH edge and identity — the edge
-#                                                 # injects it on the guarded /auth/* routes
-#   wrangler secret put PAYMENTS_INTERNAL_TOKEN   # on BOTH edge and payments — payout-account auth
+#   wrangler secret put IDENTITY_INTERNAL_TOKEN   # on BOTH edge and identity — guarded /auth/* and Ops routes
+#   wrangler secret put PAYMENTS_INTERNAL_TOKEN   # on BOTH edge and payments — all worker service auth
+#   wrangler secret put ARCHIVE_INTERNAL_TOKEN    # on BOTH edge and archive — reputation/admin/active-run reads
+#   wrangler secret put NOTIFICATION_INTERNAL_TOKEN # on BOTH edge and notifications — reads and delivery callbacks
+#   wrangler secret put ID_DOCUMENT_HMAC_SECRET   # edge only — keyed BVN/NIN digests
+#   wrangler secret put OPS_AUTH_SECRET           # edge only — Better Auth, at least 32 characters
 #   (IDENTITY_ENCRYPTION_KEY lives on the identity worker only)
 
 # Dev-only: the free public OSRM demo server (no key, demo usage policy).
@@ -111,10 +109,6 @@ new_sqlite_classes = ["ParticipantDO"]
 [[env.staging.queues.producers]]
 binding = "ARCHIVE_QUEUE"
 queue = "archive-snapshots-staging"
-
-[[env.staging.queues.producers]]
-binding = "PAYMENT_QUEUE"
-queue = "payment-dispatch-staging"
 
 [[env.staging.queues.producers]]
 binding = "NOTIFICATION_QUEUE"

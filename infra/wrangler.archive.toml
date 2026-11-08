@@ -8,10 +8,16 @@ compatibility_flags = ["nodejs_compat"]
 queue = "archive-snapshots"
 max_batch_size = 10
 max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "archive-snapshots-dlq"
 
 [[queues.producers]]
 binding = "NOTIFICATION_QUEUE"
 queue = "notification-events"
+
+[[queues.producers]]
+binding = "PAYMENT_QUEUE"
+queue = "payment-dispatch"
 
 [[r2_buckets]]
 binding = "ARCHIVE_BUCKET"
@@ -19,20 +25,31 @@ bucket_name = "market-runs-archive"
 
 # DATABASE_URL (dev) or the Hyperdrive binding (prod) is provided at deploy
 # time — never committed. Dev: a local Postgres container (infra/README).
+# wrangler secret put ARCHIVE_INTERNAL_TOKEN  # on BOTH edge and archive; required in staging/production
+# ALLOW_HEADER_AUTH=true is an explicit local demo only and must not be set in deployed environments.
 
 # Named environments do not inherit resource bindings. These staging resources
 # pair with the edge producers; provision Hyperdrive separately.
 [env.staging]
 name = "market-runs-archive-staging"
 
+[env.staging.vars]
+ARCHIVE_ENV = "staging"
+
 [[env.staging.queues.consumers]]
 queue = "archive-snapshots-staging"
 max_batch_size = 10
 max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "archive-snapshots-dlq-staging"
 
 [[env.staging.queues.producers]]
 binding = "NOTIFICATION_QUEUE"
 queue = "notification-events-staging"
+
+[[env.staging.queues.producers]]
+binding = "PAYMENT_QUEUE"
+queue = "payment-dispatch-staging"
 
 [[env.staging.r2_buckets]]
 binding = "ARCHIVE_BUCKET"

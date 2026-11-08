@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { BIOMETRIC_CONSENT_VERSION } from "@market-runs/proto";
-import { createIdentityApp } from "../src/app.js";
+import { createIdentityApp, reconcileCoreKyc as reconcileCoreKycHttp, type CoreKycReconciler } from "../src/app.js";
 import { createMemoryStore } from "../src/dev-store.js";
 import { StubFaceVerifier, createFaceVerifier, type FaceVerifier } from "../src/face-verifier.js";
 import { createMemoryCaptureStore } from "../src/capture-store.js";
@@ -34,10 +34,12 @@ function fakeApi() {
   };
   return { fetchImpl: fetchImpl as typeof fetch, calls, board };
 }
-function makeApp(fetchImpl: typeof fetch, env: Partial<Env> = {}, now?: () => Date, localFaceVerifier: FaceVerifier = new StubFaceVerifier()) {
+function makeApp(fetchImpl: typeof fetch, env: Partial<Env> = {}, now?: () => Date,
+  localFaceVerifier: FaceVerifier = new StubFaceVerifier(), reconcileCoreKyc?: CoreKycReconciler) {
   const store = createMemoryStore(); const captures = createMemoryCaptureStore();
   const verifier = new SmileIdFaceVerifier(new SmileIdClient(CONFIG, fetchImpl));
-  const app = createIdentityApp({ store, faceVerifier: verifier, localFaceVerifier, captureStore: captures, passkeyVerifier: null, ...(now ? { now } : {}) });
+  const app = createIdentityApp({ store, faceVerifier: verifier, localFaceVerifier, captureStore: captures,
+    passkeyVerifier: null, ...(reconcileCoreKyc ? { reconcileCoreKyc } : {}), ...(now ? { now } : {}) });
   type Wire = Omit<Response, "json"> & { json(): Promise<any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
   const call = (path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Wire> => app.fetch(new Request(`http://identity.test${path}`, {
     method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", ...headers },
@@ -68,6 +70,29 @@ describe("Smile ID quarantine", () => {
   it("requires production vendor keys and does not silently select stub in production", () => {
     expect(smileIdConfig({ SMILEID_PARTNER_ID: "1", SMILEID_API_KEY: "k", SMILEID_ENV: "production" } as Env).baseUrl).toBe("https://api.smileidentity.com");
     expect(() => createFaceVerifier({ FACE_VERIFIER: "stub", IDENTITY_ENV: "production" } as Env)).toThrow(/forbidden/);
+  });
+  it("posts authenticated verified KYC to the edge and validates the returned participant", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return json(200, { type: "participant.recorded", participant: {
+        id: "p-1", role: "seller", displayName: "Amina", verifiedLegalName: "Amina Yusuf", kycStatus: "verified",
+        idDocumentType: "bvn", idDocumentHash: "document-hash", markets: ["Balogun"], createdAt: Date.now(),
+      } });
+    }) as typeof fetch;
+    try {
+      await reconcileCoreKycHttp({ EDGE_URL: "https://edge.marketruns.test/", IDENTITY_INTERNAL_TOKEN: "secret" },
+        { participantId: "p-1", verifiedLegalName: "Amina Yusuf" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://edge.marketruns.test/internal/identity/kyc");
+      expect(calls[0]?.init?.method).toBe("POST");
+      expect(calls[0]?.init?.redirect).toBe("error");
+      expect((calls[0]?.init?.headers as Record<string, string>)["x-identity-internal"]).toBe("secret");
+      expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ participantId: "p-1", verifiedLegalName: "Amina Yusuf" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 describe("hybrid Biometric KYC enrollment", () => {
@@ -143,6 +168,36 @@ describe("hybrid Biometric KYC enrollment", () => {
     const row = store.enrollments.get("p-1")!;
     expect(row.captureObjectKey).not.toBe(oldKey); expect(captures.objects.has(oldKey)).toBe(false);
     expect(captures.objects.size).toBe(1); expect(captures.objects.get(row.captureObjectKey!)).toEqual(new Uint8Array(Buffer.from(IMAGE_B, "base64")));
+  });
+  it("keeps enrollment pending and retries idempotently when core KYC reconciliation fails", async () => {
+    const inputs: unknown[] = [];
+    const reconcile: CoreKycReconciler = async (_env, input) => {
+      inputs.push(input);
+      if (inputs.length === 1) throw new Error("edge temporarily unavailable");
+    };
+    const { fetchImpl } = fakeApi();
+    const { call, store, captures } = makeApp(fetchImpl, {}, undefined, undefined, reconcile);
+    const id = await startEnrollment(call); const providerId = store.jobs.get(id)!.providerJobId;
+    const legalName = { first_name: "Amina", last_name: "Yusuf" };
+
+    expect((await callback(call, providerId, "clear", legalName)).status).toBe(500);
+    expect(store.jobs.get(id)?.status).toBe("pending");
+    expect(store.sessions.size).toBe(0);
+    expect(store.participants.get("p-1")?.kycStatus).toBe("verified");
+    const retainedKey = store.enrollments.get("p-1")!.captureObjectKey!;
+    expect(captures.objects.size).toBe(1);
+
+    expect((await callback(call, providerId, "clear", legalName)).status).toBe(200);
+    expect(store.jobs.get(id)?.status).toBe("passed");
+    expect(store.enrollments.get("p-1")?.captureObjectKey).toBe(retainedKey);
+    expect(captures.objects.size).toBe(1);
+    expect(inputs).toEqual([
+      { participantId: "p-1", verifiedLegalName: "Amina Yusuf" },
+      { participantId: "p-1", verifiedLegalName: "Amina Yusuf" },
+    ]);
+    const complete = await call(`/auth/face/job/${id}`);
+    expect(complete.status).toBe(200);
+    expect((await complete.json()).session).toBeTruthy();
   });
   it("login stays local 1:1 after hybrid enrollment", async () => {
     const { fetchImpl, calls } = fakeApi(); const { call, store } = makeApp(fetchImpl); const id = await startEnrollment(call);

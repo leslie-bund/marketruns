@@ -172,10 +172,10 @@ Get an explicit "yes" to the consent wording before onboarding each tester.
 | Friend 1 | **Seller** (at least one) | Own phone |
 | Friends 2–3(–4) | **Buyers** (at least two) | Own phones |
 
-### Seller payout onboarding (test bank accounts)
+### Seller and runner payout onboarding (test bank accounts)
 
-When the seller onboards a payout account, use Flutterwave's documented test
-accounts — the resolve step returns the canned name the bank "returns":
+When a seller or runner onboards a payout account, use Flutterwave's documented
+test accounts — the resolve step returns the canned name the bank "returns":
 
 - Bank: **044 — Access Bank**
 - Account numbers: **0690000031**, **0690000032**, **0690000033**
@@ -204,7 +204,7 @@ Each script gives: what the tester taps, what they should see, and which
 dashboard panels you watch. Run S1–S2 with everyone first; S3–S6 as time
 allows. Note every hesitation and every wrong tap — that is the data.
 
-### S1 — Onboarding (face enroll + seller payout account)
+### S1 — Onboarding (face enroll + seller/runner payout accounts)
 
 | Step | Actor | Action | Expected screen | Watch on dashboard |
 |------|-------|--------|-----------------|--------------------|
@@ -213,6 +213,8 @@ allows. Note every hesitation and every wrong tap — that is the data.
 | 3 | Each friend | Take the selfie | Async job: "verifying…" (submit → 202 → poll); then enrolled | — |
 | 4 | Seller | Add payout account: bank 044, account 0690000031 | Account name resolve shows the bank-returned name; confirm saves | — |
 | 5 | Seller | Return to seller home | Masked account shown with a change path | — |
+| 6 | Owner (runner) | Open Runner pool → Payouts → Add payout account: bank 044, account 0690000032 | The resolved runner session is used; account-name resolve and save work as for the seller | — |
+| 7 | Owner (runner) | Return to Runner pool, then open a claimed run | Masked runner account with a change path remains available in both states | — |
 
 Sandbox face verdicts are simulated — expect enroll to pass regardless of the
 actual photo. If Smile ID is down or unconfigured, the stub verifier does the
@@ -240,7 +242,7 @@ the QR scan alone only records `scannedAt`. This is doctrine, not a bug.
 |------|-------|--------|-----------------|--------------------|
 | 1–6 | As S2 steps 1–6 | Happy path to pickup | — | — |
 | 7 | Buyer | At delivery, **file a dispute** instead of confirming | Dispute recorded on the run | Run detail shows dispute; **Disputes tab** — known limitation L2: the row materializes at run retirement (doctrine, ADR-0026) |
-| 8 | Owner (ops) | In run detail, **review the evidence first** (handoff photo links, scan/confirm timestamps, the dispute block's reason + merged refs), then use **ops settle**: pick a mode, enter a reason | Settlement released per the chosen mode; run retires | **Settlements tab** (new settlement), **Ledger tab** (balanced), **Payments tab** (legs + refund row if the mode refunds the buyer), **Disputes tab** (evidence merged server-side) |
+| 8 | Owner (ops) | In run detail, **review the evidence first** (handoff photo links, scan/confirm timestamps, the dispute block's reason + merged refs), then use **ops settle**: pick a mode, enter a reason | Settlement released per the chosen mode; run retires | **Settlements tab** (new settlement), **Ledger tab** (balanced), **Payments tab** (legs + refund row if the mode refunds the buyer), **Disputes tab** (`resolved`, reason + evidence preserved, settlement id, resolution time, ambiguity, absorbed loss) |
 
 Every kobo still comes out of the settlement function — ops settle picks the
 mode and supplies the reason; it never moves money directly.
@@ -312,6 +314,9 @@ them.
 | I1 | **Flutterwave webview fails** (buyer cannot reach the charge modal, or charges error immediately) | Flip the paid gate off: remove `PAYMENTS_REQUIRED=true` from `infra/.dev.vars`, restart the stack. Checkout falls back to the unpaid dev posture. **Continue all trust scenarios** (S2 handoffs, S3, S5a–c) — they do not depend on collection. Mark S2-step-4, S4, S5d as not-tested. |
 | I2 | **Smile ID sandbox down — or no Smile ID credentials** (face jobs stuck pending / erroring) | Set `FACE_VERIFIER=stub` in `infra/.dev.vars`, restart. Face enroll/verify become synchronous stubs. Note in the session log that identity flows ran stubbed. |
 | I3 | **Stuck hold** (a hold stays `held` with no settlement, or a dispatch never resolves) | 1. Run `node infra/reconcile.mjs` — it isolates the exact row and check that fails. 2. Ops-settle the affected run from the dashboard (run detail → ops settle). 3. Re-run reconcile; the hold must now tie out. **If a second stuck hold occurs in the same session: stop all payments scenarios** (flip `PAYMENTS_REQUIRED` off) and continue trust-only. |
+| I3b | **Archived settlement has missing payment execution** (no dispatch/refund rows after the archive queue should have drained) | 1. Keep the run retired—do not create a second settlement. 2. Settlements tab → **Re-drive payments** for the archived settlement; this rebuilds canonical requests with unchanged idempotency keys. 3. Re-run reconcile. Use per-leg **Replay through dispatcher** only for a visible `failed`/`pending` leg after fixing its recipient/provider cause; re-drive reports enqueue status, not provider completion. Replaying the final blocking leg also applies normal hold-release bookkeeping; any other pending/failed sibling keeps the hold held. |
+| I3c | **Refund is `refund-review`** (provider history conflicts or has duplicate accepted candidates) | **Stop automatic retries and do not issue a manual refund before establishing provider truth.** Inspect the original transaction, exact amount, and settlement comment. In Refunds, choose **Accept provider refund** only for a proven existing refund, recording provider reference + evidence + note; choose **Allow retry** only after proving no accepted refund exists, again with evidence. Both actions are write-once and admin-audited (ADR-0030). |
+| I3d | **Refund is `refund-manual`** (non-card method has no API rail) | Repay the buyer through the external/manual rail, then use **Record manual completion** in Refunds with the external transfer reference, receipt/evidence reference, and note. This updates refund and hold truth without calling the provider or changing the settlement amount. |
 | I4 | **Tunnel drops** | Restart the tunnel (Ctrl-C the stack, `dev:all -- --tunnel` again; Postgres state and all server state survive — friends just re-scan the new QR / reload). If using a quick tunnel, re-register the Flutterwave webhook (§1.3) and redistribute the ops link. **Second drop in the session: switch to LAN mode** — same Wi-Fi, `EXPO_PUBLIC_EDGE_URL` = the Mac's LAN IP, no tunnels. |
 | I5 | **Tester types a real BVN/NIN** | Prevention is the briefing (§2) — but if it happens: do not panic, do not delete anything mid-session. Note the participant id. Identity stores embeddings encrypted at rest and IDs hash-only; after the session, delete the local Postgres container volume (throwaway dev container) as part of teardown, and say so to the tester. |
 
@@ -410,7 +415,9 @@ write it up the same day.
 | Secrets | `infra/.dev.vars` (gitignored; all dev workers read it) |
 | Mobile env | `apps/mobile/.env` (`EXPO_PUBLIC_EDGE_URL`, `EXPO_PUBLIC_FLW_PUBLIC_KEY`) |
 | Webhook | `https://<edge-tunnel>/webhooks/transfers` → edge proxies to payments worker :8790 (no second tunnel; ADR-0026) |
-| Transfer polling fallback | `POST /dispatches/sync` (payments worker; stale > 15 min default) |
+| Transfer polling fallback | Payments tab → **Sync provider status** for one `sent`/`queued` row, or `POST /dispatches/sync` for stale-row bulk polling (default > 15 min). Single sync checks the existing provider transfer only—no replay, no new transfer, no attempt increment. |
+| Settlement queue recovery | **Recovery** tab: one run-grouped queue for failed/pending/stale dispatches, refunds, holds, and missing execution. Buttons invoke the existing replay/sync/resolution/re-drive actions; Settlements tab → **Re-drive payments** remains available for canonical enqueue only (ADR-0029). |
+| Refund resolution | Refunds tab → accept provider / allow retry / record manual completion → `POST /ops/api/admin/refunds/:id/resolution` (write-once evidence; ADR-0030) |
 | Test bank | 044 Access Bank, accounts 0690000031–0690000033 |
 | Test OTP | any passes; `6648` = insufficient funds |
-| Doctrine references | ADR-0007 (settlement only), 0008 (aborts), 0020 (photo evidence), 0021 (scoping), 0022 (face auth), 0023–0026 (payments + pre-flight fixes) |
+| Doctrine references | ADR-0007 (settlement only), 0008 (aborts), 0020 (photo evidence), 0021 (scoping), 0022 (face auth), 0023–0026 (payments + pre-flight fixes), 0029 (durable emission + re-drive), 0030 (audited refund resolution) |

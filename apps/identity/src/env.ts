@@ -5,6 +5,8 @@ export interface Env extends DatabaseEnv {
   IDENTITY_ENCRYPTION_KEY?: string;
   IDENTITY_SESSION_SECRET?: string;
   IDENTITY_INTERNAL_TOKEN?: string;
+  /** Public edge origin for identity → core KYC reconciliation. */
+  EDGE_URL?: string;
   FACE_VERIFIER?: string;
   FACE_MATCH_THRESHOLD?: string;
   BIOMETRICS_SERVICE_URL?: string;
@@ -23,9 +25,12 @@ export interface Env extends DatabaseEnv {
 export const DEV_ENCRYPTION_KEY_BASE64 = btoa("market-runs-dev-key-32-bytes!!!!");
 export const DEV_SESSION_SECRET = "market-runs-dev-session-secret";
 export function isProduction(env: Env): boolean { return env.IDENTITY_ENV === "production"; }
+export function isDeployed(env: Env): boolean {
+  return env.IDENTITY_ENV === "staging" || isProduction(env);
+}
 function required(env: Env, value: string | undefined, name: string, dev: string): string {
   if (value) return value;
-  if (isProduction(env)) throw new Error(`${name} is required in production; no public fallback exists`);
+  if (isDeployed(env)) throw new Error(`${name} is required in deployed identity; no public fallback exists`);
   return dev;
 }
 export function encryptionKeyBase64(env: Env): string {

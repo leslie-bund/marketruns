@@ -117,6 +117,38 @@ describe("ops admin archive proxies", () => {
     expect(intercept).toBeDefined();
   });
 
+  it("passes a valid resolved dispute through the archive proxy", async () => {
+    const payload = {
+      items: [
+        {
+          id: "dispute-1",
+          runId: "run:cart:rs:buyer:ada",
+          market: "rs",
+          settlementRecordId: "settlement-1",
+          raisedByParticipantId: "buyer:ada",
+          reason: "Wrong items delivered",
+          evidenceRefs: ["r2://archive/evidence/dispute-1.json"],
+          ambiguous: true,
+          absorbedLossKobo: 500,
+          status: "resolved",
+          createdAt: 1_700_000_000_000,
+          resolvedAt: 1_700_000_060_000,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      offset: 0,
+    };
+    fetchMock
+      .get("http://localhost:8788")
+      .intercept({ path: "/admin/disputes?market=rs&limit=20&offset=0" })
+      .reply(200, JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+
+    const response = await SELF_FETCH("/ops/api/admin/disputes?market=rs&limit=20&offset=0", {});
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toEqual(payload);
+  });
+
   it("fails closed with 502 when the archive returns a shape mismatch", async () => {
     fetchMock
       .get("http://localhost:8788")
@@ -176,6 +208,242 @@ describe("ops admin archive proxies", () => {
     const response = await SELF_FETCH("/ops/api/admin/ops-health?market=rs", {});
     expect(response.status).toBe(200);
     expect((await readJson(response)).market).toBe("rs");
+  });
+
+  it("adds payments service auth to ops hold reads", async () => {
+    let seenHeaders: Record<string, string> | undefined;
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/payments/holds?limit=50&offset=0", method: "GET" })
+      .reply(200, (opts) => {
+        seenHeaders = opts.headers as Record<string, string>;
+        return JSON.stringify({ items: [], total: 0, limit: 50, offset: 0 });
+      }, { headers: { "content-type": "application/json" } });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/holds?limit=50&offset=0`), env);
+    expect(response.status).toBe(200);
+    expect(seenHeaders?.["x-payments-internal"]).toBe("ops-payments-internal-test-token");
+  });
+
+  it("adds payments service auth to dispatch replay", async () => {
+    let seenHeaders: Record<string, string> | undefined;
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/dispatches/dispatch-1/replay", method: "POST" })
+      .reply(200, (opts) => {
+        seenHeaders = opts.headers as Record<string, string>;
+        return JSON.stringify({ status: "queued" });
+      }, { headers: { "content-type": "application/json" } });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/payments/dispatch-1/replay`, { method: "POST" }), env);
+    expect(response.status).toBe(200);
+    expect(seenHeaders?.["x-payments-internal"]).toBe("ops-payments-internal-test-token");
+  });
+
+  it("syncs dispatch provider status with the exact upstream path, service auth, correlation, and no body", async () => {
+    let seenHeaders: Record<string, string> | undefined;
+    let seenBody: unknown = "not called";
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/dispatches/dispatch-1/sync", method: "POST" })
+      .reply(200, (opts) => {
+        seenHeaders = opts.headers as Record<string, string>;
+        seenBody = opts.body;
+        return JSON.stringify({ id: "dispatch-1", status: "completed" });
+      }, { headers: { "content-type": "application/json" } });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/payments/dispatch-1/sync`, {
+      method: "POST",
+      headers: { "x-request-id": "ops-dispatch-sync-test", "x-payments-internal": "client-forged-token" },
+    }), env);
+
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toEqual({ id: "dispatch-1", status: "completed" });
+    expect(seenHeaders?.["x-payments-internal"]).toBe("ops-payments-internal-test-token");
+    expect(seenHeaders?.["x-request-id"]).toBe("ops-dispatch-sync-test");
+    expect(seenBody == null || seenBody === "").toBe(true);
+  });
+
+  it("preserves payments provider-status sync errors", async () => {
+    const refusal = { error: "dispatch-terminal", message: "completed dispatches cannot be synced" };
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/dispatches/dispatch-complete/sync", method: "POST" })
+      .reply(409, JSON.stringify(refusal), {
+        headers: { "content-type": "application/json", "x-request-id": "payments-sync-conflict" },
+      });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/payments/dispatch-complete/sync`, {
+      method: "POST",
+      headers: { "x-request-id": "edge-sync-conflict" },
+    }), env);
+
+    expect(response.status).toBe(409);
+    expect(await readJson(response)).toEqual(refusal);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("x-request-id")).toBe("edge-sync-conflict");
+  });
+
+  it("returns 503 when payments is unreachable during provider-status sync", async () => {
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/payments/dispatch-down/sync`, { method: "POST" }), env);
+
+    expect(response.status).toBe(503);
+    expect((await readJson(response)).error).toBe("payments-unavailable");
+  });
+
+  it("re-drives a settlement through payments with service auth, correlation, and no body", async () => {
+    let seenHeaders: Record<string, string> | undefined;
+    let seenBody: unknown = "not called";
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/settlements/settlement-1/redrive", method: "POST" })
+      .reply(200, (opts) => {
+        seenHeaders = opts.headers as Record<string, string>;
+        seenBody = opts.body;
+        return JSON.stringify({ status: "accepted", settlementRecordId: "settlement-1" });
+      }, { headers: { "content-type": "application/json" } });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/settlements/settlement-1/redrive`, {
+      method: "POST",
+      headers: { "x-request-id": "ops-settlement-redrive-test" },
+    }), env);
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toEqual({ status: "accepted", settlementRecordId: "settlement-1" });
+    expect(seenHeaders?.["x-payments-internal"]).toBe("ops-payments-internal-test-token");
+    expect(seenHeaders?.["x-request-id"]).toBe("ops-settlement-redrive-test");
+    expect(seenBody == null || seenBody === "").toBe(true);
+  });
+
+  it("resolves a refund with a fresh trusted body, service auth, and correlation", async () => {
+    let seenHeaders: Record<string, string> | undefined;
+    let seenBody: unknown;
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/payments/refunds/refund-1/resolution", method: "POST" })
+      .reply(200, (opts) => {
+        seenHeaders = opts.headers as Record<string, string>;
+        seenBody = JSON.parse(String(opts.body));
+        return JSON.stringify({ id: "refund-1", status: "processing" });
+      }, { headers: { "content-type": "application/json" } });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+    const resolution = {
+      action: "accept-provider",
+      status: "processing",
+      providerRef: "provider-refund-1",
+      evidenceRef: "evidence/refund-1.json",
+      note: "Provider history confirms one accepted refund.",
+    };
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/refunds/refund-1/resolution`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-request-id": "ops-refund-resolution-test",
+        "x-payments-internal": "client-forged-token",
+      },
+      body: JSON.stringify(resolution),
+    }), env);
+
+    expect(response.status).toBe(200);
+    expect(seenBody).toEqual({ resolvedBy: "local-ops", resolution });
+    expect(seenHeaders?.["x-payments-internal"]).toBe("ops-payments-internal-test-token");
+    expect(seenHeaders?.["x-request-id"]).toBe("ops-refund-resolution-test");
+    expect(seenHeaders?.["content-type"]).toBe("application/json");
+  });
+
+  it("rejects malformed refund resolutions and client actor fields before forwarding", async () => {
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+    const retry = {
+      action: "allow-retry",
+      evidenceRef: "evidence/retry-1.json",
+      note: "Provider confirmed no accepted refund exists.",
+    };
+    const bodies = [
+      "{",
+      JSON.stringify({ ...retry, resolvedBy: "ops:attacker" }),
+      JSON.stringify({ resolvedBy: "ops:attacker", resolution: retry }),
+      JSON.stringify({ ...retry, evidenceRef: "" }),
+    ];
+
+    for (const body of bodies) {
+      const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/refunds/refund-invalid/resolution`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }), env);
+      expect(response.status).toBe(400);
+      expect((await readJson(response)).error).toBe("invalid-body");
+    }
+  });
+
+  it("preserves payments refund-resolution errors", async () => {
+    const refusal = { error: "refund-already-resolved", message: "refund resolution is final" };
+    fetchMock
+      .get("http://localhost:8790")
+      .intercept({ path: "/payments/refunds/refund-conflict/resolution", method: "POST" })
+      .reply(409, JSON.stringify(refusal), {
+        headers: { "content-type": "application/json", "x-request-id": "payments-refund-conflict" },
+      });
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/refunds/refund-conflict/resolution`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "edge-refund-conflict" },
+      body: JSON.stringify({
+        action: "allow-retry",
+        evidenceRef: "evidence/retry-conflict.json",
+        note: "Retry was already decided by another operator.",
+      }),
+    }), env);
+
+    expect(response.status).toBe(409);
+    expect(await readJson(response)).toEqual(refusal);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("x-request-id")).toBe("edge-refund-conflict");
+  });
+
+  it("returns 503 when payments is unreachable during refund resolution", async () => {
+    const env = new Proxy(bindings, {
+      get: (target, prop, receiver) => prop === "PAYMENTS_INTERNAL_TOKEN" ? "ops-payments-internal-test-token" : Reflect.get(target, prop, receiver),
+    }) as Env;
+    const response = await createApp().fetch(new Request(`${BASE}/ops/api/admin/refunds/refund-down/resolution`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "complete-manual",
+        providerRef: "manual-transfer-1",
+        evidenceRef: "evidence/manual-1.json",
+        note: "Manual transfer receipt verified.",
+      }),
+    }), env);
+
+    expect(response.status).toBe(503);
+    expect((await readJson(response)).error).toBe("payments-unavailable");
   });
 });
 
@@ -312,5 +580,59 @@ describe("ops console page guard", () => {
     const page = await app.fetch(new Request(`${BASE}/ops`), bindings);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Ops Console");
+  });
+
+  it("includes escaped dispute details, resolved metadata, and post-settle refresh", async () => {
+    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
+    const html = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(html).toContain("statusPill(x.status)");
+    expect(html).toContain("x.ambiguous");
+    expect(html).toContain("money(x.absorbedLossKobo)");
+    expect(html).toContain("x.evidenceRefs");
+    expect(html).toContain("esc(x.reason)");
+    expect(html).toContain('x.status === "resolved"');
+    expect(html).toContain("Settlement record");
+    expect(html).toContain('esc(x.settlementRecordId || "—")');
+    expect(html).toContain("esc(dateTime(x.resolvedAt))");
+    expect(html).toContain('if (SEL.tab === "disputes") loadTab("disputes");');
+  });
+
+  it("includes refund-only resolution controls and audited resolution evidence", async () => {
+    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
+    const html = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(html).toContain('data-action="refund-resolve"');
+    expect(html).toContain('x.status === "refund-review"');
+    expect(html).toContain('x.status === "refund-manual"');
+    expect(html).toContain("Accept provider refund");
+    expect(html).toContain("Allow retry");
+    expect(html).toContain("Complete manual refund");
+    expect(html).toContain("Resolution action");
+    expect(html).toContain("Resolution status");
+    expect(html).toContain("Evidence ref");
+    expect(html).toContain("Resolved by");
+    expect(html).toContain("Resolved at");
+    expect(html).toContain('/ops/api/admin/refunds/');
+  });
+
+  it("includes provider-status sync only for in-flight dispatches with confirmation and reload feedback", async () => {
+    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
+    const html = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(html).toContain('x.status === "sent" || x.status === "queued"');
+    expect(html).toContain('data-action="dispatch-sync"');
+    expect(html).toContain("Sync provider status");
+    expect(html).toContain('x.status === "failed" || x.status === "pending"');
+    expect(html).toContain('data-action="dispatch-replay"');
+    expect(html).toContain("does not create a new transfer");
+    expect(html).toContain("t.disabled = true");
+    expect(html).toContain('/ops/api/admin/payments/');
+    expect(html).toContain('+ "/sync"');
+    expect(html).toContain("result.status");
+    expect(html).toContain('loadTab("payments")');
   });
 });

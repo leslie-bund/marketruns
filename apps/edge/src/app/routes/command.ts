@@ -7,7 +7,7 @@ import { participantObjectName } from "../../do/participant-do.js";
 import { internalPost } from "../../do/transport.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 import { requireTransactionRole } from "../middleware/participant.js";
-import { canTransact, coreRegistry, headerAuthAllowed } from "../../registry/index.js";
+import { canTransact, coreRegistry, preverifiedTransactionsAllowed } from "../../registry/index.js";
 
 function identityHeaders(c: Context<{ Bindings: Env }>): Record<string, string> {
   const who = c.get("participant");
@@ -69,7 +69,7 @@ export function commandRoute(): Hono<{ Bindings: Env }> {
     if (!registry.ok) return registry;
     const recorded = ParticipantRecordedSchema.parse(await registry.json()) as ParticipantRecorded;
     await coreRegistry(c.env).saveParticipant(recorded.participant);
-    if (canTransact(recorded.participant.kycStatus, headerAuthAllowed(c.env))) {
+    if (canTransact(recorded.participant.kycStatus, preverifiedTransactionsAllowed(c.env))) {
       const joined = await joinMarket(c, {
         type: "market.joined",
         market: command.market,

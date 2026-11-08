@@ -3,6 +3,7 @@ import {
   PaymentChargeConfirmRequestSchema,
   PaymentDispatchStatusSchema,
   PaymentHoldStatusSchema,
+  PaymentRefundResolutionRequestSchema,
   PaymentRefundStatusSchema,
   PayoutAccountResolveRequestSchema,
   PayoutAccountUpsertRequestSchema,
@@ -10,8 +11,14 @@ import {
 } from "@market-runs/proto";
 import { RequestIdSchema } from "@market-runs/proto";
 import { createDatabase } from "./db.js";
-import { handleDispatchRequested } from "./consume.js";
+import { assertDispatchRowMatches, handleDispatchRequested, releaseHoldsWhenRunDispatched } from "./consume.js";
 import { handleRefundRequested } from "./refunds.js";
+import {
+  DrizzleSettlementStore,
+  expectedPaymentRequests,
+  validatePaymentRequest,
+  type SettlementStore,
+} from "./settlement.js";
 import {
   isTransferStatusLookup,
   resolveDispatchIntegration,
@@ -28,7 +35,9 @@ import {
   type PayoutAccountStore,
 } from "./payout-accounts.js";
 import { parsePaymentMessage } from "./messages.js";
-import { DrizzleDispatchStore, dispatchView, type DispatchStore } from "./store.js";
+import { DrizzleDispatchStore, dispatchRow, dispatchView, type DispatchRow, type DispatchStore } from "./store.js";
+import { syncDispatchStatus } from "./dispatch-sync.js";
+import { listRecovery } from "./recovery.js";
 import type { Env } from "./env.js";
 import { paymentNotification, queuePaymentNotifications, type PaymentNotificationSink } from "./notifications.js";
 
@@ -91,8 +100,14 @@ export interface PaymentsAppOptions {
    * Absent configuration fails closed rather than trusting client identity.
    */
   participantAuth?: { internalToken?: string; allowHeaderAuth?: boolean };
+  /** Durable settlement authorization required before any queue execution or manual replay. */
+  settlements?: SettlementStore;
+  /** Existing payment queue used to re-enqueue canonical settlement execution requests. */
+  paymentQueue?: Pick<Queue, "send">;
   /** Actual persisted payment transitions → durable notification queue. */
   notify?: PaymentNotificationSink;
+  /** Clock override for deterministic stale-recovery reads in tests. */
+  now?: () => Date;
 }
 
 export interface PaymentsWorker {
@@ -152,6 +167,24 @@ async function handleFetch(
   }
 }
 
+/** Only health and provider-authenticated webhooks bypass edge-to-worker service authentication. */
+function requireInternalService(request: Request, url: URL, options: PaymentsAppOptions): Response | null {
+  const auth = options.participantAuth;
+  if (!auth) return null; // Directly constructed trusted test apps; deployed entry points always configure this.
+  if (request.method === "GET" && url.pathname === "/healthz") return null;
+  if (request.method === "POST" && (url.pathname === "/webhooks/transfers" || url.pathname === "/webhooks/charges")) return null;
+  if (auth.internalToken) {
+    return request.headers.get("x-payments-internal") === auth.internalToken
+      ? null
+      : Response.json({ error: "unauthorized", message: "valid internal authentication is required" }, { status: 401 });
+  }
+  if (auth.allowHeaderAuth === true) return null;
+  return Response.json(
+    { error: "payments-auth-unconfigured", message: "PAYMENTS_INTERNAL_TOKEN is required" },
+    { status: 503 },
+  );
+}
+
 async function routeRequest(
   store: DispatchStore,
   dispatcher: PaymentDispatcher,
@@ -159,6 +192,8 @@ async function routeRequest(
   options: PaymentsAppOptions,
 ): Promise<Response> {
   const url = new URL(request.url);
+  const unauthorized = requireInternalService(request, url, options);
+  if (unauthorized) return unauthorized;
 
   if (request.method === "GET" && url.pathname === "/healthz") {
     return Response.json({
@@ -166,6 +201,104 @@ async function routeRequest(
       service: "market-runs-payments",
       dispatcher: options.dispatcherKind ?? "custom",
     });
+  }
+
+  if (request.method === "GET" && url.pathname === "/recovery") {
+    if (!options.settlements || !options.collections) {
+      return Response.json(
+        { error: "recovery-unconfigured", message: "durable settlement and collection reads are required" },
+        { status: 503 },
+      );
+    }
+    const now = options.now?.() ?? new Date();
+    return Response.json(await listRecovery(
+      options.settlements,
+      store,
+      options.collections.holds,
+      options.collections.refunds,
+      optionalFilter(url, "market"),
+      now,
+    ));
+  }
+
+  const redriveMatch = /^\/settlements\/([^/]+)\/redrive$/.exec(url.pathname);
+  if (request.method === "POST" && redriveMatch) {
+    if (!options.settlements) {
+      return Response.json(
+        { error: "settlement-store-unconfigured", message: "durable settlement authorization is required" },
+        { status: 503 },
+      );
+    }
+    const settlementRecordId = decodeURIComponent(redriveMatch[1] ?? "");
+    const authorization = await options.settlements.byId(settlementRecordId);
+    if (!authorization) {
+      return Response.json(
+        { error: "settlement-not-found", message: `settlement ${settlementRecordId} is unknown` },
+        { status: 404 },
+      );
+    }
+    const expected = expectedPaymentRequests(authorization);
+    const dispatchDue = expected.dispatch.legs.length > 0;
+    const refundDue = expected.refund !== null;
+    const baseResult = {
+      settlementRecordId,
+      runId: authorization.runId,
+      dispatchLegs: expected.dispatch.legs.length,
+      refundDue,
+    };
+    if (!dispatchDue && !refundDue) {
+      return Response.json({
+        ...baseResult,
+        status: "noop",
+        dispatchEnqueued: false,
+        refundEnqueued: false,
+        enqueuedCount: 0,
+        failedCount: 0,
+      });
+    }
+    if (!options.paymentQueue) {
+      return Response.json(
+        { error: "payment-queue-unconfigured", message: "PAYMENT_QUEUE is required for settlement redrive" },
+        { status: 503 },
+      );
+    }
+    let dispatchEnqueued = false;
+    let refundEnqueued = false;
+    let failedCount = 0;
+    if (dispatchDue) {
+      try {
+        await options.paymentQueue.send(JSON.stringify(expected.dispatch));
+        dispatchEnqueued = true;
+      } catch (error) {
+        failedCount += 1;
+        console.error(JSON.stringify({
+          event: "payment.redrive_enqueue_failed",
+          settlementRecordId,
+          requestType: expected.dispatch.type,
+          error: String(error),
+        }));
+      }
+    }
+    if (expected.refund) {
+      try {
+        await options.paymentQueue.send(JSON.stringify(expected.refund));
+        refundEnqueued = true;
+      } catch (error) {
+        failedCount += 1;
+        console.error(JSON.stringify({
+          event: "payment.redrive_enqueue_failed",
+          settlementRecordId,
+          requestType: expected.refund.type,
+          error: String(error),
+        }));
+      }
+    }
+    const enqueuedCount = Number(dispatchEnqueued) + Number(refundEnqueued);
+    const status = failedCount === 0 ? "enqueued" : enqueuedCount > 0 ? "partial" : "failed";
+    return Response.json(
+      { ...baseResult, status, dispatchEnqueued, refundEnqueued, enqueuedCount, failedCount },
+      { status: failedCount === 0 ? 202 : 502 },
+    );
   }
 
   if (request.method === "GET" && url.pathname === "/dispatches") {
@@ -187,6 +320,34 @@ async function routeRequest(
     if (row.status === "sent" || row.status === "queued" || row.status === "completed") {
       return Response.json(
         { error: "already-dispatched", message: `dispatch ${id} is ${row.status}; replays target failed/pending rows` },
+        { status: 409 },
+      );
+    }
+    if (!options.settlements) {
+      return Response.json(
+        { error: "settlement-authorization-unconfigured", message: "durable settlement authorization is required" },
+        { status: 503 },
+      );
+    }
+    const authorization = await options.settlements.byId(row.settlementRecordId);
+    if (!authorization) {
+      return Response.json(
+        { error: "settlement-authorization-missing", message: `settlement ${row.settlementRecordId} is not archived` },
+        { status: 409 },
+      );
+    }
+    const expected = expectedPaymentRequests(authorization).dispatch;
+    let expectedRow: DispatchRow | null = null;
+    for (let index = 0; index < expected.legs.length; index += 1) {
+      const candidate = dispatchRow(expected, index);
+      if (candidate.id === row.id) expectedRow = candidate;
+    }
+    try {
+      if (!expectedRow) throw new Error("dispatch is not a canonical settlement leg");
+      assertDispatchRowMatches(row, expectedRow);
+    } catch {
+      return Response.json(
+        { error: "settlement-mismatch", message: `dispatch ${id} does not match its durable settlement` },
         { status: 409 },
       );
     }
@@ -212,7 +373,42 @@ async function routeRequest(
         { status: 502 },
       );
     }
+    await releaseHoldsWhenRunDispatched(store, row.runId, options.collections?.holds, options.notify);
     return Response.json(updated ? dispatchView(updated) : null);
+  }
+
+  // Targeted polling fallback. This only reads provider status: it never
+  // executes or replays the transfer. A provider lookup miss follows bulk
+  // sync's non-mutating unmatched semantics and is acknowledged with 200.
+  const syncMatch = /^\/dispatches\/([^/]+)\/sync$/.exec(url.pathname);
+  if (request.method === "POST" && syncMatch) {
+    const id = decodeURIComponent(syncMatch[1] ?? "");
+    const row = await store.byId(id);
+    if (!row) {
+      return Response.json({ error: "not-found", message: `dispatch ${id} is unknown` }, { status: 404 });
+    }
+    if (!isTransferStatusLookup(dispatcher)) {
+      return Response.json(
+        { error: "sync-unsupported", message: "the configured dispatcher cannot poll transfer status" },
+        { status: 501 },
+      );
+    }
+    if (row.status !== "sent" && row.status !== "queued") {
+      return Response.json(
+        { error: "not-stale", message: `dispatch ${id} is ${row.status}; sync targets sent/queued rows` },
+        { status: 409 },
+      );
+    }
+    if (!row.providerRef) {
+      return Response.json(
+        { error: "unmatched", message: `dispatch ${id} has no provider reference to sync` },
+        { status: 409 },
+      );
+    }
+    const result = await syncDispatchStatus(store, dispatcher, row, options.notify);
+    const current = result === "updated" ? await store.byId(row.id) : row;
+    console.error(JSON.stringify({ event: "payment.sync_single", dispatchId: row.id, result }));
+    return Response.json({ status: result === "updated" ? "applied" : result, dispatch: current ? dispatchView(current) : null });
   }
 
   // Provider → worker: terminal transfer outcome. Reachable from the public
@@ -329,36 +525,10 @@ async function routeRequest(
     let unchanged = 0;
     let unmatched = 0;
     for (const row of rows) {
-      if (!row.providerRef) {
-        unmatched += 1;
-        continue;
-      }
-      const outcome = await dispatcher.fetchTransferStatus(row.providerRef);
-      if (!outcome) {
-        unmatched += 1;
-        continue;
-      }
-      if (outcome.status === "completed" || outcome.status === "failed") {
-        await store.recordStatus(row.id, {
-          status: outcome.status,
-          failureReason: outcome.status === "failed" ? outcome.failureReason ?? "provider reported failure" : null,
-        });
-        if (options.notify && row.account !== "platform") {
-          await options.notify(paymentNotification({
-            sourceEventId: `payment.dispatch-status:${row.id}:${outcome.status}`,
-            sourceEventType: "payment.dispatch-updated",
-            recipientId: row.partyId,
-            title: outcome.status === "failed" ? "Dispatch failed" : "Dispatch completed",
-            body: `Your ${row.account} dispatch is ${outcome.status}.`,
-            runId: row.runId,
-            deepLink: "/notifications",
-            status: outcome.status,
-          }));
-        }
-        updated += 1;
-      } else {
-        unchanged += 1;
-      }
+      const result = await syncDispatchStatus(store, dispatcher, row, options.notify);
+      if (result === "updated") updated += 1;
+      else if (result === "unchanged") unchanged += 1;
+      else unmatched += 1;
     }
     console.error(
       JSON.stringify({ event: "payment.sync", scanned: rows.length, updated, unchanged, unmatched, staleMinutes }),
@@ -492,6 +662,128 @@ async function routeRequest(
       params,
     );
     return Response.json({ items: items.map(refundView), total, ...params });
+  }
+
+  // Trusted edge operations decision. The worker owns resolvedAt; this route
+  // never executes or reconciles a provider refund directly.
+  const refundResolutionMatch = /^\/payments\/refunds\/([^/]+)\/resolution$/.exec(url.pathname);
+  if (request.method === "POST" && refundResolutionMatch) {
+    const collections = options.collections;
+    if (!collections) return collectionsUnavailable();
+    const parsed = PaymentRefundResolutionRequestSchema.safeParse(await readOptionalJson(request));
+    if (!parsed.success) {
+      return Response.json(
+        { error: "invalid-request", message: "refund resolution failed validation", issues: parsed.error.issues },
+        { status: 400 },
+      );
+    }
+    const refundId = decodeURIComponent(refundResolutionMatch[1] ?? "");
+    const action = parsed.data.resolution.action;
+    let canonicalRefund: ReturnType<typeof expectedPaymentRequests>["refund"] = null;
+
+    if (action === "allow-retry") {
+      const existing = await collections.refunds.byId(refundId);
+      if (!existing) {
+        return Response.json({ error: "not-found", message: `refund ${refundId} is unknown` }, { status: 404 });
+      }
+      // Replay/conflict does not need fresh execution prerequisites. A genuinely
+      // new commitment must have durable authorization and a queue beforehand.
+      if (!existing.resolution) {
+        if (!options.settlements) {
+          return Response.json(
+            { error: "settlement-store-unconfigured", message: "durable settlement authorization is required" },
+            { status: 503 },
+          );
+        }
+        if (!options.paymentQueue) {
+          return Response.json(
+            { error: "payment-queue-unconfigured", message: "PAYMENT_QUEUE is required for refund retry" },
+            { status: 503 },
+          );
+        }
+        const authorization = await options.settlements.byId(existing.settlementRecordId);
+        if (!authorization) {
+          return Response.json(
+            { error: "settlement-authorization-missing", message: "the refund settlement is not archived" },
+            { status: 409 },
+          );
+        }
+        canonicalRefund = expectedPaymentRequests(authorization).refund;
+        if (!canonicalRefund) {
+          return Response.json(
+            { error: "canonical-refund-missing", message: "the durable settlement does not authorize a refund" },
+            { status: 409 },
+          );
+        }
+      }
+    }
+
+    const result = await collections.refunds.resolve(refundId, {
+      ...parsed.data,
+      resolvedAt: new Date(),
+    });
+    if (result.outcome === "not-found") {
+      return Response.json({ error: "not-found", message: `refund ${refundId} is unknown` }, { status: 404 });
+    }
+    if (result.outcome === "conflict") {
+      return Response.json(
+        { error: "resolution-conflict", message: "a different resolution is already recorded for this refund" },
+        { status: 409 },
+      );
+    }
+    if (result.outcome === "invalid-state") {
+      return Response.json(
+        { error: "invalid-state", message: `${action} is not valid for refund status ${result.refund.status}` },
+        { status: 409 },
+      );
+    }
+
+    const successStatus = action === "allow-retry" ? 202 : 200;
+    if (result.outcome === "replayed") {
+      return Response.json(
+        { outcome: result.outcome, refund: refundView(result.refund), retryEnqueued: false },
+        { status: successStatus },
+      );
+    }
+
+    if (action !== "allow-retry") {
+      const committed = await collections.refunds.committedForHold(result.refund.holdId);
+      const hold = await collections.holds.byId(result.refund.holdId);
+      if (!hold) {
+        return Response.json(
+          { error: "hold-not-found", message: `hold ${result.refund.holdId} is unknown`, resolutionCommitted: true },
+          { status: 409 },
+        );
+      }
+      await collections.holds.setStatus(hold.id, committed >= hold.amountKobo ? "refunded" : "partially-refunded");
+      return Response.json({ outcome: result.outcome, refund: refundView(result.refund), retryEnqueued: false });
+    }
+
+    if (!canonicalRefund) throw new Error("canonical refund missing after resolution commitment");
+    try {
+      await options.paymentQueue!.send(JSON.stringify(canonicalRefund));
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "payment.refund_retry_enqueue_failed",
+        refundId,
+        error: String(error),
+      }));
+      return Response.json(
+        {
+          error: "refund-retry-enqueue-failed",
+          message: "resolution committed, but the canonical refund could not be enqueued",
+          outcome: result.outcome,
+          resolutionCommitted: true,
+          refund: refundView(result.refund),
+          retryEnqueued: false,
+        },
+        { status: 502 },
+      );
+    }
+    return Response.json(
+      { outcome: result.outcome, refund: refundView(result.refund), retryEnqueued: true },
+      { status: 202 },
+    );
   }
 
   /* ---------------------------------------------------------------------- */
@@ -726,6 +1018,29 @@ async function handleQueue(
       continue;
     }
     try {
+      if (!options.settlements) throw new Error("durable settlement authorization is not configured");
+      const validation = await validatePaymentRequest(options.settlements, result.data);
+      if (validation.status === "missing") {
+        // Archive and payment queues are independent: retry until the durable
+        // authorization appears, without inserting rows or calling a provider.
+        console.error(JSON.stringify({
+          event: "payment.settlement_pending",
+          messageId: message.id,
+          settlementRecordId: result.data.settlementRecordId,
+        }));
+        message.retry({ delaySeconds: 30 });
+        continue;
+      }
+      if (validation.status === "mismatch") {
+        // The immutable settlement exists and does not authorize this request.
+        console.error(JSON.stringify({
+          event: "payment.settlement_mismatch",
+          messageId: message.id,
+          settlementRecordId: result.data.settlementRecordId,
+        }));
+        message.ack();
+        continue;
+      }
       if (result.data.type === "payment.dispatch-requested") {
         await handleDispatchRequested(store, dispatcher, message, result.data, options.collections?.holds, options.notify);
       } else {
@@ -828,6 +1143,8 @@ export default {
         ...(integration.webhook !== undefined ? { webhook: integration.webhook } : {}),
         collections: { holds, refunds, gateway: integration.gateway ?? null },
         payouts: { accounts: payoutAccounts, gateway: integration.gateway ?? null },
+        settlements: new DrizzleSettlementStore(db),
+        ...(env.PAYMENT_QUEUE !== undefined ? { paymentQueue: env.PAYMENT_QUEUE } : {}),
         participantAuth: {
           ...(env.PAYMENTS_INTERNAL_TOKEN !== undefined ? { internalToken: env.PAYMENTS_INTERNAL_TOKEN } : {}),
           allowHeaderAuth: env.ALLOW_HEADER_AUTH === "true",
@@ -849,6 +1166,7 @@ export default {
           refunds: new DrizzleRefundStore(db),
           gateway: integration.gateway ?? null,
         },
+        settlements: new DrizzleSettlementStore(db),
         notify: queuePaymentNotifications(env.NOTIFICATION_QUEUE),
       });
     } finally {

@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     "Post what you need from local markets, receive offers from sellers, and let one runner bring the whole cart in a single trip.",
 };
 
-const contactEmail = process.env.INBOUND_EMAIL_ADDRESS ?? "hello@market-runs.example";
+const contactEmail = "info@updates.marketruns.org";
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
@@ -32,7 +32,10 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
               <span className="footer-brand">market·runs</span>
               <p>One intent. One cart. One run.</p>
             </div>
-            <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
+            <div className="footer-links">
+              <Link href="/privacy">Privacy</Link>
+              <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
+            </div>
           </footer>
         </div>
       </body>

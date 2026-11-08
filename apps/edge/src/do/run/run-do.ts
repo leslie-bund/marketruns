@@ -3,7 +3,6 @@ import { TelemetryReporter } from "../telemetry.js";
 import { DISPUTE_WINDOW_MS, HANDOFF_AUTO_CONFIRM_MS, settle, validateLocationWithinFence } from "@market-runs/domain";
 import type { GeoFence, LocationFix, SettlementInput } from "@market-runs/domain";
 import { buildSettlementInput } from "./settlement.js";
-import { buildPaymentDispatchRequest, buildPaymentRefundRequest } from "./payment-dispatch.js";
 import {
   DELIVERY_CODE_MAX_ATTEMPTS,
   DELIVERY_CODE_TTL_MS,
@@ -861,36 +860,6 @@ export class RunDO extends DurableObject<Env> {
       { body: serializeEvent(retirementSnapshot) },
       { body: serializeEvent(released) },
     ]);
-    // Money movement (ADR-0007): the settlement function already decided the
-    // splits — this message is the EXECUTION request for those legs, sent to
-    // the payment queue where a vendor-neutral dispatcher (ADR-0009) moves
-    // the money. Fire-and-forget like the location stream: the consumer is
-    // idempotent on settlement:<settlementRecordId>, so a duplicate release
-    // (settlementReleased is set in memory before the sends) is a safe replay.
-    const dispatchRequest = buildPaymentDispatchRequest(outcome, {
-      runId: run.id,
-      market: run.market,
-      runnerId: this.state.runnerId ?? "runner:internal",
-      ...(this.state.requestId !== undefined ? { requestId: this.state.requestId } : {}),
-    });
-    if (dispatchRequest.legs.length > 0) {
-      await this.env.PAYMENT_QUEUE.send(serializeEvent(dispatchRequest)).catch((error: unknown) => {
-        console.error(JSON.stringify({ event: "payment.dispatch_enqueue_failed", runId: run.id, error: String(error) }));
-      });
-    }
-    // Buyer refund leg: releases against the buyer's hold, never a payout
-    // transfer (ADR-0023). Same fire-and-forget, idempotent-consumer posture
-    // as the dispatch request above.
-    const refundRequest = buildPaymentRefundRequest(outcome, {
-      runId: run.id,
-      buyerId: this.state.buyerId ?? "buyer:anonymous",
-      ...(this.state.requestId !== undefined ? { requestId: this.state.requestId } : {}),
-    });
-    if (refundRequest) {
-      await this.env.PAYMENT_QUEUE.send(serializeEvent(refundRequest)).catch((error: unknown) => {
-        console.error(JSON.stringify({ event: "payment.refund_enqueue_failed", runId: run.id, error: String(error) }));
-      });
-    }
     await this.ctx.storage.deleteAll();
     return jsonResponse(released);
   }

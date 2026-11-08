@@ -363,7 +363,7 @@ var S = { market: null, intentId: null, productId: null, cartId: null, runId: nu
 var SEL = {
   runId: null, run: null, runDispute: null, overview: null, health: null, runs: null, markets: [],
   buyer: null,
-  tab: "disputes", tabData: {}, pages: { disputes: 0, settlements: 0, ledger: 0, payments: 0 }
+  tab: "disputes", tabData: {}, pages: { disputes: 0, settlements: 0, ledger: 0, payments: 0, recovery: 0 }
 };
 var PAGE_SIZE = 20;
 var MARKET_EDIT = null; /* { id: string|null, config: object|null } while the inline form is open */
@@ -1136,6 +1136,7 @@ function opsSettle() {
         feed("settlement released for " + run);
       }
       loadRunDetail();
+      if (SEL.tab === "disputes") loadTab("disputes");
     })
     .catch(function (err) {
       $("settleResult").textContent = "HTTP " + (err.status || "?") + " — " + err.message;
@@ -1151,6 +1152,7 @@ var TABS = [
   { id: "ledger", label: "Ledger" },
   { id: "reputation", label: "Reputation" },
   { id: "payments", label: "Payments" },
+  { id: "recovery", label: "Recovery" },
   { id: "holds", label: "Holds" },
   { id: "refunds", label: "Refunds" },
   { id: "resets", label: "Resets" }
@@ -1214,7 +1216,9 @@ function renderTabBody(id, d) {
   var items = d.items || [];
   var html = "";
   if (!items.length) {
-    html = emptyState("Nothing here yet", "No " + id + " recorded for " + market() + ".");
+    html = id === "recovery"
+      ? emptyState("All settlements clear", "No settlements need attention for " + market() + ".")
+      : emptyState("Nothing here yet", "No " + id + " recorded for " + market() + ".");
   } else if (id === "disputes") {
     html = items.map(function (x) {
       var evidence = (x.evidenceRefs || []).map(captureLink).join(" · ");
@@ -1224,6 +1228,10 @@ function renderTabBody(id, d) {
         (x.ambiguous ? '<span class="pill warn">ambiguous</span>' : "") +
         '<span class="row-sub">' + esc(timeAgo(x.createdAt)) + "</span></div>" +
         '<div class="row-main"><span class="row-sub">absorbed loss</span> <span class="money">' + esc(money(x.absorbedLossKobo)) + "</span></div></div>" +
+        '<div class="row-sub" style="padding:0 0 7px">reason: ' + esc(x.reason) + "</div>" +
+        (x.status === "resolved" ?
+          '<div class="kv"><span class="k">Settlement record</span><span class="v title-id">' + esc(x.settlementRecordId || "—") + "</span></div>" +
+          '<div class="kv"><span class="k">Resolved at</span><span class="v">' + esc(dateTime(x.resolvedAt)) + "</span></div>" : "") +
         (evidence ? '<div class="row-sub" style="padding:0 0 7px">evidence: ' + evidence + "</div>" : "");
     }).join("");
   } else if (id === "settlements") {
@@ -1238,7 +1246,9 @@ function renderTabBody(id, d) {
         '<span class="chip">platform <span class="money">' + esc(money(x.platformKobo)) + "</span></span>" +
         '<span class="chip">buyer refund <span class="money">' + esc(money(x.buyerRefundKobo)) + "</span></span>" +
         '<span class="chip">loss <span class="money">' + esc(money(x.platformLossKobo)) + "</span></span>" +
-        "</div></div>";
+        "</div>" +
+        '<button type="button" class="secondary compact" data-action="settlement-redrive" data-id="' + esc(x.id) + '">Re-drive payments</button>' +
+        "</div>";
     }).join("");
   } else if (id === "ledger") {
     html = items.map(function (x) {
@@ -1264,15 +1274,156 @@ function renderTabBody(id, d) {
         (x.providerRef ? '<span class="chip">ref <code>' + esc(x.providerRef) + "</code></span>" : "") +
         "</div>" +
         (x.failureReason ? '<div class="row-sub" style="padding-top:5px">' + esc(x.failureReason) + "</div>" : "") +
+        (x.status === "sent" || x.status === "queued" ? '<button type="button" class="secondary compact" data-action="dispatch-sync" data-id="' + esc(x.id) + '">Sync provider status</button>' : "") +
         (x.status === "failed" || x.status === "pending" ? '<button type="button" class="secondary compact" data-action="dispatch-replay" data-id="' + esc(x.id) + '">Replay through dispatcher</button>' : "") +
         "</div>";
     }).join("");
-  } else if (id === "holds" || id === "refunds") {
-    html = items.map(function (x) {
-      return '<div class="row-line"><div class="row-main">' + statusPill(x.status) + '<span class="title-id">' + esc(x.id) + '</span><span class="row-sub">' + esc(x.buyerId || x.holdId || "") + '</span></div><span class="money">' + esc(money(x.amountKobo)) + '</span></div>';
-    }).join("");
+  } else if (id === "recovery") {
+    html = items.map(renderRecoveryItem).join("");
+  } else if (id === "holds") {
+    html = items.map(renderHoldRow).join("");
+  } else if (id === "refunds") {
+    html = items.map(renderRefundRow).join("");
   }
   body.innerHTML = html + (items.length || d.total ? pagerHtml(id, d) : "");
+}
+var RECOVERY_ACTIONS = {
+  "replay-dispatch": {
+    label: "Replay dispatch",
+    base: "/ops/api/admin/payments/",
+    suffix: "/replay",
+    prompt: "Replay this dispatch through the existing dispatcher?",
+    success: "dispatch replay applied"
+  },
+  "sync-dispatch": {
+    label: "Sync provider status",
+    base: "/ops/api/admin/payments/",
+    suffix: "/sync",
+    prompt: "Check the current provider status for this dispatch? This does not create a new transfer.",
+    success: "provider status synced"
+  },
+  "redrive-settlement": {
+    label: "Re-drive payments",
+    base: "/ops/api/admin/settlements/",
+    suffix: "/redrive",
+    prompt: "Re-drive payment execution for this settlement?",
+    success: "settlement payment re-drive requested"
+  }
+};
+function renderRecoveryItem(x) {
+  var issues = (x.issues || []).map(function (issue) {
+    return '<div class="row-line"><div class="row-main"><span class="pill warn">' + esc(issue.kind) + "</span>" +
+      statusPill(issue.status) + '<span class="row-sub">' + esc(issue.id) + "</span></div>" +
+      '<div class="row-main"><span class="money">' + esc(money(issue.amountKobo)) + "</span>" +
+      '<span class="row-sub" title="' + esc(dateTime(issue.updatedAt)) + '">' + esc(timeAgo(issue.updatedAt)) + "</span></div></div>";
+  }).join("");
+  var actions = (x.actions || []).map(function (action) { return renderRecoveryAction(x, action); }).join("");
+  return '<div style="padding:7px 0;border-bottom:1px solid var(--line)">' +
+    '<div class="row-main"><span class="title-id" title="' + esc(x.runId) + '">' + esc(x.runId) + "</span>" +
+    '<span class="pill">' + esc(x.market) + "</span></div>" +
+    '<div class="row-sub">settlement <span class="title-id">' + esc(x.settlementRecordId) + "</span></div>" +
+    '<div class="row-sub">buyer ' + esc(x.buyerId) + " · runner " + esc(x.runnerId) + "</div>" +
+    issues + '<div class="form-actions" style="padding-top:7px">' + actions + "</div></div>";
+}
+function renderRecoveryAction(x, action) {
+  if (!action || !action.targetId) return "";
+  if (action.type === "resolve-refund") {
+    var status = "refund-review";
+    (x.issues || []).forEach(function (issue) {
+      if (issue.kind === "refund" && issue.id === action.targetId) status = issue.status;
+    });
+    return renderRefundResolutionForm({ id: action.targetId, status: status }, "resolve-refund");
+  }
+  var config = RECOVERY_ACTIONS[action.type];
+  if (!config) return "";
+  return '<button type="button" class="secondary compact" data-action="' + esc(action.type) +
+    '" data-id="' + esc(action.targetId) + '">' + config.label + "</button>";
+}
+function renderHoldRow(x) {
+  return '<div class="row-line"><div class="row-main">' + statusPill(x.status) + '<span class="title-id">' + esc(x.id) + '</span><span class="row-sub">' + esc(x.buyerId || x.holdId || "") + '</span></div><span class="money">' + esc(money(x.amountKobo)) + '</span></div>';
+}
+function renderRefundRow(x) {
+  var actionable = !x.resolution && (x.status === "refund-review" || x.status === "refund-manual");
+  return '<div style="padding:7px 0;border-bottom:1px solid var(--line)">' +
+    '<div class="row-line"><div class="row-main">' + statusPill(x.status) +
+    '<span class="title-id">' + esc(x.id) + '</span><span class="row-sub">' + esc(x.holdId) + '</span></div>' +
+    '<span class="money">' + esc(money(x.amountKobo)) + '</span></div>' +
+    '<div class="chips"><span class="chip">attempts ' + esc(x.attempts) + '</span>' +
+    (x.providerRef ? '<span class="chip">current ref <code>' + esc(x.providerRef) + '</code></span>' : "") + '</div>' +
+    (x.failureReason ? '<div class="row-sub" style="padding-top:5px">Previous failure: ' + esc(x.failureReason) + '</div>' : "") +
+    (x.resolution ? renderRefundResolution(x.resolution) : "") +
+    (actionable ? renderRefundResolutionForm(x) : "") +
+    '</div>';
+}
+function renderRefundResolution(r) {
+  return '<div style="padding:7px 0"><div class="eyebrow">Stored resolution</div>' +
+    '<div class="kv"><span class="k">Resolution action</span><span class="v">' + esc(r.action) + '</span></div>' +
+    '<div class="kv"><span class="k">Resolution status</span><span class="v">' + esc(r.status) + '</span></div>' +
+    '<div class="kv"><span class="k">Provider ref</span><span class="v">' + esc(r.providerRef || "—") + '</span></div>' +
+    '<div class="kv"><span class="k">Evidence ref</span><span class="v">' + esc(r.evidenceRef) + '</span></div>' +
+    '<div class="kv"><span class="k">Note</span><span class="v">' + esc(r.note) + '</span></div>' +
+    '<div class="kv"><span class="k">Resolved by</span><span class="v">' + esc(r.resolvedBy) + '</span></div>' +
+    '<div class="kv"><span class="k">Resolved at</span><span class="v">' + esc(dateTime(r.resolvedAt)) + '</span></div></div>';
+}
+function renderRefundResolutionForm(x, actionName) {
+  var review = x.status === "refund-review";
+  return '<div data-refund-resolution style="padding-top:7px"><div class="form-grid">' +
+    (review
+      ? '<label class="field">Action<select class="refund-action"><option value="accept-provider">Accept provider refund</option><option value="allow-retry">Allow retry</option></select></label>' +
+        '<label class="field">Provider status<select class="refund-status"><option value="processing">processing</option><option value="completed">completed</option></select></label>'
+      : '<input class="refund-action" type="hidden" value="complete-manual">') +
+    '<label class="field">Provider ref<input class="refund-provider" maxlength="255" placeholder="provider or manual transfer ref"></label>' +
+    '<label class="field">Evidence ref<input class="refund-evidence" maxlength="2048" placeholder="evidence/refund.json" required></label>' +
+    '<label class="field">Note<input class="refund-note" maxlength="2000" placeholder="verified facts and rationale" required></label>' +
+    '</div><div class="form-actions" style="padding-top:7px">' +
+    '<button type="button" class="secondary compact" ' +
+    (actionName === "resolve-refund" ? 'data-action="resolve-refund"' : 'data-action="refund-resolve"') +
+    ' data-id="' + esc(x.id) + '">' +
+    (review ? 'Apply refund resolution' : 'Complete manual refund') + '</button></div></div>';
+}
+function resolveRefund(id, button, tabId) {
+  var form = button.closest("[data-refund-resolution]");
+  if (!form || !id) return;
+  var actionField = form.querySelector(".refund-action");
+  var statusField = form.querySelector(".refund-status");
+  var providerField = form.querySelector(".refund-provider");
+  var evidenceField = form.querySelector(".refund-evidence");
+  var noteField = form.querySelector(".refund-note");
+  var action = actionField ? actionField.value.trim() : "";
+  var providerRef = providerField ? providerField.value.trim() : "";
+  var evidenceRef = evidenceField ? evidenceField.value.trim() : "";
+  var note = noteField ? noteField.value.trim() : "";
+  if ((action === "accept-provider" || action === "complete-manual") && !providerRef) {
+    feed("refund resolution needs a provider or manual transfer ref"); return;
+  }
+  if (!evidenceRef || !note) { feed("refund resolution needs evidence and a note"); return; }
+  if (action !== "accept-provider" && action !== "complete-manual" && action !== "allow-retry") return;
+  var body = { action: action, evidenceRef: evidenceRef, note: note };
+  if (action === "accept-provider") {
+    body.status = statusField ? statusField.value : "processing";
+    body.providerRef = providerRef;
+  } else if (action === "complete-manual") {
+    body.providerRef = providerRef;
+  }
+  if (!window.confirm("Apply " + action + " to refund " + id + "?")) return;
+  var controls = form.querySelectorAll("button, input, select");
+  controls.forEach(function (control) { control.disabled = true; });
+  api("/ops/api/admin/refunds/" + encodeURIComponent(id) + "/resolution", { method: "POST", body: body })
+    .then(function () { feed("refund resolution applied: " + action); })
+    .catch(function (err) { feed("refund resolution failed (HTTP " + (err.status || "?") + ") — " + err.message); })
+    .then(function () {
+      controls.forEach(function (control) { control.disabled = false; });
+      return loadTab(tabId || "refunds");
+    });
+}
+function runRecoveryAction(action, targetId, button) {
+  var config = RECOVERY_ACTIONS[action];
+  if (!config || !targetId || !window.confirm(config.prompt)) return;
+  button.disabled = true;
+  api(config.base + encodeURIComponent(targetId) + config.suffix, { method: "POST" })
+    .then(function () { feed(config.success); })
+    .catch(function (err) { feed("recovery action failed (HTTP " + (err.status || "?") + ") — " + err.message); })
+    .then(function () { return loadTab("recovery"); });
 }
 function changePage(id, dir) {
   SEL.pages[id] = Math.max(0, (SEL.pages[id] || 0) + dir * PAGE_SIZE);
@@ -1562,7 +1713,7 @@ function init() {
     SEL.health = null;
     SEL.runs = null;
     SEL.tabData = {};
-    SEL.pages = { disputes: 0, settlements: 0, ledger: 0, payments: 0 };
+    SEL.pages = { disputes: 0, settlements: 0, ledger: 0, payments: 0, recovery: 0 };
     setBuyer(null);
     refreshLive();
     openTab(SEL.tab);
@@ -1624,7 +1775,30 @@ function init() {
     else if (action === "member-add") { var runner = $("memberRunner").value.trim(); if (runner) api("/ops/api/runner-pools/" + encodeURIComponent(t.getAttribute("data-pool")) + "/members/" + encodeURIComponent(runner), { method: "PUT" }).then(loadPools); }
     else if (action === "member-remove") api("/ops/api/runner-pools/" + encodeURIComponent(t.getAttribute("data-pool")) + "/members/" + encodeURIComponent(t.getAttribute("data-runner")), { method: "DELETE" }).then(loadPools);
     else if (action === "pool-delete" && confirm("Delete this runner pool?")) api("/ops/api/runner-pools/" + encodeURIComponent(t.getAttribute("data-pool")), { method: "DELETE" }).then(loadPools);
+    else if (action === "dispatch-sync" && confirm("Check the current provider status for this dispatch? This checks the existing transfer and does not create a new transfer.")) {
+      t.disabled = true;
+      t.textContent = "Syncing…";
+      api("/ops/api/admin/payments/" + encodeURIComponent(t.getAttribute("data-id")) + "/sync", { method: "POST" })
+        .then(function (result) {
+          feed("provider status synced" + (result && result.status ? ": " + result.status : ""));
+          loadTab("payments");
+        })
+        .catch(function (err) {
+          t.disabled = false;
+          t.textContent = "Sync provider status";
+          feed("provider status sync failed (HTTP " + (err.status || "?") + ") — " + err.message);
+        });
+    }
     else if (action === "dispatch-replay") api("/ops/api/admin/payments/" + encodeURIComponent(t.getAttribute("data-id")) + "/replay", { method: "POST" }).then(function () { feed("dispatch replay applied"); openTab("payments"); });
+    else if (action === "settlement-redrive" && confirm("Re-drive payment execution for this settlement?")) {
+      t.disabled = true;
+      api("/ops/api/admin/settlements/" + encodeURIComponent(t.getAttribute("data-id")) + "/redrive", { method: "POST" })
+        .then(function () { t.textContent = "Re-drive requested"; feed("settlement payment re-drive requested"); })
+        .catch(function (err) { t.disabled = false; feed("settlement re-drive failed: " + err.message); });
+    }
+    else if (action === "resolve-refund") resolveRefund(t.getAttribute("data-id"), t, "recovery");
+    else if (RECOVERY_ACTIONS[action]) runRecoveryAction(action, t.getAttribute("data-id"), t);
+    else if (action === "refund-resolve") resolveRefund(t.getAttribute("data-id"), t);
     else if (action === "reset-decision") decideReset(t.getAttribute("data-id"), t.getAttribute("data-decision"), t.getAttribute("data-participant"));
   });
   $("drvIntent").addEventListener("click", postIntent);

@@ -1,10 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { IdentityKycRequestSchema, IdentityKycResponseSchema } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
 import { validateEdgeTopology } from "../config/topology.js";
-import { errorResponse } from "../do/runtime/index.js";
+import { errorResponse, jsonResponse } from "../do/runtime/index.js";
+import { participantObjectName } from "../do/participant-do.js";
+import { internalPost } from "../do/transport.js";
+import { coreRegistry, headerAuthAllowed } from "../registry/index.js";
 import { participant } from "./middleware/participant.js";
-import { requestId } from "./middleware/request-id.js";
+import { correlationHeaders, requestId } from "./middleware/request-id.js";
 import { opsConsole, opsLoginPage } from "../ops-console/index.js";
 import { handleOpsAuth, withOpsAuth } from "../ops-console/auth.js";
 import { commandRoute } from "./routes/command.js";
@@ -14,6 +18,48 @@ import { capturesRoute } from "./routes/captures.js";
 import { marketsRoute } from "./routes/markets.js";
 import { cartsRoute, participantsRoute, productsRoute, runsRoute } from "./routes/scopes.js";
 import { internalNotificationsRoute, notificationContactRoute, notificationsRoute } from "./routes/notifications.js";
+
+/** Hash both values first so token comparison has a fixed-length, constant-work loop. */
+async function identityTokenMatches(provided: string | undefined, expected: string): Promise<boolean> {
+  if (provided === undefined) return false;
+  const encoder = new TextEncoder();
+  const [providedDigest, expectedDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const left = new Uint8Array(providedDigest);
+  const right = new Uint8Array(expectedDigest);
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left[index]! ^ right[index]!;
+  return difference === 0;
+}
+
+/** Identity-worker-only KYC reconciliation. This is a DO write seam, not an /auth proxy. */
+export function internalIdentityKycRoute(): Hono<{ Bindings: Env }> {
+  const app = new Hono<{ Bindings: Env }>();
+  app.post("/kyc", async (c) => {
+    const configured = c.env.IDENTITY_INTERNAL_TOKEN;
+    const deployed = c.env.EDGE_ENV === "staging" || c.env.EDGE_ENV === "production";
+    if (!configured && (deployed || !headerAuthAllowed(c.env))) {
+      return errorResponse(503, "identity-auth-unconfigured", "IDENTITY_INTERNAL_TOKEN is required");
+    }
+    if (configured && !(await identityTokenMatches(c.req.header("x-identity-internal"), configured))) {
+      return errorResponse(403, "unauthorized-internal", "valid identity internal authentication is required");
+    }
+    const parsed = IdentityKycRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return errorResponse(400, "invalid-request", "identity KYC reconciliation failed schema validation");
+    const recorded = await c.env.PARTICIPANT_DO.get(
+      c.env.PARTICIPANT_DO.idFromName(participantObjectName(parsed.data.participantId)),
+    ).fetch(internalPost("/kyc", parsed.data, correlationHeaders(c)));
+    if (!recorded.ok) return recorded;
+    const body = IdentityKycResponseSchema.safeParse(await recorded.json());
+    if (!body.success) return errorResponse(502, "bad-internal-response", "participant reconciliation response was invalid");
+    // Staging preverified onboarding already joined the initial market; this seam only reconciles KYC.
+    await coreRegistry(c.env).saveParticipant(body.data.participant);
+    return jsonResponse(body.data);
+  });
+  return app;
+}
 
 /**
  * The edge application: Hono app, explicit routes, one visible auth seam.
@@ -64,6 +110,7 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/notifications", notificationsRoute());
   app.route("/internal/notifications", internalNotificationsRoute());
   app.route("/internal/notification-contact", notificationContactRoute());
+  app.route("/internal/identity", internalIdentityKycRoute());
   app.route("/markets", marketsRoute());
   app.route("/participants", participantsRoute());
   app.route("/products", productsRoute());

@@ -597,7 +597,7 @@ export const paymentHolds = pgTable(
   ],
 );
 
-export const REFUND_STATUSES = ["pending", "processing", "completed", "failed", "refund-manual"] as const;
+export const REFUND_STATUSES = ["pending", "processing", "completed", "failed", "refund-review", "refund-manual"] as const;
 export type RefundStatus = (typeof REFUND_STATUSES)[number];
 
 export const paymentRefunds = pgTable(
@@ -623,10 +623,69 @@ export const paymentRefunds = pgTable(
     index("payment_refunds_status_idx").on(table.status),
     check(
       "payment_refunds_status_valid",
-      sql`${table.status} IN ('pending', 'processing', 'completed', 'failed', 'refund-manual')`,
+      sql`${table.status} IN ('pending', 'processing', 'completed', 'failed', 'refund-review', 'refund-manual')`,
     ),
     check("payment_refunds_amount_positive", sql`${table.amountKobo} > 0`),
     check("payment_refunds_attempts_nonnegative", sql`${table.attempts} >= 0`),
+  ],
+);
+
+/** One immutable operations decision per refund; there is deliberately no update/delete API. */
+export const paymentRefundResolutions = pgTable(
+  "payment_refund_resolutions",
+  {
+    refundId: text("refund_id")
+      .primaryKey()
+      .references(() => paymentRefunds.id),
+    action: text("action").notNull(),
+    status: text("status").notNull(),
+    providerRef: text("provider_ref"),
+    evidenceRef: text("evidence_ref").notNull(),
+    note: text("note").notNull(),
+    resolvedBy: text("resolved_by").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    check(
+      "payment_refund_resolutions_action_valid",
+      sql`${table.action} IN ('accept-provider', 'complete-manual', 'allow-retry')`,
+    ),
+    check(
+      "payment_refund_resolutions_status_valid",
+      sql`${table.status} IN ('processing', 'completed', 'failed')`,
+    ),
+    check(
+      "payment_refund_resolutions_action_shape",
+      sql`(
+        ${table.action} = 'accept-provider'
+        AND ${table.status} IN ('processing', 'completed')
+        AND ${table.providerRef} IS NOT NULL
+      ) OR (
+        ${table.action} = 'complete-manual'
+        AND ${table.status} = 'completed'
+        AND ${table.providerRef} IS NOT NULL
+      ) OR (
+        ${table.action} = 'allow-retry'
+        AND ${table.status} = 'failed'
+        AND ${table.providerRef} IS NULL
+      )`,
+    ),
+    check(
+      "payment_refund_resolutions_evidence_valid",
+      sql`btrim(${table.evidenceRef}) = ${table.evidenceRef} AND char_length(${table.evidenceRef}) BETWEEN 1 AND 2048`,
+    ),
+    check(
+      "payment_refund_resolutions_note_valid",
+      sql`btrim(${table.note}) = ${table.note} AND char_length(${table.note}) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "payment_refund_resolutions_resolved_by_valid",
+      sql`btrim(${table.resolvedBy}) = ${table.resolvedBy} AND char_length(${table.resolvedBy}) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "payment_refund_resolutions_provider_ref_valid",
+      sql`${table.providerRef} IS NULL OR (btrim(${table.providerRef}) = ${table.providerRef} AND char_length(${table.providerRef}) BETWEEN 1 AND 255)`,
+    ),
   ],
 );
 

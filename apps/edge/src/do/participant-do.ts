@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { TelemetryReporter } from "./telemetry.js";
 import type { Participant, ParticipantOnboarded, ServerEvent } from "@market-runs/proto";
-import { NotificationSchema, type NotificationCreated } from "@market-runs/proto";
+import { IdentityKycRequestSchema, NotificationSchema, type IdentityKycRequest, type NotificationCreated } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
 import {
   acceptHibernatedWebSocket,
@@ -19,6 +19,7 @@ import {
 } from "./runtime/index.js";
 import { STATE_KEY } from "./state.js";
 import { devIdentityVerifier, hashIdDocument } from "../kyc/verifier.js";
+import { preverifiedTransactionsAllowed } from "../registry/index.js";
 
 /**
  * The Durable Object name for one participant's registry record. Every
@@ -96,6 +97,11 @@ export class ParticipantDO extends DurableObject<Env> {
       if (command instanceof Response) return command;
       return internalErrorGuard(() => this.onboard(command));
     }
+    if (request.method === "POST" && path === "/kyc") {
+      const parsed = IdentityKycRequestSchema.safeParse(await request.json().catch(() => null));
+      if (!parsed.success) return jsonResponse({ error: "invalid-request", message: "identity KYC reconciliation failed schema validation" }, 400);
+      return internalErrorGuard(() => this.reconcileKyc(parsed.data));
+    }
     if (request.method === "POST" && path === "/join") {
       const parsed = await parseClientCommand(request);
       const command = expectCommand(parsed, "market.joined");
@@ -130,10 +136,15 @@ export class ParticipantDO extends DurableObject<Env> {
 
   /** Create one identity; only the same pending document may retry verification. */
   private async onboard(command: ParticipantOnboarded): Promise<Response> {
-    const idDocumentHash = await hashIdDocument(
-      command.idDocument,
-      this.env.ID_DOCUMENT_HMAC_SECRET ?? "market-runs-dev-document-hmac-key",
-    );
+    const idDocumentSecret = this.env.ID_DOCUMENT_HMAC_SECRET ??
+      (this.env.ALLOW_HEADER_AUTH === "true" ? "market-runs-dev-document-hmac-key" : undefined);
+    if (!idDocumentSecret) {
+      return jsonResponse(
+        { error: "participant-document-auth-unconfigured", message: "ID_DOCUMENT_HMAC_SECRET is required" },
+        503,
+      );
+    }
+    const idDocumentHash = await hashIdDocument(command.idDocument, idDocumentSecret);
     const existing = this.participant;
     if (existing && (
       existing.kycStatus !== "pending" ||
@@ -151,7 +162,7 @@ export class ParticipantDO extends DurableObject<Env> {
       participantId: command.participantId,
       idDocumentType: command.idDocumentType,
       idDocument: command.idDocument,
-    }, this.env.ALLOW_HEADER_AUTH === "true");
+    }, preverifiedTransactionsAllowed(this.env));
 
     const participant: Participant = existing ?? {
       id: command.participantId,
@@ -172,6 +183,23 @@ export class ParticipantDO extends DurableObject<Env> {
 
     const event: ServerEvent = { type: "participant.recorded", participant };
     broadcast(this.ctx, this.env,event);
+    return jsonResponse(event);
+  }
+
+  /** Reconcile completed identity KYC without replacing any other participant field. */
+  private async reconcileKyc(input: IdentityKycRequest): Promise<Response> {
+    const current = this.participant;
+    if (!current || current.id !== input.participantId) return notFound(`participant ${input.participantId} is unknown`);
+    const verifiedLegalName = input.verifiedLegalName ?? current.verifiedLegalName;
+    const participant: Participant = {
+      ...current,
+      kycStatus: "verified",
+      ...(verifiedLegalName === undefined ? {} : { verifiedLegalName }),
+    };
+    await this.ctx.storage.put(STATE_KEY, participant);
+    this.participant = participant;
+    const event: ServerEvent = { type: "participant.recorded", participant };
+    broadcast(this.ctx, this.env, event);
     return jsonResponse(event);
   }
 

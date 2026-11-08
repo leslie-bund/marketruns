@@ -25,6 +25,9 @@ class FakeGateway implements ChargeGateway {
   async refundCharge(): Promise<ChargeRefundResult> {
     throw new Error("not used in holds tests");
   }
+  async reconcileRefund() {
+    return { status: "not-found" as const };
+  }
   supportsRefund(paymentMethod: string): boolean {
     return paymentMethod === "card";
   }

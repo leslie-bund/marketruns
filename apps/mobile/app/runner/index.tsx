@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Text } from "react-native";
 import { buyerIdForRun, claimRun, finalDelivery, getDeviceLocationFix, initiateHandoff, locationTick, identities, newId } from "../../src/api";
 import { canRunnerMutate, HandoffList, RunMap, StopList, TripSummaryCard, useRunnerLocationStream, useRunnerPool } from "../../src/features/run";
+import { PayoutAccountCard } from "../../src/features/seller";
 import { useActiveMarket, useActiveParticipant } from "../../src/api";
 import { Button, Card, Page, Pill, Section, s } from "../../src/ui";
 import { devDemoMode } from "../../src/api/dev-mode";
@@ -18,6 +19,11 @@ export default function RunnerHome() {
   const current = run.run;
   const claimed = current ? canRunnerMutate(current, runnerId) : false;
   const gps = useRunnerLocationStream(gpsWanted && claimed && current ? current.id : null);
+  const payoutAccount = (
+    <Section title="Payouts">
+      <PayoutAccountCard participantId={runnerId} recipientRole="runner" />
+    </Section>
+  );
 
   const act = (work: () => Promise<unknown>, label: string) => async () => {
     setBusy(true);
@@ -72,13 +78,20 @@ export default function RunnerHome() {
         <Card>
           <Text style={s.muted}>{participant ? `Running as ${participant.displayName} (${participant.id}).` : `Demo internal runner (${identities.runner.id}).`}</Text>
         </Card>
+        {payoutAccount}
         {queue}
       </Page>
     );
   }
 
   if (!claimed) {
-    return <Page eyebrow="INTERNAL RUNNER" title="Claim required"><Card><Text style={s.body}>This Run is unassigned or belongs to another runner. Claim it before handoffs, location, or delivery.</Text></Card>{queue}</Page>;
+    return (
+      <Page eyebrow="INTERNAL RUNNER" title="Claim required">
+        <Card><Text style={s.body}>This Run is unassigned or belongs to another runner. Claim it before handoffs, location, or delivery.</Text></Card>
+        {payoutAccount}
+        {queue}
+      </Page>
+    );
   }
 
   const nextStop = current.stops.find((stop) => stop.status !== "completed");
@@ -118,6 +131,7 @@ export default function RunnerHome() {
       {gps.error ? <Text style={s.muted}>{gps.error}</Text> : null}
       {devDemoMode && !gps.sharing ? <Button title="Location tick (dev)" secondary onPress={act(() => locationTick(current.id, 6.4541, 3.3947), "Location failed")} /> : null}
       {allCollected && deliveryHandoff?.status === "confirmed" && current.status !== "delivered" ? <Button title="Final delivery" onPress={act(() => finalDelivery(current.id), "Final delivery refused")} /> : null}
+      {payoutAccount}
       {queue}
     </Page>
   );

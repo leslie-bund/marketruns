@@ -3,15 +3,16 @@ import type { Context, MiddlewareHandler } from "hono";
 import {
   AuthenticateDeviceKeyRequestSchema, BIOMETRIC_CONSENT_VERSION, DeviceResetDecisionRequestSchema,
   DeviceResetRequestSchema, DeviceResetStatusSchema, DisplayNameRequestSchema, EnrollFaceRequestSchema,
-  EnrollmentProofRequestSchema, RecoverDeviceRequestSchema, RegisterDeviceKeyRequestSchema,
-  ValidateSessionRequestSchema, VerifyFaceRequestSchema, type AuthErrorCode, type BiometricConsent, type Session,
+  EnrollmentProofRequestSchema, IdentityKycResponseSchema, RecoverDeviceRequestSchema, RegisterDeviceKeyRequestSchema,
+  ValidateSessionRequestSchema, VerifyFaceRequestSchema, type AuthErrorCode, type BiometricConsent,
+  type IdentityKycRequest, type Session,
 } from "@market-runs/proto";
 import {
   DEFAULT_FACE_MATCH_THRESHOLD, SESSION_TOKEN_TTL_MS, cosineSimilarity, faceMatchPasses,
   signSessionToken, similarityBucket, verifySessionToken,
 } from "@market-runs/domain";
 import type { Env } from "./env.js";
-import { encryptionKeyBase64, faceMatchThreshold, fidoUpsertEnabled, isProduction, sessionSecret } from "./env.js";
+import { encryptionKeyBase64, faceMatchThreshold, fidoUpsertEnabled, isDeployed, isProduction, sessionSecret } from "./env.js";
 import { BiometricServiceError, isAsyncFaceVerifier, type AsyncFaceVerifier, type FaceCallbackVerdict, type FaceVerifier } from "./face-verifier.js";
 import type { PasskeyVerifier } from "./passkey-verifier.js";
 import type { FaceAuthJobRow, IdentityAccessProofRow, IdentityStore } from "./store.js";
@@ -24,12 +25,14 @@ const PROOF_TTL_MS = 15 * 60_000;
 const JOB_TTL_MS = 2 * 60_000;
 const ATTEMPT_WINDOW_MS = 15 * 60_000;
 const MAX_FAILED_ATTEMPTS = 5;
+export type CoreKycReconciler = (env: Env, input: IdentityKycRequest) => Promise<void>;
 export interface IdentityDeps {
   store: IdentityStore;
   faceVerifier: FaceVerifier | AsyncFaceVerifier;
   localFaceVerifier?: FaceVerifier;
   captureStore?: IdentityCaptureStore;
   passkeyVerifier: PasskeyVerifier | null;
+  reconcileCoreKyc?: CoreKycReconciler;
   now?: () => Date;
 }
 function error(c: Context, status: number, code: AuthErrorCode, message: string, extra: Record<string, unknown> = {}) {
@@ -38,10 +41,33 @@ function error(c: Context, status: number, code: AuthErrorCode, message: string,
 function requireInternal(): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
     const token = c.env.IDENTITY_INTERNAL_TOKEN;
-    if (!token && isProduction(c.env)) return error(c, 503, "identity-unavailable", "IDENTITY_INTERNAL_TOKEN is required in production");
+    if (!token && isDeployed(c.env)) return error(c, 503, "identity-unavailable", "IDENTITY_INTERNAL_TOKEN is required in deployed identity");
     if (token && c.req.header("x-identity-internal") !== token) return error(c, 403, "unauthorized-internal", "valid internal token required");
     await next();
   };
+}
+
+/** Reconcile the core profile before completing the job; callback/poll retries remain idempotent. */
+export async function reconcileCoreKyc(env: Env, input: IdentityKycRequest): Promise<void> {
+  if (!env.EDGE_URL) {
+    if (isDeployed(env)) throw new Error("EDGE_URL is required for core KYC reconciliation");
+    return; // Local vendor tests may run without the edge; deployed staging never can.
+  }
+  if (!env.IDENTITY_INTERNAL_TOKEN) {
+    if (isDeployed(env)) throw new Error("IDENTITY_INTERNAL_TOKEN is required for core KYC reconciliation");
+    return;
+  }
+  const response = await fetch(new URL("/internal/identity/kyc", env.EDGE_URL), {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-identity-internal": env.IDENTITY_INTERNAL_TOKEN },
+    body: JSON.stringify(input),
+    redirect: "error",
+  });
+  if (!response.ok) throw new Error(`core KYC reconciliation failed with status ${response.status}`);
+  const recorded = IdentityKycResponseSchema.safeParse(await response.json().catch(() => null));
+  if (!recorded.success || recorded.data.participant.id !== input.participantId || recorded.data.participant.kycStatus !== "verified") {
+    throw new Error("core KYC reconciliation returned an invalid participant record");
+  }
 }
 async function issueSession(store: IdentityStore, env: Env, participantId: string, role: string, now: Date): Promise<Session> {
   const tokenId = crypto.randomUUID(); const expiresAt = now.getTime() + SESSION_TOKEN_TTL_MS;
@@ -126,7 +152,7 @@ export async function cleanupExpiredEnrollmentCaptures(store: IdentityStore, cap
   return jobs.length;
 }
 async function finalizeEnrollment(store: IdentityStore, captures: IdentityCaptureStore | null, env: Env, job: FaceAuthJobRow,
-  verdict: FaceCallbackVerdict, now: Date): Promise<FaceAuthJobRow> {
+  verdict: FaceCallbackVerdict, now: Date, reconcile: CoreKycReconciler): Promise<FaceAuthJobRow> {
   if (now >= job.expiresAt || job.status !== "pending") return failEnrollment(store, captures, job, "expired", now);
   if (!verdict.passed || verdict.userRef !== job.participantId) {
     return failEnrollment(store, captures, job, verdict.userRef !== job.participantId ? "participant-mismatch" : verdict.reason ?? "provider-rejected", now);
@@ -142,10 +168,13 @@ async function finalizeEnrollment(store: IdentityStore, captures: IdentityCaptur
   }
   const previous = await store.getFaceEnrollment(job.participantId);
   const retainedKey = currentCaptureKey(job.id);
-  try {
-    await captures.promote(pendingKey, retainedKey, job.pendingCaptureSha256);
-  } catch {
-    return failEnrollment(store, captures, job, "pending-capture-unavailable", now);
+  const alreadyPromoted = previous?.captureObjectKey === retainedKey && previous.captureSha256 === job.pendingCaptureSha256;
+  if (!alreadyPromoted) {
+    try {
+      await captures.promote(pendingKey, retainedKey, job.pendingCaptureSha256);
+    } catch {
+      return failEnrollment(store, captures, job, "pending-capture-unavailable", now);
+    }
   }
   let enrolled = false;
   try {
@@ -156,6 +185,9 @@ async function finalizeEnrollment(store: IdentityStore, captures: IdentityCaptur
       captureConsentVersion: job.pendingCaptureConsentVersion, captureConsentGrantedAt: job.pendingCaptureConsentGrantedAt,
       captureRetainedAt: now, createdAt: now, lastVerifiedAt: null });
     enrolled = true;
+    // A failed core write leaves the job pending and the promoted capture intact;
+    // a later signed callback or poll retries without requiring a new selfie.
+    await reconcile(env, { participantId: job.participantId, verifiedLegalName: verdict.verifiedLegalName ?? null });
     await store.completeFaceAuthJob(job.id, "passed", null, now);
   } catch (cause) {
     if (!enrolled) await captures.delete(retainedKey).catch(() => undefined);
@@ -170,6 +202,7 @@ async function finalizeEnrollment(store: IdentityStore, captures: IdentityCaptur
 export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
   const { store, faceVerifier, passkeyVerifier } = deps;
   const local = deps.localFaceVerifier ?? (isAsyncFaceVerifier(faceVerifier) ? null : faceVerifier);
+  const reconcile = deps.reconcileCoreKyc ?? reconcileCoreKyc;
   const now = () => deps.now?.() ?? new Date();
   const app = new Hono<{ Bindings: Env }>();
   app.get("/healthz", (c) => c.json({ ok: true, service: "market-runs-identity" }));
@@ -191,7 +224,7 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
       displayName: parsed.data.displayName, verifiedLegalName: existing?.verifiedLegalName ?? null, expiresAt: expiresAt.getTime() });
   });
 
-  app.post("/auth/face/enroll", async (c) => {
+  app.post("/auth/face/enroll", requireInternal(), async (c) => {
     const parsed = EnrollFaceRequestSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success || !local) return error(c, 400, "invalid-request", "invalid enrollment request");
     const { participantId, image, enrollmentProof, consent } = parsed.data;
@@ -279,7 +312,7 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
           providerJobId: job.providerJobId, userRef: job.participantId, passed: verdict.outcome === "passed",
           reason: verdict.outcome === "failed" ? verdict.reason : null,
           verifiedLegalName: verdict.outcome === "passed" ? verdict.verifiedLegalName ?? null : null,
-        }, now());
+        }, now(), reconcile);
       } catch { /* remain pending while the provider is temporarily unavailable */ }
     }
     if (job.status === "pending") return c.json({ jobId: job.id, participantId: job.participantId, kind: job.kind,
@@ -306,7 +339,7 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
       await failEnrollment(store, captures, job, "expired", now());
       return error(c, 410, "job-expired", "face job expired");
     }
-    const completed = await finalizeEnrollment(store, captures, c.env, job, verdict, now());
+    const completed = await finalizeEnrollment(store, captures, c.env, job, verdict, now(), reconcile);
     return c.json({ ok: completed.status === "passed", jobId: completed.id, status: completed.status });
   });
 

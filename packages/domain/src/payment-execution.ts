@@ -1,5 +1,4 @@
-import type { SettlementOutcome } from "@market-runs/domain";
-import type { PaymentDispatchLeg, PaymentDispatchRequested, PaymentRefundRequested } from "@market-runs/proto";
+import type { SettlementOutcome } from "./settlement.js";
 
 /**
  * Payment dispatch request construction for a closing Run.
@@ -29,9 +28,14 @@ export function settlementRecordIdForRun(runId: string): string {
 export function buildPaymentDispatchRequest(
   outcome: SettlementOutcome,
   context: { runId: string; market: string; runnerId: string; requestId?: string },
-): PaymentDispatchRequested {
+) {
   const settlementRecordId = settlementRecordIdForRun(context.runId);
-  const legs: PaymentDispatchLeg[] = [];
+  const legs: Array<{
+    account: "seller" | "runner" | "platform";
+    partyId: string;
+    amountKobo: number;
+    memo: string;
+  }> = [];
   // Zero-amount legs carry no money and are not dispatched (a leg that pays
   // nothing is a ledger entry, not a transfer).
   for (const seller of outcome.sellers) {
@@ -60,7 +64,7 @@ export function buildPaymentDispatchRequest(
     });
   }
   return {
-    type: "payment.dispatch-requested",
+    type: "payment.dispatch-requested" as const,
     settlementRecordId,
     runId: context.runId,
     market: context.market,
@@ -84,11 +88,11 @@ export function buildPaymentDispatchRequest(
 export function buildPaymentRefundRequest(
   outcome: SettlementOutcome,
   context: { runId: string; buyerId: string; requestId?: string },
-): PaymentRefundRequested | null {
+) {
   if (outcome.buyerRefundKobo <= 0) return null;
   const settlementRecordId = settlementRecordIdForRun(context.runId);
   return {
-    type: "payment.refund-requested",
+    type: "payment.refund-requested" as const,
     settlementRecordId,
     runId: context.runId,
     buyerId: context.buyerId,

@@ -12,13 +12,15 @@ appear) runs real test-mode transfers when `PAYMENT_DISPATCHER=flutterwave`
 ## Flow
 
 ```
-RunDO.releaseSettlement ── payment.dispatch-requested ──▶ payment-dispatch queue
-                                                              │ (this worker)
-                    payment_dispatches rows ◀── persist ── consume
-                              │                               │
-                              └── ops reads (/dispatches)     └── PaymentDispatcher.dispatchTransfer(...)
-                                                                    │
-                                              webhook /dispatches/sync converge in-flight rows
+RunDO.releaseSettlement ── archive events ──▶ archive transaction commits
+                                                   │
+                                                   └── payment.dispatch-requested ──▶ payment-dispatch queue
+                                                                                          │ (this worker)
+                                                payment_dispatches rows ◀── persist ── consume
+                                                          │                               │
+                                                          └── ops reads (/dispatches)     └── PaymentDispatcher.dispatchTransfer(...)
+                                                                                                │
+                                                                          webhook /dispatches/sync converge in-flight rows
 ```
 
 - **Idempotent**: per-leg idempotency key `settlement:<settlementRecordId>:leg:<n>`
@@ -40,12 +42,22 @@ RunDO.releaseSettlement ── payment.dispatch-requested ──▶ payment-disp
   and the row stays `failed` — visible via `GET /dispatches?status=failed`
   and re-runnable via `POST /dispatches/:id/replay`.
 - **Buyer refunds** ride the same queue as `payment.refund-requested` (emitted
-  by RunDO when the settlement outcome carries buyerRefundKobo > 0) and
-  release against the buyer's hold — never a payout leg (ADR-0023). Card
+  by the archive after it commits a settlement with buyerRefundKobo > 0) and
+  release against the buyer's hold — never a payout leg (ADR-0023, 0029). Card
   charges refund through the provider's refund API (`processing` — card
   refunds settle in days); non-card methods have no API rail and are marked
   `refund-manual` for ops, honestly terminal. Same retry/backoff/DLQ posture
   as dispatches; one refund per settlement (UNIQUE settlement_record_id).
+  Ambiguous attempts reconcile through `GET /v3/refunds?id=<transaction-id>`
+  before any new POST: exact provider matches are adopted, no accepted match
+  permits one attempt, lookup failures retry lookup only, and conflicting
+  history becomes `refund-review`, which automatic redelivery skips.
+
+## Audited refund resolution
+
+`POST /payments/refunds/:refundId/resolution` is the internal, service-authenticated recovery command for `refund-review` and `refund-manual`. It accepts only `accept-provider`, `complete-manual`, or `allow-retry`, with bounded evidence and references—never amounts, legs, client actor fields, or timestamps. The edge injects the authenticated admin id and the worker owns the timestamp.
+
+Migration 0018's write-once `payment_refund_resolutions` table preserves action, status, provider reference, evidence, note, operator, and time. Identical decisions replay; different decisions conflict. Accept/manual updates refund and hold accounting atomically without incrementing attempts. Allow-retry commits the resolution before enqueueing exactly the canonical refund; queue failure leaves `resolutionCommitted: true`. No resolution route calls the provider.
 
 ## Collection: holds + checkout gating
 
@@ -83,23 +95,44 @@ test-account fallbacks; unknown parties still fail `recipient-unresolved`.
 proxied by the edge at `/ops/api/admin/holds` and `/ops/api/admin/refunds`
 next to the existing `/ops/api/admin/payments`.
 
-## HTTP surface (dev posture: trusted-internal, no auth)
+`GET /recovery?market=` is the grouped stuck-settlement attention queue. It includes failed/pending dispatches, stale in-flight legs, failed/review/manual or stale-pending refunds, stale held holds, and canonical missing execution rows. Items are grouped by settlement and carry deduplicated replay/sync/resolution/redrive actions. It performs no provider calls, writes, queue sends, or notifications, and excludes ungated no-hold refunds. The admin-only Ops **Recovery** tab renders those actions through the existing recovery endpoints.
 
-Mirrors apps/archive's admin endpoints: the worker is reached through the
-edge ops console (`/ops/api/admin/payments`, behind the ops guard) or a
-Service binding in deployed environments. The exception is
-`/webhooks/transfers`, which the provider must reach — it is the worker's
-only authenticated route (secret-hash verified). Revisit the rest with
-ADR-0015.
+## HTTP surface and queue authorization
+
+Every non-webhook route requires `x-payments-internal` when
+`PAYMENTS_INTERNAL_TOKEN` is configured; deployed entry points fail closed
+when it is absent. The explicit `ALLOW_HEADER_AUTH=true` local demo is the
+only tokenless exception. `/healthz` remains public, and provider webhooks
+keep their own secret-hash verification instead of service authentication.
+The public edge proxy allowlists charge confirmation, banks, and
+payout-account routes; holds, refunds, dispatch operations, and run binding
+are internal-only.
+
+Queue messages are not self-authorizing. Before any persistence, provider
+call, notification, or hold transition, the worker loads the durable
+settlement joined to its archived run and requires an exact canonical
+request match. A not-yet-archived settlement retries without side effects;
+a mismatch is rejected permanently. Existing rows and Ops replays must also
+match the canonical settlement request.
 
 - `GET /healthz` — liveness.
+- `POST /settlements/:settlementRecordId/redrive` — rebuilds canonical requests
+  exclusively from the durable settlement and enqueues them with unchanged
+  idempotency keys. Never reads client legs or calls the provider directly.
+  Returns enqueue-only `enqueued` (202), zero-message `noop` (200), or
+  `partial`/`failed` (502) with per-message counts. Exposed to admins through
+  `/ops/api/admin/settlements/:settlementRecordId/redrive`.
 - `GET /dispatches?runId=&status=&limit=&offset=` — ops read; zod-validated
   `PaymentDispatchView` list (`status` ∈ pending|sent|queued|failed|completed).
-- `POST /dispatches/:id/replay` — re-executes a `failed`/`pending` dispatch
-  through the dispatcher (same idempotency key, so a provider that already
-  accepted the transfer collapses the retry). 409 when the row is already
-  `sent`/`queued`/`completed`; 502 with the updated view when the replay
-  fails again.
+- `POST /dispatches/:id/replay` — revalidates a `failed`/`pending` dispatch
+  against its durable settlement, then re-executes it through the dispatcher
+  (same idempotency key, so a provider that already accepted the transfer
+  collapses the retry). 409 when the row is already
+  `sent`/`queued`/`completed` or disagrees with the settlement; 502 with the
+  updated view when the replay fails again. Successful replay also applies
+  the queue's run-wide hold guard: at least one dispatch row must exist and
+  every leg must be `sent`/`queued`/`completed`; pending or failed siblings
+  keep the hold held and suppress the release notification.
 - `POST /webhooks/transfers` — provider transfer outcome (terminal states).
   Verified against the configured webhook secret hash (401 on mismatch, 503
   when unconfigured); matches rows by `provider_reference` (the short alias
@@ -110,6 +143,14 @@ ADR-0015.
   longer than `staleMinutes` (default 15; JSON body may override) are
   re-queried at the provider and converged. 501 `sync-unsupported` when the
   configured dispatcher cannot poll (the stub).
+- `POST /dispatches/:id/sync` — authenticated single-dispatch polling using
+  the same status-transition and notification logic as bulk sync; it never
+  executes or replays the transfer and never increments `attempts`. Unknown
+  rows return 404, unsupported dispatchers 501 `sync-unsupported`, and rows
+  outside `sent`/`queued` 409 `not-stale`. A missing providerRef returns 409
+  `unmatched`; a provider lookup miss returns 200 `unmatched` without
+  mutation, consistent with bulk sync. Terminal outcomes return `applied`,
+  while nonterminal outcomes return `unchanged` without mutation.
 
 ## Dispatcher contract
 

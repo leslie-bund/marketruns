@@ -215,12 +215,71 @@ export type PaymentRefundRequested = z.infer<typeof PaymentRefundRequestedSchema
  *   processing    — the provider accepted the refund (card refunds settle in
  *                   days; terminal enough for the hold ledger);
  *   completed     — provider confirmed the refund landed;
- *   failed        — not executed / terminally rejected (retried, then DLQ);
+ *   failed        — definite rejection, or an ambiguous attempt awaiting lookup;
+ *   refund-review — conflicting provider history; ops must resolve before execution;
  *   refund-manual — the payment method has no API refund rail (non-card);
  *                   ops refunds the buyer manually. Honest, terminal.
  */
-export const PaymentRefundStatusSchema = z.enum(["pending", "processing", "completed", "failed", "refund-manual"]);
+export const PaymentRefundStatusSchema = z.enum(["pending", "processing", "completed", "failed", "refund-review", "refund-manual"]);
 export type PaymentRefundStatus = z.infer<typeof PaymentRefundStatusSchema>;
+
+const RefundProviderRefSchema = z.string().trim().min(1).max(255);
+const RefundEvidenceRefSchema = z.string().trim().min(1).max(2048);
+const RefundResolutionNoteSchema = z.string().trim().min(1).max(2000);
+const RefundResolvedBySchema = z.string().trim().min(1).max(200);
+
+export const PaymentAcceptProviderRefundResolutionSchema = z.object({
+  action: z.literal("accept-provider"),
+  status: z.enum(["processing", "completed"]),
+  providerRef: RefundProviderRefSchema,
+  evidenceRef: RefundEvidenceRefSchema,
+  note: RefundResolutionNoteSchema,
+}).strict();
+
+export const PaymentCompleteManualRefundResolutionSchema = z.object({
+  action: z.literal("complete-manual"),
+  providerRef: RefundProviderRefSchema,
+  evidenceRef: RefundEvidenceRefSchema,
+  note: RefundResolutionNoteSchema,
+}).strict();
+
+export const PaymentAllowRefundRetryResolutionSchema = z.object({
+  action: z.literal("allow-retry"),
+  evidenceRef: RefundEvidenceRefSchema,
+  note: RefundResolutionNoteSchema,
+}).strict();
+
+/**
+ * Trusted edge → payments worker audit decision. It cannot carry money legs,
+ * execution coordinates, attempt ids, or worker-owned actor/timestamp fields.
+ */
+export const PaymentRefundResolutionSchema = z.discriminatedUnion("action", [
+  PaymentAcceptProviderRefundResolutionSchema,
+  PaymentCompleteManualRefundResolutionSchema,
+  PaymentAllowRefundRetryResolutionSchema,
+]);
+export type PaymentRefundResolution = z.infer<typeof PaymentRefundResolutionSchema>;
+
+export const PaymentRefundResolutionRequestSchema = z.object({
+  resolvedBy: RefundResolvedBySchema,
+  resolution: PaymentRefundResolutionSchema,
+}).strict();
+export type PaymentRefundResolutionRequest = z.infer<typeof PaymentRefundResolutionRequestSchema>;
+
+export const PaymentRefundResolutionStatusSchema = z.enum(["processing", "completed", "failed"]);
+export type PaymentRefundResolutionStatus = z.infer<typeof PaymentRefundResolutionStatusSchema>;
+
+/** Immutable audit record nested in the refund read model. */
+export const PaymentRefundResolutionViewSchema = z.object({
+  action: z.enum(["accept-provider", "complete-manual", "allow-retry"]),
+  status: PaymentRefundResolutionStatusSchema,
+  providerRef: RefundProviderRefSchema.nullable(),
+  evidenceRef: RefundEvidenceRefSchema,
+  note: RefundResolutionNoteSchema,
+  resolvedBy: RefundResolvedBySchema,
+  resolvedAt: TimestampSchema,
+}).strict();
+export type PaymentRefundResolutionView = z.infer<typeof PaymentRefundResolutionViewSchema>;
 
 /** Ops read model over the payment_refunds table (apps/payments /payments/refunds). */
 export const PaymentRefundViewSchema = z.object({
@@ -235,8 +294,56 @@ export const PaymentRefundViewSchema = z.object({
   attempts: z.number().int().nonnegative(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
+  resolution: PaymentRefundResolutionViewSchema.nullable(),
 });
 export type PaymentRefundView = z.infer<typeof PaymentRefundViewSchema>;
+
+/* ------------------------------------------------------------------------ */
+/* Stuck-settlement recovery: a read-only, grouped operator attention queue.  */
+/* ------------------------------------------------------------------------ */
+
+export const PaymentRecoveryIssueKindSchema = z.enum(["dispatch", "refund", "hold", "missing"]);
+export type PaymentRecoveryIssueKind = z.infer<typeof PaymentRecoveryIssueKindSchema>;
+
+export const PaymentRecoveryIssueSchema = z.object({
+  kind: PaymentRecoveryIssueKindSchema,
+  id: z.string().min(1),
+  status: z.string().min(1),
+  amountKobo: KoboSchema.nullable(),
+  updatedAt: TimestampSchema,
+}).strict();
+export type PaymentRecoveryIssue = z.infer<typeof PaymentRecoveryIssueSchema>;
+
+export const PaymentRecoveryActionTypeSchema = z.enum([
+  "replay-dispatch",
+  "sync-dispatch",
+  "resolve-refund",
+  "redrive-settlement",
+]);
+export type PaymentRecoveryActionType = z.infer<typeof PaymentRecoveryActionTypeSchema>;
+
+export const PaymentRecoveryActionSchema = z.object({
+  type: PaymentRecoveryActionTypeSchema,
+  targetId: z.string().min(1),
+}).strict();
+export type PaymentRecoveryAction = z.infer<typeof PaymentRecoveryActionSchema>;
+
+export const PaymentRecoveryItemSchema = z.object({
+  settlementRecordId: z.string().min(1),
+  runId: z.string().min(1),
+  market: z.string().min(1),
+  buyerId: z.string().min(1),
+  runnerId: z.string().min(1),
+  issues: z.array(PaymentRecoveryIssueSchema).min(1),
+  actions: z.array(PaymentRecoveryActionSchema),
+}).strict();
+export type PaymentRecoveryItem = z.infer<typeof PaymentRecoveryItemSchema>;
+
+export const PaymentRecoveryResponseSchema = z.object({
+  items: z.array(PaymentRecoveryItemSchema),
+  total: z.number().int().nonnegative(),
+}).strict();
+export type PaymentRecoveryResponse = z.infer<typeof PaymentRecoveryResponseSchema>;
 
 /* ------------------------------------------------------------------------ */
 /* Payout accounts: bank directory + account resolution + per-participant     */

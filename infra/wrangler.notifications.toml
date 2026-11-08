@@ -16,10 +16,11 @@ EDGE_URL = "http://localhost:8787"
 # DATABASE_URL (dev) or Hyperdrive (prod) is supplied at runtime.
 # wrangler secret put RESEND_API_KEY
 # RESEND_FROM_EMAIL is a verified non-secret sender identity.
-# NOTIFICATION_INTERNAL_TOKEN is shared by the edge and notifications workers.
+# wrangler secret put NOTIFICATION_INTERNAL_TOKEN  # on BOTH edge and notifications; required in staging/production
+# ALLOW_HEADER_AUTH=true is an explicit local demo only and must not be set in deployed environments.
 
 # Replace the example hostname before deploying. Deployed queue/fetch validation
-# rejects missing or loopback EDGE_URL values instead of using local [vars].
+# rejects missing service auth or loopback EDGE_URL values instead of using local [vars].
 [env.staging]
 name = "market-runs-notifications-staging"
 

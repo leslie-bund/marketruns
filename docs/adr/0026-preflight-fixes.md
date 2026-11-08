@@ -6,10 +6,11 @@ Writing the first-live-test runbook (docs/runbooks/first-live-test.md) forced th
 
 ADR-0019 wired the dispute record to the archive boundary (`run.retired` carries the `dispute { reason, raisedBy, evidenceRefs }` block) and recorded openly that nothing persisted it — the ops console's Disputes tab stayed empty. That follow-up is now closed: the archive consumer inserts the block into the Postgres `disputes` table, in the shape the rest of the persistence layer already uses:
 
-- **Deterministic id** `<runId>:dispute` — one open dispute per run, so queue redelivery replays and never duplicates (`onConflictDoNothing`, the same exactly-once-by-schema posture as the refund rail's unique `settlementRecordId`, ADR-0025).
+- **Deterministic id** `<runId>:dispute` — one dispute per run, so queue redelivery replays and never duplicates (`onConflictDoNothing`, the same exactly-once-by-schema posture as the refund rail's unique `settlementRecordId`, ADR-0025).
 - **FK-safe ordering** — the insert runs after the `runs_archive` row exists, because `disputes.run_id` references it.
 - **New `reason` column** (migration 0009); `DisputeViewSchema` gained `reason` additively, so the console renders *why* alongside the evidence refs.
 - Status starts `open` — the table's unresolved status; a null raiser (a dispute whose originator the run wire didn't carry) is recorded as `"unknown"`, not guessed.
+- **Settlement resolves the dispute in the same transaction.** `settlement.released` sets `resolved`, the settlement id, `releasedAt`, ambiguity, and absorbed loss while preserving raiser, reason, evidence, and creation time. This applies to every settlement mode. A disputed settlement without a participant dispute block creates one deterministic, already-resolved Ops-originated row with empty reason/evidence rather than fabricated context; other modes never synthesize a dispute. Replay cannot reopen a resolved row.
 
 In-flight disputes still appear only at retirement. That was true before and remains true now — but it is no longer a gap; it is simply the retirement-snapshot doctrine (ADR-0010) applied to disputes: live state lives in the RunDO, durable records materialize when the run retires.
 

@@ -7,6 +7,11 @@ export function headerAuthAllowed(env: Pick<Env, "ALLOW_HEADER_AUTH">): boolean 
   return env.ALLOW_HEADER_AUTH === "true";
 }
 
+/** Shape-check preverification is transaction-ready only in header-auth dev or explicit staging. */
+export function preverifiedTransactionsAllowed(env: Pick<Env, "ALLOW_HEADER_AUTH" | "EDGE_ENV">): boolean {
+  return env.EDGE_ENV === "staging" || (env.EDGE_ENV !== "production" && headerAuthAllowed(env));
+}
+
 const clients = new Map<string, CoreRegistry>();
 
 /** Production requires Postgres; the in-memory adapter exists only in explicit dev/test posture. */

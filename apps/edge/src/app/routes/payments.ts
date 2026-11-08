@@ -4,6 +4,7 @@ import type { Env } from "../../config/env.js";
 import { errorResponse } from "../../do/runtime/index.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 import { headerAuthAllowed } from "../../registry/index.js";
+import { paymentsAuthConfigured, paymentsServiceHeaders } from "../../config/payments-auth.js";
 
 /**
  * /payments/* proxy → the payments worker (apps/payments), which owns charge
@@ -70,27 +71,34 @@ async function proxyPayments(
 ): Promise<Response> {
   const base = c.env.PAYMENTS_URL ?? DEFAULT_PAYMENTS_URL;
   const url = new URL(c.req.url);
+  const publicClient = !options?.forwardInboundHeaders;
+  if (publicClient) {
+    if (!isPublicPaymentRoute(url.pathname, c.req.method)) {
+      return errorResponse(404, "not-found", `no route: ${c.req.method} ${url.pathname}`);
+    }
+    if (!paymentsAuthConfigured(c.env)) {
+      return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
+    }
+  }
   const target = new URL(url.pathname + url.search, base);
   let upstream: Response;
   const hasBody = c.req.method !== "GET" && c.req.method !== "HEAD";
   const headers = options?.forwardInboundHeaders
     ? correlationHeaders(c, forwardableHeaders(c.req.raw.headers))
-    : correlationHeaders(c, { "content-type": c.req.header("content-type") ?? "application/json" });
+    : paymentsServiceHeaders(c.env, correlationHeaders(c, { "content-type": c.req.header("content-type") ?? "application/json" }));
 
   // Rebuild identity from the edge's resolved participant; never forward
   // client-supplied identity/internal headers on this public proxy.
-  if (!options?.forwardInboundHeaders && isPayoutAccountManagement(url.pathname, c.req.method)) {
+  if (publicClient && isPayoutAccountManagement(url.pathname, c.req.method)) {
     const who = c.get("participant");
     const session = who.source === "session";
     const headerDemo = who.source === "header" && headerAuthAllowed(c.env);
     if (!session && !headerDemo) {
       return errorResponse(401, "unauthorized", "a valid Bearer session is required");
     }
-    const internalToken = c.env.PAYMENTS_INTERNAL_TOKEN;
-    if (session && !internalToken) {
+    if (session && !c.env.PAYMENTS_INTERNAL_TOKEN) {
       return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
     }
-    if (internalToken) headers.set("x-payments-internal", internalToken);
     headers.set("x-participant-id", who.id);
     headers.set("x-participant-role", who.role);
   }
@@ -111,6 +119,13 @@ async function proxyPayments(
       "x-request-id": upstream.headers.get("x-request-id") ?? c.get("requestId"),
     },
   });
+}
+
+/** The public edge exposes only client-owned payment calls, never the worker's internal hold/refund API. */
+function isPublicPaymentRoute(pathname: string, method: string): boolean {
+  if (pathname === "/payments/charges/confirm") return method === "POST";
+  if (pathname === "/payments/banks") return method === "GET";
+  return isPayoutAccountManagement(pathname, method);
 }
 
 function isPayoutAccountManagement(pathname: string, method: string): boolean {

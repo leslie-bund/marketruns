@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TimestampSchema } from "./primitives.js";
-import { ParticipantRoleSchema } from "./participant.js";
+import { ParticipantRecordedSchema, ParticipantRoleSchema, type ParticipantRecorded } from "./participant.js";
 
 /** Identity wire contracts. Captures use base64 JPEG; only approved enrollment selfies are retained. */
 const ImagePayloadSchema = z.string().min(1).max(12_000_000);
@@ -44,6 +44,15 @@ export const EnrollmentProofResponseSchema = z.object({
   expiresAt: TimestampSchema,
 });
 export type EnrollmentProofResponse = z.infer<typeof EnrollmentProofResponseSchema>;
+
+/** Identity worker → edge: completed hybrid KYC reconciliation. Server-only, never a client command. */
+export const IdentityKycRequestSchema = z.object({
+  participantId: ParticipantIdSchema,
+  verifiedLegalName: z.string().nullable(),
+}).strict();
+export type IdentityKycRequest = z.infer<typeof IdentityKycRequestSchema>;
+export const IdentityKycResponseSchema = ParticipantRecordedSchema;
+export type IdentityKycResponse = ParticipantRecorded;
 
 export const IdentityDocumentSchema = z.object({
   country: z.string().length(2),

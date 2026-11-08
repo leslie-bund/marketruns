@@ -2,6 +2,7 @@ node_modules
 dist
 .wrangler
 .env
+.claude
 .dev.vars
 .gitnexus
 .DS_Store
@@ -11,3 +12,5 @@ kimi-export-session*.md
 *-test.log
 ops-test*.log
 **/test-results/
+# Large ONNX weights are baked into private container images, never committed.
+apps/biometrics/models/

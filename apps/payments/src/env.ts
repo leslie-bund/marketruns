@@ -14,5 +14,7 @@ export interface Env extends DatabaseEnv {
   PAYMENTS_INTERNAL_TOKEN?: string;
   /** Explicit local demo only; deployed payout auth requires the internal token. */
   ALLOW_HEADER_AUTH?: string;
+  /** Settlement dispatch and refund requests, including settlement-level redrive. */
+  PAYMENT_QUEUE?: Queue;
   NOTIFICATION_QUEUE?: Queue;
 }

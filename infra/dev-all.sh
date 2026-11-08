@@ -4,8 +4,9 @@
 #   1. Postgres in docker (starts or reuses the market-runs-postgres container)
 #   2. Drizzle migrations against it
 #   3. Core market rows (idempotent; required before any store registration)
-#   4. Edge (:8787) + archive (:8788) + identity (:8789) + payments (:8790)
-#      + notifications (:8791) via infra/dev-servers.sh
+#   4. Optional private biometrics (127.0.0.1:8792) before hybrid identity,
+#      then edge (:8787) + archive (:8788) + identity (:8789) + payments
+#      (:8790) + notifications (:8791) via infra/dev-servers.sh
 #   5. Demo seed (2 Balogun stores + 1 Computer Village store) — idempotent
 #   6. Optional Cloudflare quick tunnel so friends' phones can reach the edge
 #
@@ -26,6 +27,22 @@
 # the Postgres container only if this script started it). Logs: .dev-logs/
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Load only orchestration switches from the real local dotenv file. Wrangler
+# reads the credentials itself; existing shell values (including test:stack's
+# explicit stub/unpaid overrides) always win and no secret values are printed.
+if [ -f infra/.dev.vars ]; then
+  while IFS= read -r -d '' assignment; do
+    export "$assignment"
+  done < <(node --input-type=module -e '
+    import { loadDevVars } from "./infra/dev-vars.mjs";
+    loadDevVars();
+    for (const key of ["FACE_VERIFIER", "PAYMENT_DISPATCHER", "PAYMENTS_REQUIRED", "BIOMETRIC_MODEL_DIR", "BIOMETRICS_SERVICE_TOKEN"]) {
+      const value = process.env[key];
+      if (value !== undefined) process.stdout.write(`${key}=${value}\0`);
+    }
+  ')
+fi
 
 CONTAINER="market-runs-postgres"
 PG_PORT="54322"
@@ -215,6 +232,9 @@ echo "  archive (local)                http://localhost:8788"
 echo "  identity (local)               http://localhost:8789"
 echo "  payments (local)               http://localhost:8790"
 echo "  notifications (local)          http://localhost:8791"
+if [ "${FACE_VERIFIER:-}" = "hybrid" ] || [ "${FACE_VERIFIER:-}" = "smileid" ]; then
+  echo "  biometrics (loopback only)     http://127.0.0.1:8792"
+fi
 echo "  ops console                    $OPS_URL"
 if [ "$TOKEN_GENERATED" = 1 ]; then
   echo "  OPS_TOKEN (generated)          $OPS_TOKEN"

@@ -4,6 +4,77 @@
 set -u
 cd "$(dirname "$0")/.."
 PIDFILE=.dev-logs/dev-server.pids
+BIOMETRICS_STARTED_FILE=.dev-logs/biometrics.started
+BIOMETRICS_STARTED=0
+mkdir -p .dev-logs
+
+# Wrangler reads infra/.dev.vars itself. Load only the orchestration switches
+# here, without printing credentials; explicitly exported shell values win.
+if [ -f infra/.dev.vars ]; then
+  while IFS= read -r -d '' assignment; do
+    export "$assignment"
+  done < <(node --input-type=module -e '
+    import { loadDevVars } from "./infra/dev-vars.mjs";
+    loadDevVars();
+    for (const key of ["FACE_VERIFIER", "PAYMENT_DISPATCHER", "PAYMENTS_REQUIRED", "BIOMETRIC_MODEL_DIR", "BIOMETRICS_SERVICE_TOKEN"]) {
+      const value = process.env[key];
+      if (value !== undefined) process.stdout.write(`${key}=${value}\0`);
+    }
+  ')
+fi
+
+stop_biometrics() {
+  if [ -f "$BIOMETRICS_STARTED_FILE" ]; then
+    local container_id=""
+    read -r container_id < "$BIOMETRICS_STARTED_FILE" || true
+    if [ -n "$container_id" ]; then docker stop "$container_id" >/dev/null 2>&1 || true; fi
+    rm -f "$BIOMETRICS_STARTED_FILE"
+  fi
+}
+
+start_biometrics() {
+  local model
+  for model in w600k_r50.onnx MiniFASNetV2.onnx; do
+    if [ ! -f "apps/biometrics/models/$model" ]; then
+      echo "missing Docker biometrics model: apps/biometrics/models/$model" >&2
+      return 1
+    fi
+  done
+  if [ -z "${BIOMETRICS_SERVICE_TOKEN:-}" ]; then
+    echo "FACE_VERIFIER=$FACE_VERIFIER requires BIOMETRICS_SERVICE_TOKEN; no stub fallback is allowed" >&2
+    return 1
+  fi
+  if [ "${#BIOMETRICS_SERVICE_TOKEN}" -lt 32 ]; then
+    echo "BIOMETRICS_SERVICE_TOKEN must contain at least 32 characters" >&2
+    return 1
+  fi
+  if curl -s -m 2 http://127.0.0.1:8792/healthz | grep -q ok; then
+    echo "biometrics ready (reusing existing loopback service; it will not be stopped)"
+    return 0
+  fi
+  if docker compose --project-name market-runs-local-biometrics -f apps/biometrics/docker-compose.yml ps --status running --services 2>/dev/null | grep -qx biometrics; then
+    echo "an existing biometrics container is unhealthy; leaving it untouched" >&2
+    return 1
+  fi
+  wait_port_free 8792 || return 1
+  if ! docker compose --project-name market-runs-local-biometrics -f apps/biometrics/docker-compose.yml up -d --build biometrics; then
+    # up may have started a previously stopped/new container before failing.
+    docker compose --project-name market-runs-local-biometrics -f apps/biometrics/docker-compose.yml stop biometrics >/dev/null 2>&1 || true
+    echo "failed to build/start local biometrics" >&2
+    return 1
+  fi
+  local container_id
+  container_id="$(docker compose --project-name market-runs-local-biometrics -f apps/biometrics/docker-compose.yml ps -q biometrics)"
+  if [ -z "$container_id" ]; then
+    docker compose --project-name market-runs-local-biometrics -f apps/biometrics/docker-compose.yml stop biometrics >/dev/null 2>&1 || true
+    echo "local biometrics started without a discoverable container id" >&2
+    return 1
+  fi
+  printf '%s\n' "$container_id" > "$BIOMETRICS_STARTED_FILE"
+  BIOMETRICS_STARTED=1
+  wait_http http://127.0.0.1:8792 || return 1
+  echo "biometrics ready on loopback :8792"
+}
 
 if [ "${1:-}" = "--stop" ]; then
   if [ -f "$PIDFILE" ]; then
@@ -18,12 +89,19 @@ if [ "${1:-}" = "--stop" ]; then
     [ "$par" = "1" ] && kill -9 "$p" 2>/dev/null
   done
   sleep 1; pkill -9 -x workerd 2>/dev/null; pkill -9 -f "workerd-darwin-arm64" 2>/dev/null
+  stop_biometrics
   sleep 2
   echo "stopped"
   exit 0
 fi
 
-mkdir -p .dev-logs
+cleanup_failed_start() {
+  status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$BIOMETRICS_STARTED" = 1 ]; then stop_biometrics; fi
+  exit "$status"
+}
+trap cleanup_failed_start EXIT
 : > "$PIDFILE"
 
 wait_port_free() {
@@ -47,6 +125,8 @@ wait_port_free 8787
 # edge is reachable beyond localhost (see dev-all.sh --tunnel). Passed as a
 # wrangler dev var; unset keeps the dev-open console behavior.
 # The local demo explicitly enables header auth and the direct Postgres adapter.
+# PAYMENTS_REQUIRED is always explicit so test:stack can override a real local
+# .dev.vars with unpaid mode for its temporary rehearsal only.
 if [ -n "${OPS_TOKEN:-}" ]; then
   nohup npx wrangler dev --config infra/wrangler.edge.toml --port 8787 \
     --var OPS_TOKEN:"${OPS_TOKEN}" \
@@ -54,6 +134,7 @@ if [ -n "${OPS_TOKEN:-}" ]; then
     --var ALLOW_HEADER_AUTH:true \
     --var OPS_LEGACY_DEV:true \
     --var OPS_LOCAL_DEV:true \
+    --var PAYMENTS_REQUIRED:"${PAYMENTS_REQUIRED-}" \
     --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
     --var NOTIFICATION_INTERNAL_TOKEN:"${NOTIFICATION_INTERNAL_TOKEN:-market-runs-dev-notification-internal}" \
     > .dev-logs/edge.log 2>&1 &
@@ -63,6 +144,7 @@ else
     --var ALLOW_HEADER_AUTH:true \
     --var OPS_LEGACY_DEV:true \
     --var OPS_LOCAL_DEV:true \
+    --var PAYMENTS_REQUIRED:"${PAYMENTS_REQUIRED-}" \
     --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
     --var NOTIFICATION_INTERNAL_TOKEN:"${NOTIFICATION_INTERNAL_TOKEN:-market-runs-dev-notification-internal}" \
     > .dev-logs/edge.log 2>&1 &
@@ -81,20 +163,41 @@ echo $! >> "$PIDFILE"
 wait_http http://localhost:8788 || exit 1
 echo "archive ready"
 
+if [ "${FACE_VERIFIER:-}" = "hybrid" ] || [ "${FACE_VERIFIER:-}" = "smileid" ]; then
+  start_biometrics || exit 1
+fi
+
 wait_port_free 8789
-nohup npx wrangler dev --config infra/wrangler.identity.toml --port 8789 \
-  --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
-  > .dev-logs/identity.log 2>&1 &
+if [ -n "${FACE_VERIFIER:-}" ]; then
+  nohup npx wrangler dev --config infra/wrangler.identity.toml --port 8789 \
+    --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+    --var "FACE_VERIFIER:${FACE_VERIFIER}" \
+    > .dev-logs/identity.log 2>&1 &
+else
+  nohup npx wrangler dev --config infra/wrangler.identity.toml --port 8789 \
+    --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+    > .dev-logs/identity.log 2>&1 &
+fi
 echo $! >> "$PIDFILE"
 wait_http http://localhost:8789 || exit 1
 echo "identity ready"
 
 wait_port_free 8790
-nohup npx wrangler dev --config infra/wrangler.payments.toml --port 8790 \
-  --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
-  --var ALLOW_HEADER_AUTH:true \
-  --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
-  > .dev-logs/payments.log 2>&1 &
+if [ -n "${PAYMENT_DISPATCHER:-}" ]; then
+  nohup npx wrangler dev --config infra/wrangler.payments.toml --port 8790 \
+    --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+    --var ALLOW_HEADER_AUTH:true \
+    --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
+    --var "PAYMENT_DISPATCHER:${PAYMENT_DISPATCHER}" \
+    > .dev-logs/payments.log 2>&1 &
+else
+  # Bash 3.2 treats an empty array expansion as unset under `set -u`.
+  nohup npx wrangler dev --config infra/wrangler.payments.toml --port 8790 \
+    --var DATABASE_URL:"${DATABASE_URL:-postgres://postgres:postgres@localhost:54322/market_runs}" \
+    --var ALLOW_HEADER_AUTH:true \
+    --var PAYMENTS_INTERNAL_TOKEN:"${PAYMENTS_INTERNAL_TOKEN:-market-runs-dev-payments-internal}" \
+    > .dev-logs/payments.log 2>&1 &
+fi
 echo $! >> "$PIDFILE"
 wait_http http://localhost:8790 || exit 1
 echo "payments ready"

@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
+import { Platform } from "react-native";
 import { EDGE_URL } from "./config";
 
 /**
@@ -163,6 +164,25 @@ export async function clearDeviceCredentialCache(): Promise<void> {
   await setCredentialCache(null);
 }
 
+/**
+ * Normal local sign-out: remove this device's key and bearer session without
+ * resetting the onboarded participant or inventing a server revocation call.
+ * Native SecureStore failure aborts before any auth state is cleared.
+ */
+export async function signOut(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(SECRET_KEY);
+    if (Platform.OS === "web") await AsyncStorage.removeItem(SECRET_FALLBACK_KEY).catch(() => undefined);
+  } catch {
+    if (Platform.OS !== "web") {
+      throw new AuthError(500, "secure-store-unavailable", "Sign out could not remove this device's key. You are still signed in; check device security settings and try again.");
+    }
+    await AsyncStorage.removeItem(SECRET_FALLBACK_KEY).catch(() => undefined);
+  }
+  await clearDeviceCredentialCache();
+  await clearSession();
+}
+
 export function useDeviceCredential(): { credential: DeviceCredentialRef | null; loading: boolean } {
   const [credential, setCredential] = useState<DeviceCredentialRef | null>(credentialCache);
   const [loading, setLoading] = useState(!credentialLoaded);
@@ -203,6 +223,9 @@ async function getOrCreateDeviceSecret(): Promise<string> {
     await SecureStore.setItemAsync(SECRET_KEY, secret);
     return secret;
   } catch {
+    if (Platform.OS !== "web") {
+      throw new AuthError(500, "secure-store-unavailable", "Secure storage is unavailable on this device. Your device key was not stored; try again after checking device security settings.");
+    }
     // Expo web has no SecureStore backend — dev-only fallback, flagged in the key.
     const existing = await AsyncStorage.getItem(SECRET_FALLBACK_KEY).catch(() => null);
     if (existing) return existing;
@@ -216,6 +239,9 @@ async function readDeviceSecret(): Promise<string | null> {
   try {
     return await SecureStore.getItemAsync(SECRET_KEY);
   } catch {
+    if (Platform.OS !== "web") {
+      throw new AuthError(500, "secure-store-unavailable", "Secure storage is unavailable on this device. Your device key could not be read; try again after checking device security settings.");
+    }
     return AsyncStorage.getItem(SECRET_FALLBACK_KEY).catch(() => null);
   }
 }
