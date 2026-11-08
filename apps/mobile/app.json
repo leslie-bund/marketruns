@@ -32,7 +32,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "ng.marketruns.app"
+      "bundleIdentifier": "ng.marketruns.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "edgeToEdgeEnabled": true,
