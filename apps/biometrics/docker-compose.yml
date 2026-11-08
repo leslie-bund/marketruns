@@ -9,9 +9,6 @@ services:
       LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.8}
       BIND_ADDRESS: 0.0.0.0
     ports:
-      # Identity runs on the host in local dev; never expose LAN interfaces.
+      # Identity runs on the host in local dev; loopback publishing requires a
+      # bridge network, but never exposes LAN interfaces.
       - "127.0.0.1:8792:8791"
-    networks: [identity-internal]
-networks:
-  identity-internal:
-    internal: true
