@@ -26,15 +26,12 @@ export default function OnboardingProfile() {
 
   return (
     <Page eyebrow={`ONBOARDING · ${(role ?? "").toUpperCase()}`} title="Your profile">
-      <Section title="Display name">
-        <Label>Shown to counterparties in negotiations and handoffs</Label>
+      <Section title="Profile">
+        <Label>Display name</Label>
         <Field value={name} onChangeText={setName} placeholder="e.g. Amina" autoFocus />
       </Section>
 
       <Section title="Your market">
-        <Text style={{ color: colors.muted, fontSize: 13 }}>
-          Markets are named zones with their own opening hours — you join one now and can join more later.
-        </Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {(markets.data ?? []).map((entry) => (
             <Pressable key={entry.id} onPress={() => setMarket(entry.id)}>

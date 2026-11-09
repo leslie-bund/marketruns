@@ -47,9 +47,6 @@ export default function SellerHome() {
         <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}>
           <Pill active>NO OWNED STORE</Pill>
           <Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Create your store to start trading.</Text>
-          <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
-            Pick the shop items you supply — they decide which buyer intents reach you.
-          </Text>
         </Card>
         {recoveryError ? <Card><Text style={s.body}>Store recovery failed: {recoveryError}</Text><Button title="Retry recovery" secondary onPress={() => setRecoveryAttempt((value) => value + 1)} /></Card> : null}
         <Link href="/seller/join" asChild><Button title={`Join ${market}`} /></Link>
@@ -58,16 +55,15 @@ export default function SellerHome() {
   }
 
   return (
-    <Page eyebrow={`YOUR STORES · ${(store?.name ?? "…").toUpperCase()}`} title="Good morning">
+    <Page eyebrow={`SELLER · ${market.toUpperCase()}`} title={store?.name ?? "Your Store"}>
       <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}>
         <Pill active>STORE ACTIVE · {(store?.exchangePoint ?? "").toUpperCase()}</Pill>
-        <Text style={{ color: "white", fontSize: 21, fontWeight: "800" }}>Fresh demand is nearby.</Text>
         <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
           {intents.presenceError ? `Offline: ${intents.presenceError}` : intents.error ? `Edge: ${intents.error}` : `Online with fresh GPS · intents matching your ${store?.shopItems.length ?? 0} shop item(s).`}
         </Text>
       </Card>
 
-      <Section title="Intents for your Shop Items">
+      <Section title="Matching Intents">
         {open.length === 0 ? <Card><Text style={s.muted}>No open intents for your items right now.</Text></Card> : null}
         {open.map((intent) => (
           <Card key={intent.id}>
@@ -78,7 +74,7 @@ export default function SellerHome() {
               </View>
               <Pill active>MATCH</Pill>
             </View>
-            <Text style={s.body}>{intent.note ?? "No extra note"}</Text>
+            {intent.note ? <Text style={s.body}>{intent.note}</Text> : null}
             <Link
               href={{ pathname: "/seller/respond", params: { intentId: intent.id, shopItem: intent.shopItem, quantity: String(intent.quantity), unit: intent.unit } }}
               asChild
@@ -90,30 +86,30 @@ export default function SellerHome() {
       </Section>
 
       <Pressable onPress={() => router.push("/seller/negotiations")}>
-<Card>
+        <Card>
           <View style={s.row}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Active Negotiations</Text>
               <Text style={s.muted}>{mine.products.length} live product(s)</Text>
             </View>
             <Text style={{ color: colors.green }}>→</Text>
           </View>
         </Card>
-        </Pressable>
+      </Pressable>
 
       <Pressable onPress={() => router.push("/seller/trip")}>
-<Card style={badges.trip > 0 ? { borderColor: colors.orange, borderWidth: 2 } : undefined}>
+        <Card style={badges.trip > 0 ? { borderColor: colors.orange, borderWidth: 2 } : undefined}>
           <View style={s.row}>
-            <View>
-              <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Trip & Handoffs at your Stall</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Trip & Handoffs</Text>
               <Text style={badges.trip > 0 ? { color: colors.orange, fontWeight: "700", fontSize: 13 } : s.muted}>
-                {badges.trip > 0 ? "Runner waiting — show the QR now" : "Live trip map · show the one-time QR when a runner arrives"}
+                {badges.trip > 0 ? "Runner waiting — show the QR now" : "Show the one-time QR when a runner arrives"}
               </Text>
             </View>
             <Text style={{ color: colors.green }}>→</Text>
           </View>
         </Card>
-        </Pressable>
+      </Pressable>
 
       <Section title="Payouts">
         <PayoutAccountCard participantId={participant?.id ?? identities.seller.id} />

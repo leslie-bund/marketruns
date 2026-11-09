@@ -1,7 +1,8 @@
-import { SELF, runDurableObjectAlarm } from "cloudflare:test";
+import { SELF, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { HANDOFF_AUTO_CONFIRM_MS } from "@market-runs/domain";
 import { DeliveryCodeSchema } from "@market-runs/proto";
+import { STATE_KEY } from "../src/do/state.js";
 import { readJson, runStub, shiftTime } from "./helpers.js";
 import {
   BASE,
@@ -193,6 +194,43 @@ describe("verified code plus fresh-photo receiver flow", () => {
     expect((await confirm(runId, "self-delivery", buyerId)).status).toBe(200);
     const delivery = handoffs(await runView(runId, buyerId)).find((handoff) => handoff.type === "delivery");
     expect(delivery?.confirmedBy).toBe(buyerId);
+  });
+
+  it("uses the delivery destination for explicit delivery confirmation under location enforcement", async () => {
+    const buyerId = "buyer:delivery-location-target";
+    const { runId, code } = await driveToRun("delivery-location-target", buyerId);
+    await completePickup(runId, "delivery-location-target");
+    await openDelivery(runId, buyerId, "delivery-location-target");
+    await scan(runId, "delivery-location-target", code);
+    await photo(runId, "delivery-location-target");
+    await runInDurableObject(runStub(runId), async (_instance, state) => {
+      const stored = await state.storage.get(STATE_KEY) as {
+        locationRequired: boolean;
+        run: {
+          location: unknown;
+          route: { destination: { latitude: number; longitude: number }; distanceMeters: number; durationSeconds: number };
+        };
+      };
+      stored.locationRequired = true;
+      stored.run.route = {
+        destination: { latitude: 6.2408125, longitude: 3.4599375 },
+        distanceMeters: 1_000,
+        durationSeconds: 600,
+      };
+      stored.run.location = { latitude: 6.2408125, longitude: 3.4599375, observedAt: Date.now(), accuracyMeters: 10 };
+      await state.storage.put(STATE_KEY, stored);
+    });
+    const response = await runStub(runId).fetch(new Request("http://do/handoff/confirm", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-resolved-participant-id": buyerId,
+        "x-resolved-participant-role": "buyer",
+        "x-resolved-participant-source": "session",
+      },
+      body: JSON.stringify({ handoffId: "delivery-location-target", confirmedBy: buyerId }),
+    }));
+    expect(response.status, await response.text()).toBe(200);
   });
 
   it("rejects confirmation without code and rejects a photo captured before code verification", async () => {

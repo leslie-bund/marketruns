@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { router } from "expo-router";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Alert, Pressable, View } from "react-native";
 import { listVocabulary, postIntent, useActiveMarket, usePoll } from "../../src/api";
-import { Button, Card, Field, Label, Page, Pill, Section, colors } from "../../src/ui";
+import { Button, Field, Label, Page, Pill, Section } from "../../src/ui";
 
 export default function PostIntent() {
   const vocabulary = usePoll(listVocabulary, 30000);
@@ -41,14 +41,10 @@ export default function PostIntent() {
 
   return (
     <Page eyebrow={`${market.toUpperCase()} MARKET`} title="Post an Intent">
-      <Card style={{ backgroundColor: colors.ink }}>
-        <Text style={{ color: "#DAF26B", fontWeight: "800" }}>Tell nearby stores what you need</Text>
-        <Text style={{ color: "white", lineHeight: 21 }}>Matching Shop Items notify Sellers in your Market. Your Price Band guides the conversation.</Text>
-      </Card>
       <Section title="What do you need?">
         {(vocabulary.data ?? []).length > 0 ? (
           <>
-            <Label>Shop Item — pick what stores in this market supply</Label>
+            <Label>Shop Item</Label>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {(vocabulary.data ?? []).map((entry) => (
                 <Pressable key={entry} onPress={() => setItem(entry)}>
@@ -58,7 +54,7 @@ export default function PostIntent() {
             </View>
           </>
         ) : null}
-        <Label>{(vocabulary.data ?? []).length > 0 ? "Or name another item" : "Shop Item"}</Label>
+        <Label>{(vocabulary.data ?? []).length > 0 ? "Other Shop Item" : "Shop Item"}</Label>
         <Field value={item} onChangeText={setItem} placeholder="e.g. ripe tomatoes" />
         <View style={{ flexDirection: "row", gap: 10 }}>
           <View style={{ flex: 1 }}>

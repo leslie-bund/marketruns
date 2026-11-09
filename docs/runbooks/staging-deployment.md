@@ -20,7 +20,7 @@ Collect these before starting. The wizard opens the relevant service dashboards 
 | Smile ID sandbox | `SMILEID_PARTNER_ID` and `SMILEID_API_KEY` from the sandbox environment; the wizard fixes `SMILEID_ENV=sandbox` and derives `SMILEID_CALLBACK_URL=$EDGE_PUBLIC_URL/callbacks/smileid` |
 | Published privacy notice | Real, publicly reachable, non-local HTTPS `SMILEID_PRIVACY_NOTICE_URL`; no `example.com`, placeholder, or unpublished draft. Complete legal/owner review before collection. |
 | External private biometrics | Non-local HTTPS `BIOMETRICS_SERVICE_URL`; real ArcFace and MiniFASNet model artifacts; `BIOMETRICS_SERVICE_TOKEN` of at least 32 characters. The service is a prerequisite, not something this wizard deploys. |
-| Flutterwave | `FLUTTERWAVE_SECRET_KEY` must be `FLWSECK_TEST-…` for paid staging; `FLUTTERWAVE_WEBHOOK_SECRET_HASH`; mobile also needs a `FLWPUBK_TEST-…` public key |
+| Flutterwave | `FLUTTERWAVE_SECRET_KEY` must be `FLWSECK_TEST-…` for paid staging; `FLUTTERWAVE_WEBHOOK_SECRET_HASH`; mobile also needs a `FLWPUBK_TEST-…` public key. Fund the NGN **test payout balance** for every settlement leg plus fees; test collections do not settle into that balance. |
 | Resend | `RESEND_API_KEY` and a verified `RESEND_FROM_EMAIL` sender |
 | Mobile/EAS | Staging `EXPO_PUBLIC_EDGE_URL`, `EXPO_PUBLIC_FLW_PUBLIC_KEY`, and `GOOGLE_MAPS_API_KEY`; use an Android-restricted staging Maps key |
 | First ops admin | Email and a temporary password of at least 12 characters. A password change is required at first login. |
@@ -195,7 +195,8 @@ For `PAYMENT_DISPATCHER=flutterwave`, the public TOML update sets:
 The operator must also:
 
 1. In Flutterwave **test mode**, set Settings → Webhooks → transfer webhook URL to `$EDGE_PUBLIC_URL/webhooks/transfers`, using exactly `FLUTTERWAVE_WEBHOOK_SECRET_HASH` as the secret hash.
-2. Configure these as EAS project environment variables for the **staging** build environment:
+2. In Flutterwave **test mode**, open Balance → Fund balance and fund the NGN payout balance for all expected transfer legs plus fees. Test collections are mocked and do not settle into the available payout balance. If a leg fails for insufficient funds, fund that balance and replay only the existing failed leg from Ops after fixing the cause; never create a replacement settlement or buyer charge.
+3. Configure these as EAS project environment variables for the **Preview** environment, which is the environment selected by the `staging` build profile:
 
    | EAS name | Value |
    | --- | --- |
@@ -203,8 +204,20 @@ The operator must also:
    | `EXPO_PUBLIC_FLW_PUBLIC_KEY` | Captured `FLWPUBK_TEST-…` key |
    | `GOOGLE_MAPS_API_KEY` | Captured Android-restricted staging Maps key |
 
-3. Rebuild the staging binary after changing EAS values; existing binaries do not acquire new build-time configuration.
-4. Use only Flutterwave test cards and test bank accounts. Never set `FLUTTERWAVE_TEST_MODE` in staging; that accelerator is local-development-only.
+4. Rebuild the staging binary after changing EAS values; existing binaries do not acquire new build-time configuration.
+5. For internal iOS distribution, connect an Apple Developer team with `cd apps/mobile && npx eas-cli device:create`, register each tester device, then run `npx eas-cli build --profile staging --platform ios`. Only devices in the ad-hoc provisioning profile can install the resulting IPA.
+6. Use only Flutterwave test cards and test bank accounts. Never set `FLUTTERWAVE_TEST_MODE` in staging; that accelerator is local-development-only.
+
+For the repeatable real-session paid/hybrid rehearsal, first copy the inherited, approved aligned sandbox image to `tmp/staging-paid-rehearsal/aligned-crop.png`. Then run each phase from the repository root, preserving `tmp/staging-paid-rehearsal/state.json` between invocations:
+
+```bash
+node infra/staging-paid-rehearsal.mjs --fresh --phase=setup
+node infra/staging-paid-rehearsal.mjs --phase=trade
+node infra/staging-paid-rehearsal.mjs --phase=handoffs
+node infra/staging-paid-rehearsal.mjs --phase=settle
+```
+
+A fresh run enrolls buyer, seller, and runner with the official sandbox fixture. Set `STAGING_EXISTING_BUYER` only when deliberately reusing an already enrolled buyer. The harness uses real Bearer sessions and a real Flutterwave **TEST** charge, requires `RECONCILE_PROVIDER_SINCE`, and stores sessions only in the ignored mode-`0600` state file. It does not replay failed payment legs automatically.
 
 `stub` mode sets `PAYMENTS_REQUIRED="false"`, uses the payment and identity stubs, removes hybrid-only public identity variables, and moves no money. `bash infra/staging-check.sh --allow-stub` returns only an **infrastructure-only** result, even when its checks pass; it never approves a paid/hybrid rehearsal.
 

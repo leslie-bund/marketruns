@@ -22,7 +22,7 @@ import {
 } from "./capture-store.js";
 
 const PROOF_TTL_MS = 15 * 60_000;
-const JOB_TTL_MS = 2 * 60_000;
+const JOB_TTL_MS = 10 * 60_000;
 const ATTEMPT_WINDOW_MS = 15 * 60_000;
 const MAX_FAILED_ATTEMPTS = 5;
 export type CoreKycReconciler = (env: Env, input: IdentityKycRequest) => Promise<void>;
@@ -62,7 +62,7 @@ export async function reconcileCoreKyc(env: Env, input: IdentityKycRequest): Pro
     method: "POST",
     headers: { "content-type": "application/json", "x-identity-internal": env.IDENTITY_INTERNAL_TOKEN },
     body: JSON.stringify(input),
-    redirect: "error" as const,
+    redirect: "manual" as const,
   };
   const response = env.EDGE_SERVICE ? await env.EDGE_SERVICE.fetch(target, init) : await fetch(target, init);
   if (!response.ok) throw new Error(`core KYC reconciliation failed with status ${response.status}`);
@@ -315,7 +315,9 @@ export function createIdentityApp(deps: IdentityDeps): Hono<{ Bindings: Env }> {
           reason: verdict.outcome === "failed" ? verdict.reason : null,
           verifiedLegalName: verdict.outcome === "passed" ? verdict.verifiedLegalName ?? null : null,
         }, now(), reconcile);
-      } catch { /* remain pending while the provider is temporarily unavailable */ }
+      } catch {
+        // Provider/core outages are retryable; keep the job and capture pending.
+      }
     }
     if (job.status === "pending") return c.json({ jobId: job.id, participantId: job.participantId, kind: job.kind,
       status: "pending", completedAt: null });

@@ -16,7 +16,7 @@ Authentication is participant-keyed **1:1** comparison against the enrolled encr
 
 **Rationale:** the owner chooses local control of repeat authentication while retaining vendor identity verification and liveness. Same-model recomputation avoids treating embeddings from different models as interchangeable. This decision supersedes the vendor-held-only posture in ADR-0022's amendment; ADR-0022 remains unchanged as history.
 
-**Constraints:** pending capture retention is bounded by terminal cleanup, two-minute job expiry, and scheduled sweeping. Routine login/recovery stays local; vendor SmartSelfie Authentication is reserved for a separately implemented high-risk step-up policy. Matching thresholds and liveness performance still require production benchmarking. No claim is made that liveness or matching is infallible.
+**Constraints:** pending capture retention is bounded by terminal cleanup, ten-minute job expiry, and scheduled sweeping. Routine login/recovery stays local; vendor SmartSelfie Authentication is reserved for a separately implemented high-risk step-up policy. Matching thresholds and liveness performance still require production benchmarking. No claim is made that liveness or matching is infallible.
 
 ## Internal runner pool claims atomically
 

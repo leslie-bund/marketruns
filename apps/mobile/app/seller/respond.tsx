@@ -65,11 +65,9 @@ export default function Respond() {
   };
 
   return (
-    <Page eyebrow="EPHEMERAL OFFER" title="Respond to Intent">
+    <Page eyebrow="PRODUCT" title="Respond to Intent">
       <Card style={{ backgroundColor: colors.ink }}>
-        <Pill active>PRODUCT · RETIRES WITH INTENT</Pill>
         <Text style={{ color: "white", fontSize: 20, fontWeight: "800" }}>{item}</Text>
-        <Text style={{ color: "#DCEAE1" }}>A Product stays available until accepted, expired, or withdrawn.</Text>
       </Card>
 
       <Section title="Product photo">
@@ -119,10 +117,8 @@ export default function Respond() {
         </View>
         <Label>Price (₦)</Label>
         <Field value={price} onChangeText={setPrice} keyboardType="decimal-pad" />
-        <Text style={{ color: colors.muted, fontSize: 12 }}>Buyer Price Band guides negotiation; it does not cap your offer.</Text>
         <Button title={busy ? "Sending…" : "Send Product"} onPress={send} />
       </Section>
-      <Pill active>Product expires with its Intent · max 30 minutes</Pill>
     </Page>
   );
 }

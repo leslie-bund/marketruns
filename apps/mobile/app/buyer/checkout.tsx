@@ -231,21 +231,21 @@ export default function Checkout() {
 
   return (
     <Page eyebrow="ONE RUNNER · ONE MARKET" title="Checkout">
-      <Section title="How would you like to receive it?">
+      <Section title="Delivery">
         <View style={{ flexDirection: "row", gap: 10 }}>
           <Pressable disabled={busy} onPress={() => setKind("plus-code")} style={{ flex: 1 }}>
             <Card style={{ borderColor: kind === "plus-code" ? colors.green : colors.line }}>
-              <Text style={{ color: colors.ink, fontWeight: "800" }}>My location</Text><Text style={s.muted}>Open Location Code</Text>
+              <Text style={{ color: colors.ink, fontWeight: "800" }}>My location</Text><Text style={s.muted}>Plus Code</Text>
             </Card>
           </Pressable>
           <Pressable disabled={busy} onPress={() => setKind("muster-point")} style={{ flex: 1 }}>
             <Card style={{ borderColor: kind === "muster-point" ? colors.green : colors.line }}>
-              <Text style={{ color: colors.ink, fontWeight: "800" }}>Muster Point</Text><Text style={s.muted}>Collect yourself</Text>
+              <Text style={{ color: colors.ink, fontWeight: "800" }}>Muster Point</Text>
             </Card>
           </Pressable>
         </View>
         {kind === "plus-code" ? (
-          <><Label>Delivery location · Plus Code only</Label><Field value={code} onChangeText={setCode} autoCapitalize="characters" placeholder="Enter your Plus Code" editable={!busy} /><Text style={s.muted}>No location is preselected.</Text></>
+          <><Label>Delivery location · Plus Code only</Label><Field value={code} onChangeText={setCode} autoCapitalize="characters" placeholder="Enter your Plus Code" editable={!busy} /></>
         ) : (
           <>
             <Label>Choose a registered Muster Point</Label>
@@ -258,7 +258,7 @@ export default function Checkout() {
         )}
       </Section>
 
-      <Section title="Who will receive the delivery?">
+      <Section title="Receiver">
         <View style={{ flexDirection: "row", gap: 10 }}>
           <Pressable disabled={busy} onPress={() => setReceiverKind("buyer")} style={{ flex: 1 }}><Card style={{ borderColor: receiverKind === "buyer" ? colors.green : colors.line }}><Text style={{ color: colors.ink, fontWeight: "800" }}>Me</Text></Card></Pressable>
           <Pressable disabled={busy} onPress={() => setReceiverKind("designated")} style={{ flex: 1 }}><Card style={{ borderColor: receiverKind === "designated" ? colors.green : colors.line }}><Text style={{ color: colors.ink, fontWeight: "800" }}>Someone else</Text></Card></Pressable>
@@ -283,8 +283,7 @@ export default function Checkout() {
       ) : (
         <>
           <Card style={{ backgroundColor: "#EAF1E7" }}>
-            <Text style={{ color: colors.ink, fontWeight: "800" }}>Your Run includes</Text>
-            <Text style={s.body}>Every accepted product · Internal Runner at the Floor Rate</Text>
+            <Text style={{ color: colors.ink, fontWeight: "800" }}>Order summary</Text>
             {quote ? <>
               <View style={s.divider} />
               <View style={s.row}><Text style={s.body}>Products</Text><Text style={{ color: colors.ink, fontWeight: "800" }}>{money(quote.goodsKobo)}</Text></View>

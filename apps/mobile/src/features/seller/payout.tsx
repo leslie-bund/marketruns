@@ -79,7 +79,7 @@ export function PayoutAccountCard({
         <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>
           {account.accountName} — <BankName code={account.bankCode} /> {maskAccountNumber(account.accountNumber)}
         </Text>
-        <Text style={s.muted}>Settlement pays your {recipientRole} leg into this account.</Text>
+        <Text style={s.muted}>Used for {recipientRole} payouts.</Text>
         <Button
           title="Change payout account"
           secondary
@@ -97,12 +97,8 @@ export function PayoutAccountCard({
   if (!editing) {
     return (
       <Card>
-        <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Where do your payouts go?</Text>
-        <Text style={s.body}>
-          {recipientRole === "runner"
-            ? "You can claim runs right away — but settlement needs a verified bank account to pay you."
-            : "You can list and sell right away — but settlement needs a verified bank account to pay you."}
-        </Text>
+        <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>Add a payout account</Text>
+        <Text style={s.body}>A verified bank account is required to receive {recipientRole} payouts.</Text>
         <Button title="Add payout account" secondary onPress={() => setEditing(true)} />
       </Card>
     );

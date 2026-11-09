@@ -18,8 +18,8 @@ test("runner setup reuses verify-then-save and session-scoped participant APIs",
   for (const api of ["getPayoutAccount", "resolvePayoutAccount", "savePayoutAccount", "revokePayoutAccount"]) {
     assert.match(payoutCard, new RegExp(`\\b${api}\\b`));
   }
-  assert.match(payoutCard, /recipientRole === "runner"/);
-  assert.match(payoutCard, /Settlement pays your \{recipientRole\} leg into this account/);
+  assert.match(payoutCard, /receive \{recipientRole\} payouts/);
+  assert.match(payoutCard, /Used for \{recipientRole\} payouts/);
   assert.match(payments, /headers: \{ "content-type": "application\/json", \.\.\.authorization, \.\.\.participantHeaders\(\)/);
   assert.match(payments, /const authorization = sessionHeaders\(\)/);
 });

@@ -63,17 +63,13 @@ export default function NegotiationThread() {
 
   return (
     <Page eyebrow={`PRIVATE · 1:1 · ${live ? "LIVE" : "POLLING"}`} title={current?.shopItem ?? "Negotiation"}>
-      <Card style={{ backgroundColor: colors.green, borderColor: colors.green }}>
-        <Text style={{ color: "#D9F26B", fontWeight: "800" }}>Negotiation</Text>
-        <Text style={{ color: "white", fontSize: 16, fontWeight: "700" }}>
-          Just you and {current?.sellerName ?? "the seller"}
-        </Text>
-        {waitingOn !== null && current?.status !== "accepted" ? (
-          <Text style={{ color: "#DCEAE1" }}>
-            {waitingOn === "you" ? "Their move landed — your turn." : "Waiting on the seller…"}
+      {waitingOn !== null && current?.status !== "accepted" ? (
+        <Card style={{ backgroundColor: colors.green, borderColor: colors.green }}>
+          <Text style={{ color: "white", fontWeight: "700" }}>
+            {waitingOn === "you" ? "Seller updated the price — your turn." : "Waiting on the seller…"}
           </Text>
-        ) : null}
-      </Card>
+        </Card>
+      ) : null}
 
       <Section title="Current terms">
         <Card>

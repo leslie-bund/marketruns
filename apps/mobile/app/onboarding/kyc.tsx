@@ -91,8 +91,7 @@ export default function OnboardingKyc() {
   return (
     <Page eyebrow={`${role.toUpperCase()} · ${(pending?.markets[0] ?? params.market ?? "").toUpperCase()}`} title="Verify your identity">
       <Card style={{ backgroundColor: colors.ink }}>
-        <Pill active>DOCUMENT CHECK · ALL ROLES</Pill>
-        <Text style={{ color: "white", fontSize: 19, fontWeight: "800" }}>Hi {pending?.displayName ?? params.displayName ?? "there"} — one last step.</Text>
+        <Pill active>BVN / NIN VERIFICATION</Pill>
         <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
           Your document number is used in transit and only its keyed hash is stored. Face frames are captured on the next screen and sent directly to identity without public media storage.
         </Text>

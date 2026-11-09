@@ -3,9 +3,9 @@ import { Pressable, Text, View } from "react-native";
 import { Button, Card, Page, Section, colors, s } from "../../src/ui";
 
 const roles = [
-  { role: "buyer" as const, name: "Buyer", text: "Post intents, negotiate, and get one run for your whole cart.", icon: "🧺" },
-  { role: "seller" as const, name: "Seller", text: "Register a store, list your shop items, and answer demand near you.", icon: "🏪" },
-  { role: "runner" as const, name: "Runner", text: "Collect carts and complete QR-challenge handoffs on your run.", icon: "🛵" },
+  { role: "buyer" as const, name: "Buyer", icon: "🧺" },
+  { role: "seller" as const, name: "Seller", icon: "🏪" },
+  { role: "runner" as const, name: "Runner", icon: "🛵" },
 ];
 
 /**
@@ -17,9 +17,8 @@ export default function OnboardingRole() {
     <Page eyebrow="MARKET RUNS" title="Who are you?">
       <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink }}>
         <Text style={{ color: "#DAF26B", fontWeight: "800" }}>EVERYONE VERIFIES</Text>
-        <Text style={{ color: "white", fontSize: 20, fontWeight: "800" }}>One identity, one market, real handoffs.</Text>
         <Text style={{ color: "#D3DDD5", fontSize: 13, lineHeight: 19 }}>
-          Buyers, sellers, and runners all complete BVN/NIN verification with a facial capture. It takes a minute.
+          Buyers, sellers, and runners all complete BVN/NIN verification with a facial capture.
         </Text>
       </Card>
       <Section title="Continue as">
@@ -27,16 +26,15 @@ export default function OnboardingRole() {
           {roles.map((entry) => (
             <Pressable
               key={entry.role}
+              accessibilityRole="link"
+              accessibilityLabel={`Continue as ${entry.name}`}
               onPress={() => router.push({ pathname: "/onboarding/profile", params: { role: entry.role } })}
             >
               <Card>
                 <View style={s.row}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
                     <Text style={{ fontSize: 26 }}>{entry.icon}</Text>
-                    <View style={{ flex: 1, gap: 4 }}>
-                      <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{entry.name}</Text>
-                      <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18 }}>{entry.text}</Text>
-                    </View>
+                    <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", flex: 1 }}>{entry.name}</Text>
                   </View>
                   <Text style={{ color: colors.green, fontSize: 22 }}>›</Text>
                 </View>

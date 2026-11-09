@@ -75,9 +75,6 @@ export default function RunnerHome() {
       <Page eyebrow={`INTERNAL RUNNER · ${market.toUpperCase()}`} title="Runner pool">
         {run.error ? <Card><Text style={s.body}>Could not load the selected Run: {run.error}</Text><Button title="Retry" onPress={run.refresh} /></Card> : null}
         {run.discoveryError || run.warning ? <Card><Text style={s.body}>{run.discoveryError ?? run.warning}</Text><Button title="Retry" onPress={run.refreshDiscovery} /></Card> : null}
-        <Card>
-          <Text style={s.muted}>{participant ? `Running as ${participant.displayName} (${participant.id}).` : `Demo internal runner (${identities.runner.id}).`}</Text>
-        </Card>
         {payoutAccount}
         {queue}
       </Page>

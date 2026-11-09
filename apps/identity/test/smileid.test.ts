@@ -87,7 +87,7 @@ describe("Smile ID quarantine", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.url).toBe("https://edge.marketruns.test/internal/identity/kyc");
       expect(calls[0]?.init?.method).toBe("POST");
-      expect(calls[0]?.init?.redirect).toBe("error");
+      expect(calls[0]?.init?.redirect).toBe("manual");
       expect((calls[0]?.init?.headers as Record<string, string>)["x-identity-internal"]).toBe("secret");
       expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ participantId: "p-1", verifiedLegalName: "Amina Yusuf" });
     } finally {
@@ -145,7 +145,7 @@ describe("hybrid Biometric KYC enrollment", () => {
     expect(store.enrollments.has("p-1")).toBe(false); expect(captures.objects.size).toBe(0);
     const failed = await startEnrollment(call); await callback(call, store.jobs.get(failed)!.providerJobId, "block");
     expect(captures.objects.size).toBe(0);
-    const second = await startEnrollment(call); clock = new Date(clock.getTime() + 3 * 60_000);
+    const second = await startEnrollment(call); clock = new Date(clock.getTime() + 11 * 60_000);
     expect((await call(`/auth/face/job/${second}`)).status).toBe(410); expect(captures.objects.size).toBe(0);
     const lateCallback = await callback(call, store.jobs.get(second)!.providerJobId);
     expect(lateCallback.status).toBe(200); expect((await lateCallback.json()).status).toBe("failed");
@@ -155,7 +155,7 @@ describe("hybrid Biometric KYC enrollment", () => {
   it("sweeps abandoned expired captures without a client poll", async () => {
     let clock = new Date("2026-01-01T00:00:00Z"); consent.grantedAt = clock.getTime();
     const { fetchImpl } = fakeApi(); const { call, store, captures } = makeApp(fetchImpl, {}, () => clock);
-    const id = await startEnrollment(call); clock = new Date(clock.getTime() + 3 * 60_000);
+    const id = await startEnrollment(call); clock = new Date(clock.getTime() + 11 * 60_000);
     expect(await cleanupExpiredEnrollmentCaptures(store, captures, clock)).toBe(1);
     expect(store.jobs.get(id)?.status).toBe("failed"); expect(captures.objects.size).toBe(0);
     consent.grantedAt = Date.now();
@@ -168,6 +168,18 @@ describe("hybrid Biometric KYC enrollment", () => {
     const row = store.enrollments.get("p-1")!;
     expect(row.captureObjectKey).not.toBe(oldKey); expect(captures.objects.has(oldKey)).toBe(false);
     expect(captures.objects.size).toBe(1); expect(captures.objects.get(row.captureObjectKey!)).toEqual(new Uint8Array(Buffer.from(IMAGE_B, "base64")));
+  });
+  it("keeps polling pending without leaking temporary provider errors", async () => {
+    const api = fakeApi();
+    const unavailable = (async (input: string | URL, init?: RequestInit) =>
+      String(input).includes("/v3/status/") ? json(503, { message: "private upstream detail" }) : api.fetchImpl(input, init)) as typeof fetch;
+    const { call, store, captures } = makeApp(unavailable);
+    const id = await startEnrollment(call);
+    const response = await call(`/auth/face/job/${id}`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).toBe("pending");
+    expect(JSON.stringify(store.jobs.get(id))).not.toContain("private upstream detail");
+    expect(captures.objects.size).toBe(1);
   });
   it("keeps enrollment pending and retries idempotently when core KYC reconciliation fails", async () => {
     const inputs: unknown[] = [];

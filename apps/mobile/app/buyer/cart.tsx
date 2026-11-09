@@ -42,7 +42,7 @@ export default function CartScreen() {
   return (
     <Page eyebrow={`${current.market.toUpperCase()} MARKET`} title="Your Cart">
       <Card style={{ backgroundColor: left ? colors.ink : "#8E4338", borderColor: "transparent" }}>
-        <Text style={{ color: "#D9F26B", fontWeight: "800", letterSpacing: 1 }}>SHARED LAP-TIMER</Text>
+        <Text style={{ color: "#D9F26B", fontWeight: "800", letterSpacing: 1 }}>CART EXPIRES IN</Text>
         <Text style={{ color: "white", fontWeight: "900", fontSize: 42, fontVariant: ["tabular-nums"] }}>
           {String(Math.floor(left / 60)).padStart(2, "0")}:{String(left % 60).padStart(2, "0")}
         </Text>

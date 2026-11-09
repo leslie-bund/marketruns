@@ -66,7 +66,6 @@ export function HandoffQrCard({ handoff, runId, challenge, now, prompt }: { hand
       ) : handoff.scannedAt == null ? <Text style={s.muted}>Loading secure QR…</Text> : (
         <Text style={s.muted}>Code verified. The runner must take a new photo and explicitly confirm receipt.</Text>
       )}
-      <Text style={s.muted}>Expiring challenge · {handoff.id}</Text>
       <HandoffPhoto handoff={handoff} />
     </Card>
   );

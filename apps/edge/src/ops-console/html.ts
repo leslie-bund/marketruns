@@ -50,8 +50,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
     display: flex; align-items: center; gap: 10px; flex: none;
     background: var(--white); border: 1px solid var(--line); border-radius: 20px; padding: 7px 12px;
   }
-  .bar .eyebrow { white-space: nowrap; }
-  .bar h1 { font-size: 17px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink); margin: 0; white-space: nowrap; }
+  .bar h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink); margin: 0; white-space: nowrap; }
   .bar .bar-spacer { flex: 1; }
   .bar select { min-height: 32px; border-radius: 13px; }
 
@@ -195,14 +194,22 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
     .card-body { overflow: visible; }
     .hero-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
   }
+  @media (max-width: 700px) {
+    .page { padding: 8px; }
+    .bar { flex-wrap: wrap; gap: 8px; }
+    .bar h1 { margin-right: auto; }
+    .bar .bar-spacer { display: none; }
+    .bar select { order: 5; flex: 1 1 130px; min-width: 0; }
+    #operatorPill { order: 6; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    #marketsOpen { order: 7; }
+  }
 </style>
 </head>
 <body>
 <div class="page">
 
   <header class="bar">
-    <span class="eyebrow">Market Runs — Ops</span>
-    <h1>Oversight</h1>
+    <h1>Ops console</h1>
     <span id="gatePill" class="pill">gate —</span>
     <span class="bar-spacer"></span>
     <select id="marketSel" aria-label="Market"></select>
@@ -213,7 +220,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
 
   <section class="hero-strip">
     <div class="hero-grid" id="heroGrid"></div>
-    <div class="muted-line" id="heroMeta">Expansion gate — ADR-0013 · loading…</div>
+    <div class="muted-line" id="heroMeta">Loading gate metrics…</div>
   </section>
 
   <main class="grid">
@@ -221,7 +228,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
       <div class="card overview">
         <div class="eyebrow">Market overview</div>
         <div class="buyer-row">
-          <input id="buyerInput" placeholder="buyer id — e.g. buyer:demo" aria-label="Buyer id">
+          <input id="buyerInput" placeholder="Buyer ID" aria-label="Buyer id">
           <button type="button" class="secondary compact" id="buyerView">View</button>
           <span id="buyerPill" class="pill lime" hidden><span id="buyerPillText"></span><button type="button" class="pill-x" id="buyerClear" aria-label="Clear buyer">×</button></span>
         </div>
@@ -235,10 +242,10 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
     <div class="col">
       <div class="card grow">
         <div class="eyebrow">Run detail</div>
-        <div id="runBody" class="empty card-body"><b>No run selected.</b>Pick a run from the list, or drive the demo flow below.</div>
+        <div id="runBody" class="empty card-body"><b>No run selected.</b>Select a run.</div>
       </div>
       <div class="card settle">
-        <div class="eyebrow">Ops settle — settlement function only (ADR-0007)</div>
+        <div class="eyebrow">Ops settle</div>
         <div class="kv"><span class="k">Target run</span><span class="v title-id" id="settleTarget">—</span></div>
         <div class="kv" id="settleAwaiting" hidden><span class="k">Handoffs</span><span class="v"><span class="pill warn">awaiting photo evidence</span> <span class="row-sub">a photoless handoff is past its auto-confirm deadline</span></span></div>
         <div class="kv" id="settleDisputed" hidden><span class="k">Dispute</span><span class="v"><span class="pill warn">disputed</span> <span class="row-sub" id="settleDisputeReason"></span></span></div>
@@ -246,7 +253,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
           <label class="field">Mode
             <select id="settleMode">
               <option value="completed">completed</option>
-              <option value="aborted">aborted — partial settle (ADR-0008)</option>
+              <option value="aborted">aborted — partial settlement</option>
               <option value="disputed">disputed — ambiguous evidence, capped loss</option>
             </select>
           </label>
@@ -262,7 +269,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
           <button id="settleGo" type="button">Release settlement</button>
         </div>
         <pre id="settleResult">—</pre>
-        <p class="helper">Every kobo flows through the settlement function: the mode and dispute evidence become the SettlementInput and the function computes each leg — no side channels. Aborts never refund fully; runner and platform settle partially (ADR-0008).</p>
+        <p class="helper">Settlement legs are computed by the settlement function — no side channels. Aborts never refund fully; runner and platform settle partially.</p>
       </div>
     </div>
     <div class="col">
@@ -280,13 +287,9 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
   </section>
 
   <details class="card">
-    <summary>
-      <span class="eyebrow" style="color:var(--muted)">Dev only</span>
-      <span class="summary-title">Dev demo driver</span>
-      <span class="helper">Deterministic demo ids per step; each step calls the public edge API. No token needed.</span>
-    </summary>
+    <summary><span class="summary-title">Dev demo driver</span></summary>
     <div class="details-body">
-      <div class="eyebrow">Buyer / seller wire</div>
+      <div class="eyebrow">Buyer / seller</div>
       <div class="form-actions">
         <button type="button" class="secondary compact" id="drvIntent">1 · Buyer posts intent</button>
         <button type="button" class="secondary compact" id="drvOffer">2 · Seller offers product</button>
@@ -300,7 +303,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
         <span class="pill">cart: <b id="cartId">—</b></span>
         <span class="pill">run: <b id="runId">—</b></span>
       </div>
-      <div class="eyebrow">Runner wire</div>
+      <div class="eyebrow">Runner</div>
       <div class="form-actions">
         <button type="button" class="secondary compact" id="drvHandoff">Initiate handoff</button>
         <button type="button" class="secondary compact" id="drvPhoto">Attach photo evidence</button>
@@ -315,7 +318,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
 
   <dialog id="marketsDialog">
     <div class="dialog-head">
-      <span class="eyebrow">Markets admin</span>
+      <span class="eyebrow">Markets</span>
       <button type="button" class="secondary compact" id="marketsClose">Close</button>
     </div>
     <div id="marketsBody" class="empty">Loading…</div>
@@ -328,19 +331,19 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
         <span class="eyebrow" id="vocabTitle">Vocabulary</span>
         <button type="button" class="secondary compact" id="vocabRefresh">Refresh</button>
       </div>
-      <p class="helper">The vocabulary is the union of every store's shop items (ADR-0006 — grown per market, curated here). Remove drops an item from every store; rename rewrites it in place — the normalization lever. A store left with no items stays registered; it just stops matching intents.</p>
+      <p class="helper">Rename or remove items across all stores. Stores without items stay registered but stop matching intents.</p>
       <div id="vocabError" class="error-box" hidden></div>
       <div id="vocabBody" class="empty">Loading…</div>
     </div>
   </dialog>
 
   <details class="card" id="pilotPanel">
-    <summary><span class="eyebrow">Production pilot</span><span class="summary-title">Live instances & management</span><span class="helper">Explicit heartbeats only — no Durable Object namespace listing</span></summary>
+    <summary><span class="summary-title">Administration</span></summary>
     <div class="details-body">
-      <div class="dialog-head"><span class="eyebrow">Live DO instances</span><button class="secondary compact" id="telemetryRefresh" type="button">Refresh</button></div>
-      <div id="telemetryBody" class="empty">Open to load explicit instance heartbeats.</div>
+      <div class="dialog-head"><span class="eyebrow">Live instances</span><button class="secondary compact" id="telemetryRefresh" type="button">Refresh</button></div>
+      <div id="telemetryBody" class="empty">Loading heartbeats…</div>
       <hr>
-      <div class="eyebrow">Stores & shop items</div>
+      <div class="eyebrow">Stores</div>
       <div class="form-grid"><input id="storeMarket" placeholder="market"><input id="storeSeller" placeholder="seller participant id"><input id="storeName" placeholder="store name"><input id="storePoint" placeholder="exchange point"><button id="storeCreate" type="button">Create store</button></div>
       <div id="storesBody" class="empty">—</div>
       <hr>
@@ -348,7 +351,7 @@ export const OPS_CONSOLE_HTML = `<!doctype html>
       <div class="form-grid"><input id="poolMarket" placeholder="market"><input id="poolName" placeholder="pool name"><button id="poolCreate" type="button">Create pool</button><input id="memberRunner" placeholder="runner participant id"></div>
       <div id="poolsBody" class="empty">—</div>
       <hr>
-      <div class="eyebrow">Participant involvements — read only</div>
+      <div class="eyebrow">Participant involvements</div>
       <div class="form-actions"><input id="participantLookup" placeholder="participant id"><button id="participantGo" type="button" class="secondary">Look up</button></div>
       <pre id="participantBody">—</pre>
     </div>
@@ -540,7 +543,7 @@ function renderMarketSelector() {
 }
 function renderMarkets() {
   var el = $("marketsBody");
-  if (!SEL.markets.length) { el.innerHTML = emptyState("No zones yet", "Create the first market zone below."); return; }
+  if (!SEL.markets.length) { el.innerHTML = emptyState("No zones yet", ""); return; }
   var html = "";
   SEL.markets.forEach(function (m) {
     var cfg = m.config;
@@ -607,13 +610,13 @@ function renderMarketForm() {
     '<label class="field">Seller goods commission deduction (%)<input id="mktCommission" inputmode="decimal" value="' + esc((c.settlement.goodsCommissionBps / 100).toString()) + '"></label>' +
     '<label class="field">Runner delivery margin deduction (₦)<input id="mktMargin" inputmode="decimal" value="' + esc(koboToNaira(c.settlement.deliveryMarginKobo)) + '"></label>' +
     "</div>" +
-    '<p class="helper">The center and radius apply to new presence, claims and pickups immediately. Settlement coefficients still apply only to new runs; existing runs keep their seeded configuration.</p>' +
+    '<p class="helper">Geofence changes apply immediately to presence, claims, and pickups. Settlement changes apply only to new runs.</p>' +
     '<div id="marketFormError" class="error-box" hidden></div>' +
     '<div class="form-actions">' +
     '<button type="button" id="marketFormSave">' + (creating ? "Create market" : "Save config") + "</button>" +
     '<button type="button" class="secondary" id="marketFormCancel">Cancel</button>' +
     "</div>" +
-    (creating ? "" : '<p class="helper">Exchange and muster points are preserved untouched.</p>');
+    (creating ? "" : '<p class="helper">Exchange and muster points are unchanged.</p>');
   wrap.hidden = false;
   $("marketFormSave").addEventListener("click", submitMarketForm);
   $("marketFormCancel").addEventListener("click", closeMarketForm);
@@ -736,12 +739,12 @@ function renderVocabulary() {
   var el = $("vocabBody");
   el.classList.remove("empty");
   var d = VOCAB.data;
-  if (!VOCAB.market) { el.classList.add("empty"); el.textContent = "Pick a market's Vocabulary button above."; return; }
+  if (!VOCAB.market) { el.classList.add("empty"); el.textContent = "Select Vocabulary for a market."; return; }
   if (!d) { el.classList.add("empty"); el.textContent = "Loading…"; return; }
   if (d.error) { el.innerHTML = emptyState("Vocabulary unavailable", d.error.message); return; }
   var stores = vocabStores();
   if (!stores.length) {
-    el.innerHTML = emptyState("No stores yet", "The vocabulary grows as sellers register stores with their shop items.");
+    el.innerHTML = emptyState("No stores yet", "");
     return;
   }
   var html = "";
@@ -847,12 +850,12 @@ function renderHero() {
   var meta = $("heroMeta");
   var h = SEL.health;
   renderGatePill(h);
-  if (!h) { grid.innerHTML = ""; meta.textContent = "Expansion gate — ADR-0013 · loading…"; return; }
+  if (!h) { grid.innerHTML = ""; meta.textContent = "Loading gate metrics…"; return; }
   if (h.error) {
     grid.innerHTML = archiveDown(h.error)
       ? '<div class="card" style="grid-column:1/-1">' + archiveEmpty() + "</div>"
       : '<div class="card" style="grid-column:1/-1">' + emptyState("Ops health unavailable", h.error.message) + "</div>";
-    meta.textContent = "Expansion gate — ADR-0013";
+    meta.textContent = "";
     return;
   }
   grid.innerHTML = HERO.map(function (m) {
@@ -866,7 +869,7 @@ function renderHero() {
       '<span class="hero-target">target ' + esc(m.target(threshold)) + "</span>" +
       "</div>";
   }).join("");
-  meta.textContent = "Expansion gate — ADR-0013 · computed " + timeAgo(h.computedAt);
+  meta.textContent = "Gate metrics updated " + timeAgo(h.computedAt);
 }
 
 /* ---------- buyer picker (carts/runs are per buyer; the server resolves ids) ---------- */
@@ -953,7 +956,7 @@ function renderRuns() {
   if (!d) { el.classList.add("empty"); el.textContent = "Loading…"; return; }
   if (d.error) { el.innerHTML = archiveDown(d.error) ? archiveEmpty() : emptyState("Runs unavailable", d.error.message); return; }
   var items = d.items || [];
-  if (!items.length) { el.innerHTML = emptyState("No runs yet", "Runs appear here once a cart checks out in " + market() + "."); return; }
+  if (!items.length) { el.innerHTML = emptyState("No runs yet", "Runs appear after checkout in " + market() + "."); return; }
   el.innerHTML = items.map(function (r) {
     var live = r.kind === "live";
     var runner = r.runnerId || "unassigned";
@@ -1018,7 +1021,7 @@ function renderRun() {
     $("settleAwaiting").hidden = true;
     $("settleDisputed").hidden = true;
     el.classList.add("empty");
-    el.innerHTML = "<b>No live run.</b>The RunDO retired this run (or it never started) — pick another from the list.";
+    el.innerHTML = "<b>No live run.</b>Select another run.";
     return;
   }
   if (run.error) { $("settleAwaiting").hidden = true; $("settleDisputed").hidden = true; el.innerHTML = emptyState("Run unavailable", run.error.message); return; }
@@ -1217,8 +1220,8 @@ function renderTabBody(id, d) {
   var html = "";
   if (!items.length) {
     html = id === "recovery"
-      ? emptyState("All settlements clear", "No settlements need attention for " + market() + ".")
-      : emptyState("Nothing here yet", "No " + id + " recorded for " + market() + ".");
+      ? emptyState("All settlements clear", "")
+      : emptyState("No " + id + " recorded for " + market(), "");
   } else if (id === "disputes") {
     html = items.map(function (x) {
       var evidence = (x.evidenceRefs || []).map(captureLink).join(" · ");
@@ -1436,11 +1439,11 @@ function renderReputationTab() {
   body.classList.remove("empty");
   body.innerHTML =
     '<div class="form-grid">' +
-    '<label class="field">Participant<input id="repParticipant" placeholder="participant id, e.g. buyer:…"></label>' +
+    '<label class="field">Participant<input id="repParticipant" placeholder="buyer:…"></label>' +
     '<label class="field">Role<select id="repRole"><option>buyer</option><option>runner</option><option>seller</option></select></label>' +
     "</div>" +
     '<div class="form-actions"><button type="button" class="secondary" id="repGo">Compute</button></div>' +
-    '<div id="repResult">' + emptyState("No computation yet", "Standing is computed from the durable record — completed runs, abort rates, dispute outcomes. Never user-entered ratings.") + "</div>";
+    '<div id="repResult">' + emptyState("No standing yet", "Uses completed runs, aborts, and disputes — never user-entered ratings.") + "</div>";
   $("repGo").addEventListener("click", loadReputation);
 }
 function loadReputation() {
@@ -1492,8 +1495,7 @@ function renderResets(requests) {
   var body = $("tabBody");
   body.classList.remove("empty");
   if (!requests.length) {
-    body.innerHTML = emptyState("No pending resets",
-      "A request lands here when a participant loses their device (POST /auth/device-reset). Approving revokes that participant's device credentials and live sessions so they can re-enroll on the replacement device.");
+    body.innerHTML = emptyState("No pending resets", "");
     return;
   }
   body.innerHTML = requests.map(function (r) {
@@ -1505,7 +1507,7 @@ function renderResets(requests) {
       '<button type="button" class="secondary compact" data-action="reset-decision" data-id="' + esc(r.id) + '" data-decision="rejected">Reject</button>' +
       "</div></div>";
   }).join("") +
-    '<p class="helper">Approve revokes every device credential and live session for the participant; reject leaves them untouched. A decision is final — a resolved request answers 409 to further decisions.</p>';
+    '<p class="helper">Approving revokes every device credential and live session; rejecting leaves them unchanged. Decisions are final.</p>';
 }
 function decideReset(id, decision, participantId) {
   if (!id) return;
@@ -1664,7 +1666,7 @@ function loadTelemetry() {
     var items = data.items || [];
     $("telemetryBody").innerHTML = items.length ? '<div class="hero-grid">' + items.map(function (r) {
       return '<div class="metric"><span class="pill ' + (r.live ? "active" : "warn") + '">' + (r.live ? "live" : "stale") + '</span><b>' + esc(r.objectClass) + '</b><div class="title-id">' + esc(r.instanceId) + '</div><div class="row-sub">' + esc(r.objectName) + ' · ' + esc(r.market || "no market") + '</div><div class="kv"><span class="k">Connections</span><span class="v">' + r.connectionCount + '</span></div><div class="row-sub">last ' + new Date(r.lastActivityAt).toLocaleString() + '<br>alarm ' + (r.alarmAt ? new Date(r.alarmAt).toLocaleString() : "none") + '</div><button type="button" class="secondary compact" data-action="observe" data-class="' + esc(r.objectClass) + '" data-name="' + esc(r.objectName) + '">Attach observer</button></div>';
-    }).join("") + "</div>" : emptyState("No heartbeats", "Instances appear after explicit DO activity; namespaces are never enumerated.");
+    }).join("") + "</div>" : emptyState("No heartbeats", "Instances appear after DO activity.");
   }).catch(function (err) { $("telemetryBody").innerHTML = emptyState("Telemetry unavailable", err.message); });
 }
 function observeInstance(className, objectName) {

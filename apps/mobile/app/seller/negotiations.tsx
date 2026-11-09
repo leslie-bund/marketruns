@@ -16,20 +16,17 @@ export default function SellerNegotiations() {
   };
 
   return (
-    <Page eyebrow="PRIVATE · ONE BUYER PER PRODUCT" title="Negotiations">
+    <Page title="Negotiations">
       <Section title="Active threads">
         {mine.products.length === 0 ? (
-          <Card><Text style={s.muted}>No live products — respond to an intent to open a thread.</Text></Card>
+          <Card><Text style={s.muted}>No live products.</Text></Card>
         ) : null}
         {mine.products.map((product) => (
           <Pressable key={product.id} onPress={() => openProduct(product)}>
             <Card>
               <View style={s.row}>
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 17 }}>{product.shopItem}</Text>
-                  <Text style={s.muted}>
-                    {product.status === "accepted" ? "Sold — view the trip it is on" : "Buyer thread · one-to-one"}
-                  </Text>
                 </View>
                 <Pill active>{money(product.priceKobo)}</Pill>
               </View>

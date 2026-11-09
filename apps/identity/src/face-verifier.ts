@@ -60,7 +60,7 @@ export class StubFaceVerifier implements FaceVerifier {
 export class NodeBiometricFaceVerifier implements FaceVerifier {
   readonly modelVersion = "node-onnx";
   constructor(private readonly baseUrl: string, private readonly token: string, private readonly timeoutMs = 15_000,
-    private readonly fetchImpl: typeof fetch = fetch) {}
+    private readonly fetchImpl: typeof fetch = (input, init) => fetch(input, init)) {}
   async embed(image: Uint8Array): Promise<number[]> {
     const res = await this.fetchImpl(`${this.baseUrl.replace(/\/$/, "")}/v1/face/embed`, {
       method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },

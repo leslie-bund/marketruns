@@ -62,11 +62,8 @@ export default function JoinMarket() {
     return (
       <Page eyebrow={`JOIN ${market.toUpperCase()}`} title="Store registered">
         <Card style={{ backgroundColor: colors.ink }}>
-          <Pill active>YOU'RE LIVE</Pill>
-          <Text style={{ color: "white", fontSize: 20, fontWeight: "800" }}>Buyer intents can already reach you.</Text>
-          <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
-            One last optional step: the bank account settlement pays your seller legs into.
-          </Text>
+          <Pill active>STORE ACTIVE</Pill>
+          <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>Add a verified bank account for seller payouts (optional).</Text>
         </Card>
         <Section title="Payout account (optional)">
           <PayoutAccountCard participantId={sellerId} emptyState="form" />
@@ -78,14 +75,6 @@ export default function JoinMarket() {
 
   return (
     <Page eyebrow={`JOIN ${market.toUpperCase()}`} title="Create your Store">
-      <Card style={{ backgroundColor: colors.ink }}>
-        <Pill active>ONE STORE PER MARKET</Pill>
-        <Text style={{ color: "white", fontSize: 20, fontWeight: "800" }}>What does your store supply?</Text>
-        <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
-          Your shop items decide which buyer intents reach you — demand stays in your lane, no clutter.
-        </Text>
-      </Card>
-
       <Section title="Store">
         <Label>Store name</Label>
         <Field value={name} onChangeText={setName} />
@@ -107,7 +96,7 @@ export default function JoinMarket() {
         )}
         {suggestions.length > 0 ? (
           <>
-            <Label>In the market vocabulary</Label>
+            <Label>Suggested Shop Items</Label>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {suggestions.map((item) => (
                 <Pressable key={item} onPress={() => toggle(item)}>
@@ -117,7 +106,7 @@ export default function JoinMarket() {
             </View>
           </>
         ) : null}
-        <Label>New item (joins the market vocabulary)</Label>
+        <Label>New Shop Item</Label>
         <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
           <View style={{ flex: 1 }}>
             <Field value={custom} onChangeText={setCustom} placeholder="e.g. Plantain" onSubmitEditing={addCustom} />
@@ -127,7 +116,6 @@ export default function JoinMarket() {
       </Section>
 
       <Button title={busy ? "Registering…" : "Register Store"} onPress={join} />
-      <Text style={s.muted}>You can trade the moment you register. New items you add become visible to buyers in this market.</Text>
     </Page>
   );
 }

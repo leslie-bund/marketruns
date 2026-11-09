@@ -6,7 +6,7 @@ import {
   AuthError, DEV_FACE_IMAGE_BASE64, authenticateDeviceKey, captureFaceSequence,
   useActiveParticipant, useDeviceCredential, verifyFace,
 } from "../src/api";
-import { Button, Card, Page, Pill, Section, colors, s } from "../src/ui";
+import { Button, Card, Page, Section, colors, s } from "../src/ui";
 import { devDemoMode } from "../src/api/dev-mode";
 
 export default function SignIn() {
@@ -37,8 +37,6 @@ export default function SignIn() {
   const devCapture = { image: DEV_FACE_IMAGE_BASE64, livenessImages: Array(7).fill(DEV_FACE_IMAGE_BASE64) as string[] };
   return (
     <Page eyebrow="SIGN IN" title={`Welcome back, ${participant.displayName}`}>
-      <Card style={{ backgroundColor: colors.ink }}><Pill active>NO PASSWORDS</Pill>
-        <Text style={{ color: "white", fontSize: 19, fontWeight: "800" }}>Seven fresh frames. One participant-specific match.</Text></Card>
       {problem ? <Card style={{ borderColor: colors.orange }}><Text style={s.body}>{problem}</Text></Card> : null}
       <Section title="Face sign-in">
         <Text style={s.muted}>Consent biometric-capture-v2: captures are used for private liveness and 1:1 sign-in only. Login images are transit-only, are not sent to Smile ID, and are never used for 1:N search.</Text>

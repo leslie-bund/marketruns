@@ -16,9 +16,9 @@ export default function Products() {
 
   return (
     <Page eyebrow="RESPONSES TO YOUR INTENTS" title="Products">
-      <Section title="Available nearby">
+      <Section title="Available Products">
         {products.length === 0 ? (
-          <Card><Text style={s.muted}>No products responding yet — sellers see your intent the moment it's posted.</Text></Card>
+          <Card><Text style={s.muted}>No products yet.</Text></Card>
         ) : null}
         {products.map((product) => (
           <Card key={product.id}>
@@ -32,10 +32,10 @@ export default function Products() {
               ) : null}
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.ink, fontSize: 19, fontWeight: "800" }}>{product.quantity} {product.unit} {product.shopItem}</Text>
-                <Text style={s.body}>From {product.sellerName}</Text>
+                <Text style={s.body}>{product.sellerName}</Text>
               </View>
             </View>
-            <Text style={s.muted}>Pickup Exchange Point · {product.exchangePoint}</Text>
+            <Text style={s.muted}>{product.exchangePoint}</Text>
             <Text style={{ color: colors.green, fontSize: 21, fontWeight: "800" }}>{money(product.priceKobo)}</Text>
             <Link href={{ pathname: "/buyer/negotiation", params: { productId: product.id } }} asChild>
               <Button title={product.status === "negotiating" ? "Continue Negotiation" : "Open Negotiation"} />
@@ -43,7 +43,6 @@ export default function Products() {
           </Card>
         ))}
       </Section>
-      <Text style={s.muted}>Products are ephemeral and retire when their Intent expires.</Text>
     </Page>
   );
 }

@@ -55,14 +55,6 @@ export default function Markets() {
 
   return (
     <Page eyebrow="ZONES · LAGOS" title="Markets">
-      <Card style={{ backgroundColor: colors.ink }}>
-        <Pill active>{`ACTIVE · ${active.toUpperCase()}`}</Pill>
-        <Text style={{ color: "white", fontSize: 20, fontWeight: "800" }}>Pick your market zone.</Text>
-        <Text style={{ color: "#DCEAE1", lineHeight: 19 }}>
-          Carts never cross market boundaries — one runner, one market, one trip.
-        </Text>
-      </Card>
-
       <Section title={role ? `Choose a market for ${role}` : "Open zones"}>
         {(markets.data ?? []).map((market) => {
           const joined = participant?.markets.includes(market.id) ?? false;

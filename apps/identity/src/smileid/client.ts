@@ -86,7 +86,7 @@ export class SmileIdClient {
 
   constructor(
     private readonly config: SmileIdConfig,
-    private readonly fetchImpl: FetchLike = fetch,
+    private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init),
   ) {}
 
   /* ------------------------------------------------------------------ */
@@ -189,9 +189,10 @@ export class SmileIdClient {
   }
 
   private async post(form: FormData, path: string, product: string): Promise<SmileIdAccepted> {
+    const headers = await this.authedHeaders(product);
     const res = await this.fetchImpl(`${this.config.baseUrl}${path}`, {
       method: "POST",
-      headers: await this.authedHeaders(product),
+      headers,
       body: form,
     });
     if (res.status !== 202) throw new SmileIdApiError(res.status, await res.text());

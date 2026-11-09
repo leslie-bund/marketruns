@@ -146,7 +146,7 @@ describe("ops Recovery tab", () => {
     expect(html).toContain("esc(money(issue.amountKobo))");
     expect(html).toContain("esc(timeAgo(issue.updatedAt))");
     expect(html).toContain("esc(action.targetId)");
-    expect(html).toContain("No settlements need attention");
+    expect(html).toContain("All settlements clear");
   });
 
   it("maps every supplied action to the existing admin endpoint with confirmation, errors, and Recovery reload", async () => {

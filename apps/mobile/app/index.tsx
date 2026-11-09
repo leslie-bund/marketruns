@@ -19,9 +19,9 @@ import { usePoll } from "../src/api";
 import { Button, Card, Page, Pill, Section, colors, s } from "../src/ui";
 
 const roles = [
-  { name: "Buyer", role: "buyer" as const, text: "Post an Intent, compare Products and build your Cart.", href: "/buyer" as const, icon: "🧺" },
-  { name: "Seller", role: "seller" as const, text: "Match shop items to demand and respond with Products.", href: "/seller" as const, icon: "🏪" },
-  { name: "Runner", role: "runner" as const, text: "Collect a Cart and complete each Handoff on your Run.", href: "/runner" as const, icon: "🛵" },
+  { name: "Buyer", role: "buyer" as const, icon: "🧺" },
+  { name: "Seller", role: "seller" as const, icon: "🏪" },
+  { name: "Runner", role: "runner" as const, icon: "🛵" },
 ];
 
 export default function Launch() {
@@ -83,20 +83,18 @@ export default function Launch() {
   };
 
   return (
-    <Page eyebrow={`Market Runs · ${market}`} title="Good morning">
+    <Page eyebrow={`Market Runs · ${market}`} title="Market Runs">
       <Card style={{ backgroundColor: colors.ink, borderColor: colors.ink, padding: 22 }}>
         <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Pill active>{market.toUpperCase()} · LAGOS</Pill>
           <Pill active={!health.error}>{health.data ? "● LIVE" : health.error ? "● OFFLINE" : "…"}</Pill>
           {participant ? <Pill active={kycEligible}>{kycEligible ? "✓ VERIFIED" : participant.kycStatus === "pending" ? "KYC PENDING" : "KYC NOT VERIFIED"}</Pill> : null}
         </View>
-        <Text style={{ color: "#fff", fontSize: 23, fontWeight: "800", lineHeight: 30, marginTop: 10 }}>
-          {participant ? `Welcome back,\n${participant.displayName}.` : "Good errands start\nwith a good run."}
-        </Text>
+        {participant ? <Text style={{ color: "#fff", fontSize: 23, fontWeight: "800", lineHeight: 30, marginTop: 10 }}>Welcome back,{"\n"}{participant.displayName}.</Text> : null}
         <Text style={{ color: "#D3DDD5", fontSize: 13, lineHeight: 20 }}>
           {participant
             ? `${participant.role} · ${participant.markets.join(", ")}`
-            : "Onboard with BVN/NIN and a facial capture — every role verifies before transacting."}
+            : "BVN/NIN verification and facial capture are required before transacting."}
         </Text>
         {health.error ? (
           <Text style={{ color: "#F2B8A0", fontSize: 12 }}>
@@ -128,7 +126,6 @@ export default function Launch() {
         <Card style={{ borderColor: colors.green, borderWidth: 2 }}>
           <Pill active>SIGNED OUT</Pill>
           <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>Welcome back, {participant.displayName}.</Text>
-          <Text style={s.muted}>Sign in once — your session attaches to every request. No passwords.</Text>
           <Button title="Sign in with face" onPress={() => router.push("/signin")} />
           {credential?.participantId === participant.id ? (
             <Button title={signingIn ? "Signing in…" : "Use this device's key instead"} secondary onPress={deviceKeySignIn} />
@@ -143,7 +140,6 @@ export default function Launch() {
 
       {participant && session ? (
         <Section title="Account">
-          <Text style={s.muted}>Sign out on this device. Your participant and market activity stay intact.</Text>
           <Button title={signingOut ? "Signing out…" : "Sign out"} secondary disabled={signingOut} onPress={() => void signOutAccount()} />
         </Section>
       ) : null}
@@ -167,21 +163,23 @@ export default function Launch() {
         <Section title={participant ? "Continue as" : "Explore as (demo)"}>
           <View style={{ gap: 12 }}>
             {visibleRoles.map((role) => (
-              <Pressable key={role.name} onPress={() => router.push({ pathname: "/markets", params: { role: role.role } })}>
-                  <Card style={participant?.role === role.role ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
-                    <View style={s.row}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
-                        <Text style={{ fontSize: 26 }}>{role.icon}</Text>
-                        <View style={{ flex: 1, gap: 4 }}>
-                          <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{role.name}</Text>
-                          <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18 }}>{role.text}</Text>
-                        </View>
-                      </View>
-                      {participant?.role === role.role ? <Pill active>YOU</Pill> : null}
-                      <Text style={{ color: colors.green, fontSize: 22 }}>›</Text>
+              <Pressable
+                key={role.name}
+                accessibilityRole="link"
+                accessibilityLabel={`Explore ${role.name} demo`}
+                onPress={() => router.push({ pathname: "/markets", params: { role: role.role } })}
+              >
+                <Card style={participant?.role === role.role ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
+                  <View style={s.row}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
+                      <Text style={{ fontSize: 26 }}>{role.icon}</Text>
+                      <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", flex: 1 }}>{role.name}</Text>
                     </View>
-                  </Card>
-                </Pressable>
+                    {participant?.role === role.role ? <Pill active>YOU</Pill> : null}
+                    <Text style={{ color: colors.green, fontSize: 22 }}>›</Text>
+                  </View>
+                </Card>
+              </Pressable>
             ))}
           </View>
         </Section>
@@ -189,16 +187,14 @@ export default function Launch() {
         <Pressable onPress={() => router.push("/markets")}>
           <Card>
             <View style={s.row}>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Markets</Text>
-                <Text style={s.muted}>Join zones and switch your active market</Text>
               </View>
               <Text style={{ color: colors.green }}>→</Text>
             </View>
           </Card>
         </Pressable>
       </> : null}
-      <Text style={{ color: colors.muted, fontSize: 12, textAlign: "center" }}>Internal runners · Floor Rate delivery</Text>
       {participant ? (
         <Pressable onPress={resetIdentity} style={{ alignSelf: "center", paddingVertical: 6 }}>
           <Text style={{ color: colors.muted, fontSize: 11, textDecorationLine: "underline" }}>Reset identity (dev only)</Text>

@@ -358,7 +358,7 @@ export class RunDO extends DurableObject<Env> {
   private async validateActionLocation(handoff?: InternalHandoff, final = false): Promise<Response | null> {
     const run = this.state.run;
     if (!run) return notFound("run is unknown or retired");
-    const target = final
+    const target = final || handoff?.type === "delivery"
       ? run.route?.destination
       : run.stops.find((stop) => stop.exchangePoint === handoff?.exchangePointId)?.location;
     let radiusMeters: number | undefined;

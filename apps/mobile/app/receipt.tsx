@@ -10,9 +10,7 @@ export default function RunReceipt() {
       <Card>
         <Pill active>{(status ?? "closed").toUpperCase()}</Pill>
         <Text style={s.body}>Run · {runId ?? "unknown"}</Text>
-        <Text style={s.muted}>
-          This run has retired. Its receipt and handoff evidence belong to the archive, not the active-run pool.
-        </Text>
+        <Text style={s.muted}>This run is closed. Its receipt and handoff evidence are archived.</Text>
       </Card>
     </Page>
   );

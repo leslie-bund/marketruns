@@ -18,16 +18,15 @@ export default function BuyerHome() {
   return (
     <Page eyebrow={`${market.toUpperCase()} MARKET`} title="Your errands">
       <Card style={{ backgroundColor: colors.green, borderColor: colors.green }}>
-        <Text style={{ color: "#DAF26B", fontWeight: "800", fontSize: 11, letterSpacing: 1.2 }}>YOUR MARKET IS OPEN</Text>
-        <Text style={{ color: "white", fontSize: 22, fontWeight: "800" }}>Fresh finds, one Run.</Text>
+        <Text style={{ color: "#DAF26B", fontWeight: "800", fontSize: 11, letterSpacing: 1.2 }}>MARKET OPEN</Text>
         <Text style={{ color: "#DCEAE1", fontSize: 13 }}>
-          {intents.error ? `Edge: ${intents.error}` : registryEntry ? `${registryEntry.onlineSellers} seller${registryEntry.onlineSellers === 1 ? "" : "s"} online · live market` : "Checking live seller presence…"}
+          {intents.error ? `Edge: ${intents.error}` : registryEntry ? `${registryEntry.onlineSellers} seller${registryEntry.onlineSellers === 1 ? "" : "s"} online` : "Checking seller presence…"}
         </Text>
         <Link href="/buyer/post" asChild><Button title="＋  Post an Intent" /></Link>
       </Card>
 
       <Section title="My Intents" action={<Link href="/buyer/post"><Text style={{ color: colors.green, fontWeight: "700" }}>+ New</Text></Link>}>
-        {open.length === 0 ? <Text style={s.muted}>No open intents — post one and watch stores respond.</Text> : null}
+        {open.length === 0 ? <Text style={s.muted}>No open intents.</Text> : null}
         {open.map((intent) => (
           <Card key={intent.id}>
             <View style={s.row}>
@@ -46,9 +45,8 @@ export default function BuyerHome() {
           <View style={s.row}>
             <View style={{ flex: 1 }}>
               <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800" }}>
-                {products.products.length > 0 ? `${products.products.length} offer(s) live` : "Offers from stores"}
+                {products.products.length > 0 ? `${products.products.length} offer(s) live` : "No offers yet"}
               </Text>
-              <Text style={s.muted}>Ephemeral — each retires with its intent</Text>
             </View>
             <Text style={{ color: colors.green }}>→</Text>
           </View>
@@ -57,34 +55,32 @@ export default function BuyerHome() {
       </Section>
 
       <Pressable onPress={() => router.push("/buyer/cart")}>
-<Card>
+        <Card>
           <View style={s.row}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Your Cart</Text>
               <Text style={s.muted}>
                 {cart.data && cart.data.status === "open"
-                  ? `${cart.data.products.length} product(s) · shared deadline`
-                  : "Empty — accept a product to start the clock"}
+                  ? `${cart.data.products.length} product(s)`
+                  : "Empty"}
               </Text>
             </View>
             <Text style={{ color: colors.green }}>→</Text>
           </View>
         </Card>
-        </Pressable>
+      </Pressable>
 
       <Pressable onPress={() => router.push("/buyer/run")}>
-<Card style={badges.track > 0 ? { borderColor: colors.orange, borderWidth: 2 } : undefined}>
+        <Card style={badges.track > 0 ? { borderColor: colors.orange, borderWidth: 2 } : undefined}>
           <View style={s.row}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Track your Run</Text>
-              <Text style={badges.track > 0 ? { color: colors.orange, fontWeight: "700", fontSize: 13 } : s.muted}>
-                {badges.track > 0 ? "Runner is here — show your delivery QR" : "Live stops, handoffs and your delivery QR"}
-              </Text>
+              {badges.track > 0 ? <Text style={{ color: colors.orange, fontWeight: "700", fontSize: 13 }}>Runner is here — show your delivery QR</Text> : null}
             </View>
             <Text style={{ color: colors.green }}>→</Text>
           </View>
         </Card>
-        </Pressable>
+      </Pressable>
     </Page>
   );
 }

@@ -34,7 +34,7 @@ export default function SellerNegotiation() {
     <Page eyebrow={`PRIVATE · 1:1 · ${live ? "LIVE" : "POLLING"}`} title={current?.shopItem ?? "Negotiation"}>
       {lastMove?.by === "buyer" && current?.status !== "accepted" ? (
         <Card style={{ backgroundColor: colors.green, borderColor: colors.green }}>
-          <Text style={{ color: "white", fontWeight: "700" }}>The buyer moved — your turn to counter.</Text>
+          <Text style={{ color: "white", fontWeight: "700" }}>Buyer updated the price — your turn.</Text>
         </Card>
       ) : null}
 
@@ -43,7 +43,7 @@ export default function SellerNegotiation() {
           <View style={s.row}>
             <View>
               <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "900" }}>{current ? money(current.priceKobo) : "…"}</Text>
-              <Text style={s.muted}>{current?.quantity} {current?.unit} · buyer: {current?.intentId}</Text>
+              <Text style={s.muted}>{current?.quantity} {current?.unit} · {current?.exchangePoint}</Text>
             </View>
             <Pill active>{current?.status?.toUpperCase() ?? "…"}</Pill>
           </View>
@@ -69,7 +69,7 @@ export default function SellerNegotiation() {
       </Section>
 
       {current?.status === "accepted" ? (
-        <Pill active>Accepted — the product enters the buyer's cart</Pill>
+        <Pill active>Accepted · in buyer's Cart</Pill>
       ) : (
         <Section title="Adjust the price">
           <Label>Your counter (₦)</Label>

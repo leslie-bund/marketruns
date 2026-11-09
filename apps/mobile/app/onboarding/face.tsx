@@ -6,7 +6,7 @@ import {
   DEV_FACE_IMAGE_BASE64, awaitFaceJob, captureFaceSequence, confirmDisplayName, enrollFace,
   isFaceJobPending, registerDeviceKey, useActiveParticipant,
 } from "../../src/api";
-import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
+import { Button, Card, Field, Label, Page, Section, s } from "../../src/ui";
 import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function OnboardingFace() {
@@ -48,8 +48,6 @@ export default function OnboardingFace() {
   const devCapture = { image: DEV_FACE_IMAGE_BASE64, livenessImages: Array(7).fill(DEV_FACE_IMAGE_BASE64) as string[] };
   return (
     <Page eyebrow={`${role.toUpperCase()} · SIGN-IN`} title="Set up face sign-in">
-      <Card style={{ backgroundColor: colors.ink }}><Pill active>LOCAL 1:1 + KYC PROVIDER REF</Pill>
-        <Text style={{ color: "white", fontSize: 19, fontWeight: "800" }}>No passwords. No email recovery.</Text></Card>
       {!enrolled ? <Section title="Consent and seven-frame capture">
         <Text style={s.muted}>Consent biometric-capture-v2: fresh frames are used for Biometric KYC and your encrypted 1:1 embedding. After vendor approval, one current enrollment selfie is retained privately until replacement or account deletion; it is never shown publicly. Your legal name is stored separately from this editable display name.</Text>
         <Button title={consented ? "✓ Consent recorded for this capture" : "I consent to capture and vendor submission"} secondary onPress={() => setConsented(true)} />
