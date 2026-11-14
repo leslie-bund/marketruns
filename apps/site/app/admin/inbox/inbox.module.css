@@ -435,6 +435,78 @@
   white-space: pre-wrap;
 }
 
+.attachments {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(221, 240, 205, 0.1);
+}
+
+.attachments h3 {
+  margin: 0 0 12px;
+  color: #c7d6c9;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.attachments ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attachmentLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 14px;
+  color: inherit;
+  background: rgba(2, 17, 12, 0.24);
+  border: 1px solid rgba(221, 240, 205, 0.1);
+  border-radius: 10px;
+  text-decoration: none;
+}
+
+.attachmentLink:hover {
+  background: rgba(197, 237, 131, 0.06);
+  border-color: rgba(197, 237, 131, 0.24);
+}
+
+.attachmentInfo {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.attachmentName {
+  color: #edf4e7;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.attachmentMeta {
+  color: #93ab99;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.attachmentDownload {
+  flex: none;
+  color: #c5ed83;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.attachmentsUnavailable {
+  margin: 22px 0 0;
+  color: #b8ccbd;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
 .rawDetails {
   margin-top: 20px;
   color: #a9beb0;
@@ -483,6 +555,7 @@
 .emailRow:focus-visible,
 .emptyLink:focus-visible,
 .backLink:focus-visible,
+.attachmentLink:focus-visible,
 .rawDetails summary:focus-visible {
   outline: 2px solid #c5ed83;
   outline-offset: 5px;

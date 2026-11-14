@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReplyComposer } from "../../../../components/reply-composer";
+import { listInboundAttachments } from "../../../../src/attachments";
 import { getInboundEmail, listEmailReplies } from "../../../../src/db";
 import { requireAdmin } from "../../../../src/server";
 import styles from "../inbox.module.css";
@@ -66,11 +67,20 @@ function prettyRawPayload(value: string) {
   }
 }
 
+function formatAttachmentSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default async function InboxConversationPage({ params }: { params: Promise<{ id: string }> }) {
-  const [{ site, user }, { id }] = await Promise.all([requireAdmin(), params]);
+  const [{ env, site, user }, { id }] = await Promise.all([requireAdmin(), params]);
   const email = await getInboundEmail(site, id);
   if (!email) notFound();
-  const replies = await listEmailReplies(site, id);
+  const [replies, attachments] = await Promise.all([
+    listEmailReplies(site, id),
+    listInboundAttachments(env, email.resend_email_id),
+  ]);
   const recipients = receivedAddresses(email.to_addresses);
 
   return (
@@ -112,6 +122,37 @@ export default async function InboxConversationPage({ params }: { params: Promis
                 </div>
               </header>
               <pre className={styles.messageBody}>{messageBody(email.text_body, email.html_body)}</pre>
+              {attachments === null ? (
+                <p className={styles.attachmentsUnavailable}>
+                  Attachments could not be loaded. Refresh the conversation to try again.
+                </p>
+              ) : attachments.length > 0 ? (
+                <section className={styles.attachments} aria-labelledby={`attachments-${email.id}`}>
+                  <h3 id={`attachments-${email.id}`}>Attachments ({attachments.length})</h3>
+                  <ul>
+                    {attachments.map((attachment) => {
+                      const filename = attachment.filename?.trim() || "Untitled attachment";
+                      return (
+                        <li key={attachment.id}>
+                          <a
+                            className={styles.attachmentLink}
+                            href={`/api/admin/inbox/${encodeURIComponent(email.id)}/attachments/${encodeURIComponent(attachment.id)}`}
+                            download={filename}
+                          >
+                            <span className={styles.attachmentInfo}>
+                              <span className={styles.attachmentName}>{filename}</span>
+                              <span className={styles.attachmentMeta}>
+                                {formatAttachmentSize(attachment.size)} · {attachment.content_type}
+                              </span>
+                            </span>
+                            <span className={styles.attachmentDownload}>Download</span>
+                          </a>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ) : null}
             </article>
           </li>
           {replies.map((reply) => (

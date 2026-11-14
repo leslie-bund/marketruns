@@ -4,8 +4,8 @@ Next.js 16 marketing site, early-access registration, and private admin email po
 
 - **Marketing:** responsive product pages and early-access registration with explicit email consent.
 - **Registration:** Postgres persistence through Drizzle ORM, Resend Audience contact sync, and React Email confirmation messages.
-- **Admin:** Better Auth magic links restricted by `ADMIN_EMAILS`; visitor registrations, a threaded inbound inbox, and rich-text replies through Resend.
-- **Resend inbound:** `POST /api/webhooks/resend` verifies Svix signatures and fetches full message bodies. Use the configured inbound address on the Smile ID application; replies arrive in the admin inbox.
+- **Admin:** Better Auth magic links restricted by `ADMIN_EMAILS`; visitor registrations, a threaded inbound inbox, rich-text replies with attachments, and inbound attachment downloads through Resend.
+- **Resend inbound:** `POST /api/webhooks/resend` verifies Svix signatures and fetches full message bodies. Use the configured inbound address on the Smile ID application; replies arrive in the admin inbox. Attachments are listed from Resend when a conversation opens, and the admin-only download route obtains a fresh signed URL for each download. Replies accept up to five PDF, Office document, image, CSV, or TXT attachments, limited to 4 MB in total for the Vercel request-body limit.
 - **Database:** local development uses `node:sqlite`; production uses Postgres through `SITE_DATABASE_URL`. Site tables auto-migrate at startup/cold start.
 
 ## Local development
@@ -23,7 +23,7 @@ Preview React Email templates with `pnpm exec email dev --dir emails --port 3001
 
 ## Deploy to Vercel
 
-Set **Root Directory** to `apps/site`. Vercel detects Next.js and runs `next build`. Add the environment variables from `.env.example` (Production scope), including `RESEND_AUDIENCE_ID` when Audience syncing is enabled. The Resend API key needs sending and contact permissions.
+Set **Root Directory** to `apps/site`. Vercel detects Next.js and runs `next build`. Add the environment variables from `.env.example` (Production scope), including `RESEND_AUDIENCE_ID` when Audience syncing is enabled. The Resend API key needs sending, contact, and receiving-email read permissions.
 
 Attach the domain in Vercel → Settings → Domains and set `SITE_BASE_URL` to the final HTTPS origin.
 

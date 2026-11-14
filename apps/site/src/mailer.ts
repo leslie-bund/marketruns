@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { render } from "react-email";
+import type { Attachment } from "resend";
 import MagicLinkEmail from "../emails/magic-link";
 import type { SiteEnv } from "./env";
 import { createResendClient } from "./resend";
@@ -10,6 +11,7 @@ interface EmailMessage {
   html: string;
   text?: string;
   headers?: Record<string, string>;
+  attachments?: Attachment[];
   idempotencyKey?: string;
 }
 
@@ -29,6 +31,7 @@ export async function sendEmail(env: SiteEnv, message: EmailMessage): Promise<bo
         html: message.html,
         ...(message.text === undefined ? {} : { text: message.text }),
         ...(message.headers === undefined ? {} : { headers: message.headers }),
+        ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
       },
       message.idempotencyKey ? { idempotencyKey: message.idempotencyKey } : undefined,
     );

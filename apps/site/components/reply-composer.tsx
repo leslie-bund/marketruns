@@ -4,12 +4,18 @@ import { useRouter } from "next/navigation";
 import {
   useRef,
   useState,
+  type ChangeEvent,
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
 import styles from "../app/admin/inbox/reply-composer.module.css";
+import {
+  MAX_REPLY_ATTACHMENTS,
+  replyAttachmentAccept,
+  replyAttachmentError,
+} from "../src/reply-attachments";
 
 type Feedback = { kind: "success" | "error"; message: string } | null;
 type FormatState = { bold: boolean; italic: boolean; unorderedList: boolean; orderedList: boolean };
@@ -50,13 +56,21 @@ function toPlainText(editor: HTMLElement) {
     .trim();
 }
 
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function ReplyComposer({ inboundEmailId, recipient }: Readonly<{ inboundEmailId: string; recipient: string }>) {
   const router = useRouter();
   const editorRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const selectionRef = useRef<Range | null>(null);
   const [formats, setFormats] = useState<FormatState>(emptyFormats);
   const [hasContent, setHasContent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
@@ -168,6 +182,23 @@ export function ReplyComposer({ inboundEmailId, recipient }: Readonly<{ inboundE
     updateContent();
   }
 
+  function selectAttachments(event: ChangeEvent<HTMLInputElement>) {
+    const selected = [...attachments];
+    for (const file of Array.from(event.target.files ?? [])) {
+      if (!selected.some((existing) => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified)) {
+        selected.push(file);
+      }
+    }
+    event.target.value = "";
+    const error = replyAttachmentError(selected);
+    if (error) {
+      setFeedback({ kind: "error", message: error });
+      return;
+    }
+    setAttachments(selected);
+    setFeedback(null);
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const editor = editorRef.current;
@@ -179,24 +210,33 @@ export function ReplyComposer({ inboundEmailId, recipient }: Readonly<{ inboundE
       return;
     }
 
+    const attachmentError = replyAttachmentError(attachments);
+    if (attachmentError) {
+      setFeedback({ kind: "error", message: attachmentError });
+      return;
+    }
+
     setSending(true);
     setFeedback(null);
     setLinkOpen(false);
     try {
-      const response = await fetch("/api/admin/replies", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ inboundEmailId, html: editor.innerHTML, text }),
-      });
-      const result = await response.json().catch(() => null) as { error?: string } | null;
+      const body = new FormData();
+      body.set("inboundEmailId", inboundEmailId);
+      body.set("html", editor.innerHTML);
+      body.set("text", text);
+      for (const attachment of attachments) body.append("attachments", attachment, attachment.name);
+
+      const response = await fetch("/api/admin/replies", { method: "POST", body });
+      const result = await response.json().catch(() => null) as { error?: string; message?: string } | null;
       if (!response.ok || result?.error) {
-        throw new Error(result?.error || "We could not send your reply. Please try again.");
+        throw new Error(result?.message || result?.error || "We could not send your reply. Please try again.");
       }
 
       editor.replaceChildren();
       selectionRef.current = null;
       setHasContent(false);
       setFormats(emptyFormats);
+      setAttachments([]);
       setFeedback({ kind: "success", message: "Reply sent. The conversation has been updated." });
       router.refresh();
     } catch (error) {
@@ -336,6 +376,56 @@ export function ReplyComposer({ inboundEmailId, recipient }: Readonly<{ inboundE
           onFocus={rememberSelection}
           onPaste={pastePlainText}
         />
+
+        <div className={styles.attachmentArea}>
+          <div className={styles.attachmentControls}>
+            <input
+              ref={fileInputRef}
+              className={styles.fileInput}
+              type="file"
+              multiple
+              accept={replyAttachmentAccept}
+              tabIndex={-1}
+              disabled={sending}
+              onChange={selectAttachments}
+            />
+            <button
+              className={styles.attachButton}
+              type="button"
+              disabled={sending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Attach files
+            </button>
+            <p className={styles.attachmentHint}>
+              Up to {MAX_REPLY_ATTACHMENTS} files, 4 MB total. PDF, Office documents, images, CSV, or TXT.
+            </p>
+          </div>
+          {attachments.length > 0 ? (
+            <ul className={styles.attachmentList} aria-label="Reply attachments">
+              {attachments.map((attachment, index) => (
+                <li className={styles.attachmentItem} key={`${attachment.name}:${attachment.size}:${attachment.lastModified}`}>
+                  <span className={styles.attachmentName}>
+                    {attachment.name}
+                    <span className={styles.attachmentSize}>{formatFileSize(attachment.size)}</span>
+                  </span>
+                  <button
+                    className={styles.removeAttachment}
+                    type="button"
+                    disabled={sending}
+                    aria-label={`Remove ${attachment.name}`}
+                    onClick={() => {
+                      setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                      setFeedback(null);
+                    }}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
 
         <div className={styles.footer}>
           <p className={styles.hint} id="reply-hint">Formatting is preserved in the email. Links should include https://</p>

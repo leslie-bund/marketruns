@@ -217,6 +217,88 @@
   font-size: 0.75rem;
 }
 
+.attachmentArea {
+  padding: 14px 18px;
+  border-top: 1px solid rgba(221, 240, 205, 0.11);
+}
+
+.attachmentControls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fileInput {
+  display: none;
+}
+
+.attachButton,
+.removeAttachment {
+  flex: none;
+  padding: 8px 11px;
+  color: #c5ed83;
+  background: rgba(197, 237, 131, 0.06);
+  border: 1px solid rgba(197, 237, 131, 0.22);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.attachButton:disabled,
+.removeAttachment:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.attachmentHint {
+  margin: 0;
+  color: #7f9b87;
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.attachmentList {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attachmentItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 11px;
+  background: rgba(3, 22, 15, 0.36);
+  border: 1px solid rgba(221, 240, 205, 0.1);
+  border-radius: 8px;
+}
+
+.attachmentName {
+  min-width: 0;
+  color: #dbe7d8;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.attachmentSize {
+  display: block;
+  margin-top: 2px;
+  color: #7f9b87;
+  font-size: 0.65rem;
+}
+
+.removeAttachment {
+  padding: 6px 9px;
+  color: #b7cbbb;
+  background: transparent;
+  border-color: rgba(221, 240, 205, 0.14);
+}
+
 .footer {
   display: flex;
   align-items: center;
@@ -289,6 +371,8 @@
 .linkInput:focus-visible,
 .smallButton:focus-visible,
 .cancelButton:focus-visible,
+.attachButton:focus-visible,
+.removeAttachment:focus-visible,
 .sendButton:focus-visible {
   outline: 2px solid #c5ed83;
   outline-offset: 3px;
@@ -319,6 +403,11 @@
 
   .linkActions {
     justify-content: flex-end;
+  }
+
+  .attachmentControls {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .footer {
