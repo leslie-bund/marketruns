@@ -181,6 +181,7 @@ export const OfferProductRequestSchema = ProductSchema.pick({
   sellerParticipantId: true,
   exchangePoint: true,
   photoCaptureRef: true,
+  videoCaptureRef: true,
 }).extend({
   productId: z.string().min(1),
   intentId: z.string().min(1),

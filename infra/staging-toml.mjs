@@ -13,13 +13,13 @@ if (!["apply", "check"].includes(mode)) {
 
 const required = [
   "EDGE_PUBLIC_URL",
+  "OPS_DASHBOARD_URL",
   "ARCHIVE_PUBLIC_URL",
   "IDENTITY_PUBLIC_URL",
   "PAYMENTS_PUBLIC_URL",
   "NOTIFICATIONS_PUBLIC_URL",
   "RESEND_FROM_EMAIL",
   "HYPERDRIVE_ID",
-  "MARKET_CONFIG_KV_ID",
   "PAYMENT_DISPATCHER",
   "FACE_VERIFIER",
 ];
@@ -52,6 +52,7 @@ function httpsUrl(name, { originOnly = false } = {}) {
 
 const workerOriginNames = [
   "EDGE_PUBLIC_URL",
+  "OPS_DASHBOARD_URL",
   "ARCHIVE_PUBLIC_URL",
   "IDENTITY_PUBLIC_URL",
   "PAYMENTS_PUBLIC_URL",
@@ -59,7 +60,7 @@ const workerOriginNames = [
 ];
 const workerOrigins = workerOriginNames.map((name) => httpsUrl(name, { originOnly: true }).origin);
 if (new Set(workerOrigins).size !== workerOrigins.length) {
-  throw new Error("The five public Worker origins must be distinct");
+  throw new Error("The five Worker origins and dedicated ops dashboard origin must be distinct");
 }
 if (process.env.FACE_VERIFIER === "hybrid") {
   for (const name of [
@@ -163,14 +164,14 @@ function apply() {
   let edge = files.edge.text;
   edge = setKey(edge, "[env.staging.vars]", "EDGE_ENV", "staging");
   edge = setKey(edge, "[env.staging.vars]", "OPS_BASE_URL", process.env.EDGE_PUBLIC_URL);
+  edge = setKey(edge, "[env.staging.vars]", "OPS_DASHBOARD_URL", process.env.OPS_DASHBOARD_URL);
+  edge = setKey(edge, "[env.staging.vars]", "RESEND_FROM_EMAIL", process.env.RESEND_FROM_EMAIL);
   edge = setKey(edge, "[env.staging.vars]", "OPS_ARCHIVE_URL", process.env.ARCHIVE_PUBLIC_URL);
   edge = setKey(edge, "[env.staging.vars]", "IDENTITY_URL", process.env.IDENTITY_PUBLIC_URL);
   edge = setKey(edge, "[env.staging.vars]", "PAYMENTS_URL", process.env.PAYMENTS_PUBLIC_URL);
   edge = setKey(edge, "[env.staging.vars]", "NOTIFICATIONS_URL", process.env.NOTIFICATIONS_PUBLIC_URL);
   edge = setKey(edge, "[env.staging.vars]", "PAYMENTS_REQUIRED", process.env.PAYMENT_DISPATCHER === "flutterwave" ? "true" : "false");
   edge = removeKey(edge, "[env.staging.vars]", "OSRM_BASE_URL");
-  edge = setTableKey(edge, "[[env.staging.kv_namespaces]]", "binding", "MARKET_CONFIG");
-  edge = setTableKey(edge, "[[env.staging.kv_namespaces]]", "id", process.env.MARKET_CONFIG_KV_ID);
   files.edge.text = ensureHyperdrive(edge);
 
   files.archive.text = ensureHyperdrive(files.archive.text);
@@ -228,12 +229,13 @@ function check() {
   }
 
   expectKey(files.edge.text, "[env.staging.vars]", "OPS_BASE_URL", process.env.EDGE_PUBLIC_URL, failures);
+  expectKey(files.edge.text, "[env.staging.vars]", "OPS_DASHBOARD_URL", process.env.OPS_DASHBOARD_URL, failures);
+  expectKey(files.edge.text, "[env.staging.vars]", "RESEND_FROM_EMAIL", process.env.RESEND_FROM_EMAIL, failures);
   expectKey(files.edge.text, "[env.staging.vars]", "OPS_ARCHIVE_URL", process.env.ARCHIVE_PUBLIC_URL, failures);
   expectKey(files.edge.text, "[env.staging.vars]", "IDENTITY_URL", process.env.IDENTITY_PUBLIC_URL, failures);
   expectKey(files.edge.text, "[env.staging.vars]", "PAYMENTS_URL", process.env.PAYMENTS_PUBLIC_URL, failures);
   expectKey(files.edge.text, "[env.staging.vars]", "NOTIFICATIONS_URL", process.env.NOTIFICATIONS_PUBLIC_URL, failures);
   expectKey(files.edge.text, "[env.staging.vars]", "PAYMENTS_REQUIRED", process.env.PAYMENT_DISPATCHER === "flutterwave" ? "true" : "false", failures);
-  expectKey(files.edge.text, "[[env.staging.kv_namespaces]]", "id", process.env.MARKET_CONFIG_KV_ID, failures);
   if (/^OSRM_BASE_URL\s*=/m.test(stagingText(files.edge.text))) failures.push("edge: OSRM must remain out of this staging batch");
 
   expectKey(files.identity.text, "[env.staging.vars]", "IDENTITY_ENV", "staging", failures);

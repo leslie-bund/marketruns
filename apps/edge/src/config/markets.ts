@@ -2,7 +2,7 @@ import type { Env } from "./env.js";
 import type { MarketConfig } from "../do/schemas.js";
 import { coreRegistry } from "../registry/index.js";
 
-/** Durable market registry. Runtime configuration remains in MarketDO/KV, never in this list cache. */
+/** Durable market registry. Runtime configuration remains in MarketDO, never in this list cache. */
 export const SEED_MARKETS: ReadonlyArray<{ id: string }> = [{ id: "Balogun" }, { id: "Computer Village" }];
 
 export async function listMarketIds(env: Env): Promise<string[]> {

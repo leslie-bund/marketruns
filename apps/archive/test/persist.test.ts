@@ -3,6 +3,8 @@ import { MVP_ABORT_SPLIT } from "@market-runs/domain";
 import type { Product, RunRetired, SettlementReleased } from "@market-runs/proto";
 import { disputes, runsArchive } from "../../../infra/drizzle/schema.js";
 import {
+  cartArchiveSnapshot,
+  cartRetiredRow,
   cartSnapshotKey,
   disputeRow,
   ledgerRows,
@@ -200,6 +202,30 @@ describe("archive row mappings", () => {
         snapshot: {} as never,
       }),
     ).toBe(`snapshots/carts/cart:a/${now}.json`);
+  });
+
+  it("enumerates cart history without retaining deleted product media references", () => {
+    const message = {
+      type: "cart.retired" as const,
+      cartId: "cart:a",
+      market: "Balogun",
+      reason: "checked-out" as const,
+      retiredAt: now,
+      snapshot: {
+        id: "cart:a", market: "Balogun", firstAcceptedAt: now - 60_000,
+        acceptanceCount: 1, deadline: now + 60_000, status: "checked-out" as const, buyerId: "buyer-1",
+        products: [{
+          ...productSnapshot, status: "accepted" as const,
+          photoCaptureRef: "r2://archive/captures/photo.jpg", videoCaptureRef: "r2://archive/captures/video.mp4",
+        }],
+      },
+    };
+    const row = cartRetiredRow(message);
+    expect(row.id).toBe(`cart:a:${now}`);
+    expect(row.buyerId).toBe("buyer-1");
+    expect(row.snapshot.products[0]).not.toHaveProperty("photoCaptureRef");
+    expect(row.snapshot.products[0]).not.toHaveProperty("videoCaptureRef");
+    expect(cartArchiveSnapshot(message)).toEqual(row.snapshot);
   });
 });
 

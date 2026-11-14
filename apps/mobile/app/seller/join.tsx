@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { router } from "expo-router";
 import { Alert, Pressable, Text, View } from "react-native";
-import { identities, listVocabulary, registerStore, setActiveStore, useActiveMarket, useActiveParticipant, usePoll } from "../../src/api";
+import { listVocabulary, registerStore, setActiveStore, useActiveMarket, useActiveParticipant, usePoll } from "../../src/api";
 import { PayoutAccountCard } from "../../src/features/seller";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
 
@@ -56,9 +56,8 @@ export default function JoinMarket() {
   );
 
   if (joined) {
-    // The payout account keys off the seller's participant identity — the
-    // onboarded participant, or the demo seller while exploring (ADR-0015).
-    const sellerId = participant?.id ?? identities.seller.id;
+    const sellerId = participant?.id;
+    if (!sellerId) return null;
     return (
       <Page eyebrow={`JOIN ${market.toUpperCase()}`} title="Store registered">
         <Card style={{ backgroundColor: colors.ink }}>

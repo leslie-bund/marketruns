@@ -68,4 +68,72 @@ describe("deployed Worker service bindings", () => {
     expect(response.status).toBe(401);
     expect(seenUrl).toBe(`${env.IDENTITY_URL}/callbacks/smileid`);
   });
+
+  it("uses the archive binding for ops admin reads with path, query, and authentication intact", async () => {
+    let seenUrl = "";
+    let seenToken: string | null = null;
+    const service = {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        seenUrl = String(input);
+        seenToken = new Headers(init?.headers).get("x-archive-internal");
+        return Response.json({ items: [], total: 0, limit: 40, offset: 0 });
+      },
+    } as unknown as Fetcher;
+    const env = withEnv({ ARCHIVE_SERVICE: service, ARCHIVE_INTERNAL_TOKEN: "test-archive-token" });
+    const response = await createApp().fetch(new Request("http://edge/ops/api/admin/runs?kind=live&limit=40&offset=0"), env);
+    expect(response.status).toBe(200);
+    expect(seenUrl).toBe(`${env.OPS_ARCHIVE_URL}/admin/runs?kind=live&limit=40&offset=0`);
+    expect(seenToken).toBe("test-archive-token");
+  });
+
+  it("uses the payments binding for ops dispatch reads", async () => {
+    let seenUrl = "";
+    let seenToken: string | null = null;
+    const service = {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        seenUrl = String(input);
+        seenToken = new Headers(init?.headers).get("x-payments-internal");
+        return Response.json({ items: [], total: 0, limit: 40, offset: 0 });
+      },
+    } as unknown as Fetcher;
+    const env = withEnv({ PAYMENTS_SERVICE: service, PAYMENTS_INTERNAL_TOKEN: "test-payments-token" });
+    const response = await createApp().fetch(new Request("http://edge/ops/api/admin/payments?limit=40&offset=0"), env);
+    expect(response.status).toBe(200);
+    expect(seenUrl).toBe(`${env.PAYMENTS_URL}/dispatches?limit=40&offset=0`);
+    expect(seenToken).toBe("test-payments-token");
+  });
+
+  it("uses the payments binding for ops recovery actions", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    const service = {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        seenUrl = String(input);
+        seenMethod = init?.method ?? "GET";
+        return Response.json({ status: "queued" });
+      },
+    } as unknown as Fetcher;
+    const env = withEnv({ PAYMENTS_SERVICE: service, PAYMENTS_INTERNAL_TOKEN: "test-payments-token" });
+    const response = await createApp().fetch(new Request("http://edge/ops/api/admin/payments/dispatch-1/replay", { method: "POST" }), env);
+    expect(response.status).toBe(200);
+    expect(seenUrl).toBe(`${env.PAYMENTS_URL}/dispatches/dispatch-1/replay`);
+    expect(seenMethod).toBe("POST");
+  });
+
+  it("uses the identity binding for the ops device-reset queue", async () => {
+    let seenUrl = "";
+    let seenToken: string | null = null;
+    const service = {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        seenUrl = String(input);
+        seenToken = new Headers(init?.headers).get("x-identity-internal");
+        return Response.json({ requests: [] });
+      },
+    } as unknown as Fetcher;
+    const env = withEnv({ IDENTITY_SERVICE: service, IDENTITY_INTERNAL_TOKEN: "test-identity-token" });
+    const response = await createApp().fetch(new Request("http://edge/ops/api/device-resets?status=pending"), env);
+    expect(response.status).toBe(200);
+    expect(seenUrl).toBe(`${env.IDENTITY_URL}/auth/device-reset?status=pending`);
+    expect(seenToken).toBe("test-identity-token");
+  });
 });

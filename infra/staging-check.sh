@@ -49,9 +49,9 @@ source "$ENV_FILE"
 set +a
 
 REQUIRED_STATE=(
-  LAUNCH_MARKET EDGE_PUBLIC_URL ARCHIVE_PUBLIC_URL IDENTITY_PUBLIC_URL
+  LAUNCH_MARKET EDGE_PUBLIC_URL OPS_DASHBOARD_URL ARCHIVE_PUBLIC_URL IDENTITY_PUBLIC_URL
   PAYMENTS_PUBLIC_URL NOTIFICATIONS_PUBLIC_URL RESEND_FROM_EMAIL
-  DATABASE_URL HYPERDRIVE_ID MARKET_CONFIG_KV_ID PAYMENT_DISPATCHER FACE_VERIFIER
+  DATABASE_URL HYPERDRIVE_ID PAYMENT_DISPATCHER FACE_VERIFIER
   OPS_AUTH_SECRET ID_DOCUMENT_HMAC_SECRET ARCHIVE_INTERNAL_TOKEN
   NOTIFICATION_INTERNAL_TOKEN PAYMENTS_INTERNAL_TOKEN IDENTITY_SESSION_SECRET
   IDENTITY_INTERNAL_TOKEN IDENTITY_ENCRYPTION_KEY FLUTTERWAVE_SECRET_KEY
@@ -102,10 +102,10 @@ if [[ "$FACE_VERIFIER" == hybrid ]]; then
   [[ "$SMILEID_ENV" == sandbox ]] || fail "Smile ID staging environment is sandbox"
   [[ ${#BIOMETRICS_SERVICE_TOKEN} -ge 32 ]] || fail "biometrics service token has at least 32 characters"
 fi
-check "five distinct public Worker origins" node -e '
+check "distinct Worker and dedicated ops dashboard origins" node -e '
   const origins = process.argv.slice(1).map((value) => new URL(value).origin);
   process.exit(new Set(origins).size === origins.length ? 0 : 1);
-' "$EDGE_PUBLIC_URL" "$ARCHIVE_PUBLIC_URL" "$IDENTITY_PUBLIC_URL" "$PAYMENTS_PUBLIC_URL" "$NOTIFICATIONS_PUBLIC_URL"
+' "$EDGE_PUBLIC_URL" "$OPS_DASHBOARD_URL" "$ARCHIVE_PUBLIC_URL" "$IDENTITY_PUBLIC_URL" "$PAYMENTS_PUBLIC_URL" "$NOTIFICATIONS_PUBLIC_URL"
 
 cd "$ROOT" || exit 2
 if node infra/staging-toml.mjs check; then :; else FAILURES=$((FAILURES + 1)); fi
@@ -132,7 +132,6 @@ list_contains() {
   [[ "$output" == *"$expected"* ]]
 }
 check "Hyperdrive $HYPERDRIVE_ID" list_contains "$HYPERDRIVE_ID" npx wrangler hyperdrive list
-check "KV $MARKET_CONFIG_KV_ID" list_contains "$MARKET_CONFIG_KV_ID" npx wrangler kv namespace list
 
 secret_present() {
   local worker="$1" secret="$2" output
@@ -152,7 +151,7 @@ secret_present() {
 SECRET_MATRIX=(
   edge:OPS_AUTH_SECRET edge:ID_DOCUMENT_HMAC_SECRET edge:ARCHIVE_INTERNAL_TOKEN
   edge:NOTIFICATION_INTERNAL_TOKEN edge:PAYMENTS_INTERNAL_TOKEN
-  edge:IDENTITY_SESSION_SECRET edge:IDENTITY_INTERNAL_TOKEN
+  edge:IDENTITY_SESSION_SECRET edge:IDENTITY_INTERNAL_TOKEN edge:RESEND_API_KEY
   archive:ARCHIVE_INTERNAL_TOKEN
   identity:IDENTITY_ENCRYPTION_KEY identity:IDENTITY_SESSION_SECRET identity:IDENTITY_INTERNAL_TOKEN
   payments:PAYMENTS_INTERNAL_TOKEN payments:FLUTTERWAVE_SECRET_KEY payments:FLUTTERWAVE_WEBHOOK_SECRET_HASH
@@ -226,7 +225,8 @@ if [[ "$SKIP_LIVE" -eq 0 ]]; then
     check "edge to payments authenticated bank directory" http_ok "$EDGE_PUBLIC_URL/payments/banks"
   fi
   check "notifications HTTPS health" http_ok "$NOTIFICATIONS_PUBLIC_URL/healthz"
-  check "ops login page" http_ok "$EDGE_PUBLIC_URL/ops/login"
+  check "dedicated ops dashboard" http_ok "$OPS_DASHBOARD_URL"
+  check "embedded ops login remains retired" http_status_is 404 "$EDGE_PUBLIC_URL/ops/login"
   check "ops API rejects anonymous access" ops_is_guarded
   if [[ "$FACE_VERIFIER" == hybrid ]]; then
     check "Smile ID callback rejects missing signature" http_status_is 401 "$EDGE_PUBLIC_URL/callbacks/smileid" \

@@ -58,7 +58,7 @@ assertions) replaces one function.
 
 ```
 app/            Hono app: routes/, middleware/ — the request layer
-ops-console/    the embedded console (html, handlers)
+ops-console/    operator JSON API and Better Auth handlers (no embedded HTML)
 do/             the four Durable Objects + their runtime library
   run/          RunDO split: run-do.ts, settlement.ts (pure), state.ts
   runtime/      DO runtime library barrel: responses, wire, internal-parse, ws

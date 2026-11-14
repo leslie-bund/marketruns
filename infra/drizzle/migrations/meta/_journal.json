@@ -134,6 +134,34 @@
       "when": 1793329043581,
       "tag": "0018_audited_refund_resolutions",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794605283469,
+      "tag": "0019_archive_queue_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794605283470,
+      "tag": "0020_participant_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794635176017,
+      "tag": "0021_ops_admin_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794643963886,
+      "tag": "0022_retained_media",
+      "breakpoints": true
     }
   ]
 }

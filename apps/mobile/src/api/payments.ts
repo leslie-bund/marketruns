@@ -4,11 +4,10 @@ import type {
   PayoutAccountResolveResponse,
   PayoutAccountView,
 } from "@market-runs/proto";
-import { EDGE_URL, identities } from "./config";
-import { ApiError } from "./client";
+import { EDGE_URL } from "./config";
+import { ApiError, assertAuthenticatedWrite } from "./client";
 import { getActiveParticipant, participantHeaders } from "./participant";
 import { clearSession, sessionHeaders } from "./auth";
-import { assertDemoWriteAllowed } from "./dev-mode";
 
 /**
  * Payments client — the app side of the payments worker's collection/payout
@@ -31,7 +30,7 @@ import { assertDemoWriteAllowed } from "./dev-mode";
  */
 
 async function paymentsRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  assertDemoWriteAllowed(init?.method, getActiveParticipant() !== null);
+  assertAuthenticatedWrite(init?.method);
   const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,
@@ -45,9 +44,10 @@ async function paymentsRequest<T>(path: string, init?: RequestInit): Promise<T> 
   return body as T;
 }
 
-/** The caller's wire identity: the onboarded participant, else the demo buyer. */
 function callerId(): string {
-  return getActiveParticipant()?.id ?? identities.buyer.id;
+  const participant = getActiveParticipant();
+  if (!participant) throw new Error("Sign in before using payments.");
+  return participant.id;
 }
 
 /** Checkout reference: mr:<cartId-tail>:<rand> — client-generated, idempotency key of the hold. */

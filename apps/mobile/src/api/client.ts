@@ -1,22 +1,15 @@
-import type { ActiveRunsResponse, Cart, CartDeliveryOptions, CartQuote, CheckoutAccepted, Delivery, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
-import { identities, EDGE_URL, newId } from "./config";
+import type { ActiveRunsResponse, Cart, CartDeliveryOptions, CartQuote, CheckoutAccepted, Delivery, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantHistory, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
+import { EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
 import { getActiveParticipant, participantHeaders, setActiveParticipant } from "./participant";
 import { clearSession, sessionHeaders } from "./auth";
 import { getActiveStore } from "./active-store";
 import { clearCartId, clearRunId, getStoredCartId, getStoredRunId, recordCartId, recordRunId } from "./cart-state";
-import { assertDemoWriteAllowed } from "./dev-mode";
 
 /**
  * The real API client — every method maps one-to-one onto the public edge
  * wire (see packages/proto for the message shapes). Errors surface the
- * server's JSON message so screens can show *why* a command was refused
- * (close gate, cart deadline, accept-once...) instead of a generic failure.
- *
- * Identity: every request carries the onboarded participant's headers — the
- * edge's single auth seam (ADR-0015) resolves them, and /command adopts the
- * caller's id for buyer attribution when the wire omits it (ADR-0014). Before
- * a device onboards, the demo identities keep the market explorable.
+ * server's JSON message so screens can show *why* a command was refused.
  */
 export class ApiError extends Error {
   constructor(
@@ -29,13 +22,19 @@ export class ApiError extends Error {
   }
 }
 
+export function assertAuthenticatedWrite(method: string | undefined, allowUnauthenticated = false): void {
+  const verb = (method ?? "GET").toUpperCase();
+  if (allowUnauthenticated || verb === "GET" || verb === "HEAD" || verb === "OPTIONS") return;
+  if (!getActiveParticipant() || !sessionHeaders().authorization) {
+    throw new Error("Sign in with your verified participant account before making changes.");
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit, options?: { allowUnauthenticatedWrite?: boolean }): Promise<T> {
-  if (!options?.allowUnauthenticatedWrite) assertDemoWriteAllowed(init?.method, getActiveParticipant() !== null);
+  assertAuthenticatedWrite(init?.method, options?.allowUnauthenticatedWrite);
   const authorization = sessionHeaders();
   const response = await fetch(`${EDGE_URL}${path}`, {
     ...init,
-    // A live session rides as Bearer alongside the participant headers — the
-    // edge prefers a valid session, the headers remain the dev/demo path.
     headers: { "content-type": "application/json", ...authorization, ...participantHeaders(), ...(init?.headers ?? {}) },
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -55,37 +54,9 @@ const command = <T = Record<string, unknown>>(body: unknown): Promise<T> => {
   return request<T>("/command", { method: "POST", body: JSON.stringify(body) }, { allowUnauthenticatedWrite: type === "participant.onboarded" });
 };
 
-/** The wire omits buyerId once a participant is onboarded — the edge adopts the caller's identity. */
+/** The edge adopts buyer attribution from the authenticated session. */
 function buyerAttribution(): { buyerId?: string } {
-  const participant = getActiveParticipant();
-  if (participant) return {};
-  return { buyerId: identities.buyer.id };
-}
-
-/**
- * Demo explore mode sends no participant headers, but header-keyed reads (the
- * per-buyer cart) still need the demo buyer identity the commands adopt.
- */
-function demoBuyerHeaders(): Record<string, string> {
-  return getActiveParticipant() ? {} : { "x-participant-id": identities.buyer.id, "x-participant-role": "buyer" };
-}
-
-/**
- * Same fallback for the runner surface: before this device onboards, run
- * discovery identifies as the internal runner pool (MVP assigns every run to
- * runner:internal, ADR-0013).
- */
-function demoRunnerHeaders(): Record<string, string> {
-  return getActiveParticipant() ? {} : { "x-participant-id": identities.runner.id, "x-participant-role": "runner" };
-}
-
-/**
- * Same fallback for the seller surface: before this device onboards, run
- * discovery presents the demo seller role so the edge takes the store-scoped
- * branch (the store itself is identified by the storeId query param).
- */
-function demoSellerHeaders(): Record<string, string> {
-  return getActiveParticipant() ? {} : { "x-participant-id": identities.seller.id, "x-participant-role": "seller" };
+  return {};
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,7 +99,7 @@ export async function joinMarket(market: string): Promise<void> {
 
 /** The zone registry, including each market's live authenticated seller count. */
 export async function listMarkets(): Promise<MarketRegistryEntry[]> {
-  const body = await request<{ markets: MarketRegistryEntry[] }>("/markets");
+  const body = await request<{ markets: MarketRegistryEntry[] }>("/markets/catalog");
   return body.markets;
 }
 
@@ -139,6 +110,10 @@ export async function getParticipant(participantId: string): Promise<Participant
   } catch {
     return null;
   }
+}
+
+export async function getHistory(): Promise<ParticipantHistory> {
+  return request<ParticipantHistory>("/history");
 }
 
 /* ------------------------------------------------------------------ */
@@ -171,13 +146,12 @@ export async function discoverIntentsForItems(shopItems: string[], storeId?: str
 
 /**
  * Buyer scope of the same discovery read: only the caller's own intents
- * ("buyers only ask for what they typed"). The identity rides the participant
- * headers the edge's auth seam resolves (ADR-0015); demo explore mode sends
- * the demo buyer identity explicitly, exactly like getCart.
+ * ("buyers only ask for what they typed"). The edge derives the buyer scope
+ * from the authenticated session.
  */
 export async function discoverMyIntents(): Promise<IntentDiscoveryEntry[]> {
   const body = await request<DiscoveryResponse>(`/markets/${encodeURIComponent(getActiveMarket())}/discovery`, {
-    headers: demoBuyerHeaders(),
+    headers: {},
   });
   return body.intents;
 }
@@ -213,6 +187,8 @@ export async function postIntent(input: {
   unit: string;
   priceBand: { minKobo: number; maxKobo: number };
   note?: string;
+  photoCaptureRef?: string;
+  videoCaptureRef?: string;
 }): Promise<Intent> {
   const body = await command<{ intent: Intent }>({
     type: "intent.posted",
@@ -259,7 +235,7 @@ export async function acceptProduct(productId: string): Promise<Cart> {
 export async function getCart(): Promise<Cart | null> {
   const market = getActiveMarket();
   try {
-    const body = await request<{ cart: Cart }>(`/markets/${encodeURIComponent(market)}/cart`, { headers: demoBuyerHeaders() });
+    const body = await request<{ cart: Cart }>(`/markets/${encodeURIComponent(market)}/cart`, { headers: {} });
     // Only an open cart is checkout-able; a retired/checked-out id is dead weight.
     if (body.cart.status === "open") void recordCartId(market, body.cart.id);
     else void clearCartId(market);
@@ -278,14 +254,14 @@ export async function quoteCart(delivery: Delivery): Promise<CartQuote> {
   const market = getActiveMarket();
   return request<CartQuote>(`/markets/${encodeURIComponent(market)}/cart/quote`, {
     method: "POST",
-    headers: demoBuyerHeaders(),
+    headers: {},
     body: JSON.stringify({ delivery }),
   });
 }
 
 export async function getCartDeliveryOptions(): Promise<CartDeliveryOptions> {
   const market = getActiveMarket();
-  return request<CartDeliveryOptions>(`/markets/${encodeURIComponent(market)}/cart/delivery-options`, { headers: demoBuyerHeaders() });
+  return request<CartDeliveryOptions>(`/markets/${encodeURIComponent(market)}/cart/delivery-options`, { headers: {} });
 }
 
 export async function checkout(
@@ -355,23 +331,24 @@ export async function offerProduct(input: {
   unit: string;
   priceKobo: number;
   photoCaptureRef?: string;
+  videoCaptureRef?: string;
 }): Promise<Product> {
   const productId = newId("product");
-  // The store is the seller's identity on the wire (GLOSSARY); the demo
-  // identity is the fallback before this device joins the market.
   const store = getActiveStore();
-  const sellerName = store?.name ?? identities.seller.name;
-  const exchangePoint = store?.exchangePoint ?? identities.seller.exchangePoint;
+  const participant = getActiveParticipant();
+  if (!store || !participant) {
+    throw new ApiError(400, "store-required", "Sign in and create your store before offering a product.");
+  }
   const body = await request<{ product: Product }>(`/markets/${encodeURIComponent(getActiveMarket())}/offers`, {
     method: "POST",
     body: JSON.stringify({
       productId,
       ...input,
       market: getActiveMarket(),
-      ...(store ? { storeId: store.id } : {}),
-      sellerName,
-      sellerParticipantId: getActiveParticipant()?.id ?? identities.seller.id,
-      exchangePoint,
+      storeId: store.id,
+      sellerName: store.name,
+      sellerParticipantId: participant.id,
+      exchangePoint: store.exchangePoint,
     }),
   });
   return body.product;
@@ -391,24 +368,19 @@ export async function sellerOffer(productId: string, priceKobo: number): Promise
  * never saw the checkout finds its run. Two scopes: a runner call (no scope)
  * matches the caller's runner id; a seller call (`{ storeId }`) matches runs
  * containing that store — the store's trading identity as it appears on the
- * run's products. Session callers must pass the owned store id; the demo
- * seller retains its legacy name fallback. Transport failures stay visible to
- * the caller so an unavailable index is never presented as "no runs".
+ * run's products. Session callers must pass the owned store id. Transport
+ * failures stay visible so an unavailable index is never presented as "no runs".
  */
 export async function listActiveRuns(scope?: { storeId?: string; buyer?: boolean }): Promise<ActiveRunsResponse> {
   const storeId = scope?.storeId;
   const query = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
-  return request<ActiveRunsResponse>(
-    `/markets/${encodeURIComponent(getActiveMarket())}/runs/active${query}`,
-    { headers: storeId ? demoSellerHeaders() : scope?.buyer ? demoBuyerHeaders() : demoRunnerHeaders() },
-  );
+  return request<ActiveRunsResponse>(`/markets/${encodeURIComponent(getActiveMarket())}/runs/active${query}`);
 }
 
 /** Atomically claim an unassigned run through the internal-pool guarded route. */
 export async function claimRun(runId: string, location: LocationFix): Promise<void> {
   await request(`/runs/${encodeURIComponent(runId)}/claim`, {
     method: "POST",
-    headers: demoRunnerHeaders(),
     body: JSON.stringify({ location }),
   });
 }
@@ -451,20 +423,20 @@ export async function scanChallenge(runId: string, handoffId: string, challenge:
 }
 
 export async function getDeliveryCode(runId: string): Promise<{ code: string; expiresAt: number }> {
-  return request(`/runs/${encodeURIComponent(runId)}/delivery-code`, { headers: demoBuyerHeaders() });
+  return request(`/runs/${encodeURIComponent(runId)}/delivery-code`, { headers: {} });
 }
 
 /** Buyer-only rotation for a delayed delivery; the previous code stops working immediately. */
 export async function rotateDeliveryCode(runId: string): Promise<{ code: string; expiresAt: number }> {
   return request(`/runs/${encodeURIComponent(runId)}/delivery-code/rotate`, {
     method: "POST",
-    headers: demoBuyerHeaders(),
+    headers: {},
     body: "{}",
   });
 }
 
 export async function getHandoffChallenge(runId: string, handoffId: string): Promise<string> {
-  const body = await request<{ challenge: string }>(`/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoffId)}/challenge`, { headers: demoSellerHeaders() });
+  const body = await request<{ challenge: string }>(`/runs/${encodeURIComponent(runId)}/handoffs/${encodeURIComponent(handoffId)}/challenge`);
   return body.challenge;
 }
 
@@ -502,7 +474,7 @@ export async function fileDispute(
 ): Promise<{ disputed: boolean; reason: string; raisedByParticipantId: string | null; evidenceRefs: string[] }> {
   return request(`/runs/${encodeURIComponent(runId)}/dispute`, {
     method: "POST",
-    headers: demoBuyerHeaders(),
+    headers: {},
     body: JSON.stringify({ reason, evidenceRefs }),
   });
 }
@@ -515,13 +487,25 @@ export async function fileDispute(
  * Upload camera bytes to the capture endpoint; returns the signed reference
  * the domain stores (never bytes) plus a read-back URL for previews.
  */
-export async function uploadCapture(localUri: string, runId?: string): Promise<{ ref: string; url: string }> {
-  assertDemoWriteAllowed("POST", getActiveParticipant() !== null);
+export async function uploadCapture(
+  localUri: string,
+  runId?: string,
+  media: { contentType?: string; durationMs?: number; purpose?: "product" | "intent" } = {},
+): Promise<{ ref: string; url: string }> {
+  assertAuthenticatedWrite("POST");
   const blob = await (await fetch(localUri)).blob();
   const authorization = sessionHeaders();
+  const contentType = media.contentType ?? blob.type ?? "image/jpeg";
   const response = await fetch(`${EDGE_URL}/captures`, {
     method: "POST",
-    headers: { "content-type": blob.type || "image/jpeg", ...authorization, ...participantHeaders(), ...(runId ? { "x-run-id": runId } : {}) },
+    headers: {
+      "content-type": contentType || "image/jpeg",
+      ...authorization,
+      ...participantHeaders(),
+      ...(runId ? { "x-run-id": runId } : {}),
+      ...(media.purpose ? { "x-capture-purpose": media.purpose } : {}),
+      ...(media.durationMs !== undefined ? { "x-capture-duration-ms": String(Math.round(media.durationMs)) } : {}),
+    },
     body: blob,
   });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -538,6 +522,11 @@ export function captureUrl(ref: string): string {
 }
 
 /** Product media is authorized against the product's buyer or selling owner, never public by capture key. */
-export function productCaptureUrl(productId: string): string {
-  return `${EDGE_URL}/products/${encodeURIComponent(productId)}/capture`;
+export function productCaptureUrl(productId: string, media: "photo" | "video" = "photo"): string {
+  return `${EDGE_URL}/products/${encodeURIComponent(productId)}/capture?media=${media}`;
+}
+
+/** Intent media is authorized against its buyer and sellers whose stores match the requested item. */
+export function intentCaptureUrl(market: string, intentId: string, media: "photo" | "video" = "photo"): string {
+  return `${EDGE_URL}/markets/${encodeURIComponent(market)}/intents/${encodeURIComponent(intentId)}/capture?media=${media}`;
 }

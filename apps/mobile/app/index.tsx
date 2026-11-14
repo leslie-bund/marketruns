@@ -3,11 +3,7 @@ import { useState } from "react";
 import { Alert, Text, View, Pressable} from "react-native";
 import {
   authenticateDeviceKey,
-  clearCartState,
-  clearDeviceCredentialCache,
-  clearSession,
   EDGE_URL,
-  setActiveParticipant,
   signOut,
   useActiveMarket,
   useActiveParticipant,
@@ -40,22 +36,6 @@ export default function Launch() {
   const kycEligible = participant?.kycStatus === "verified" || participant?.kycStatus === "preverified";
   const transactionReady = Boolean(participant && session && kycEligible);
   const visibleRoles = participant ? roles.filter((role) => role.role === participant.role) : roles;
-
-  /** Dev-only logout: clears the onboarded participant, any auth session, the cached device-credential id, and this device's stored cart/run ids (they belong to that identity). */
-  const resetIdentity = () => {
-    Alert.alert("Reset identity?", "Dev only — clears the onboarded participant, session, device-credential cache, and cart/run state, back to onboarding. The SecureStore secret stays (clearing it would orphan the server-side credential row — the row may linger; revoke server-side if it matters).", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Reset",
-        style: "destructive",
-        onPress: () => {
-          void setActiveParticipant(null).then(() =>
-            Promise.all([clearCartState(), clearSession(), clearDeviceCredentialCache()]),
-          );
-        },
-      },
-    ]);
-  };
 
   /** One-tap sign-in with the SecureStore device key (no camera needed). */
   const deviceKeySignIn = async () => {
@@ -159,14 +139,14 @@ export default function Launch() {
         </Pressable>
       ) : null}
 
-      {!participant || transactionReady ? <>
-        <Section title={participant ? "Continue as" : "Explore as (demo)"}>
+      {transactionReady ? <>
+        <Section title="Continue as">
           <View style={{ gap: 12 }}>
             {visibleRoles.map((role) => (
               <Pressable
                 key={role.name}
                 accessibilityRole="link"
-                accessibilityLabel={`Explore ${role.name} demo`}
+                accessibilityLabel={`Open ${role.name}`}
                 onPress={() => router.push({ pathname: "/markets", params: { role: role.role } })}
               >
                 <Card style={participant?.role === role.role ? { borderColor: colors.green, borderWidth: 2 } : undefined}>
@@ -187,19 +167,12 @@ export default function Launch() {
         <Pressable onPress={() => router.push("/markets")}>
           <Card>
             <View style={s.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Markets</Text>
-              </View>
+              <View style={{ flex: 1 }}><Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }}>Markets</Text></View>
               <Text style={{ color: colors.green }}>→</Text>
             </View>
           </Card>
         </Pressable>
       </> : null}
-      {participant ? (
-        <Pressable onPress={resetIdentity} style={{ alignSelf: "center", paddingVertical: 6 }}>
-          <Text style={{ color: colors.muted, fontSize: 11, textDecorationLine: "underline" }}>Reset identity (dev only)</Text>
-        </Pressable>
-      ) : null}
     </Page>
   );
 }

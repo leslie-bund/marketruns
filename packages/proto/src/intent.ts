@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PriceBandSchema, QuantitySchema, TimestampSchema } from "./primitives.js";
+import { PriceBandSchema, QuantitySchema, RequestIdSchema, TimestampSchema } from "./primitives.js";
 
 export const IntentStatusSchema = z.enum(["open", "matched"]);
 export type IntentStatus = z.infer<typeof IntentStatusSchema>;
@@ -12,6 +12,8 @@ export const IntentSchema = z.object({
   unit: z.string().min(1),
   priceBand: PriceBandSchema,
   note: z.string().optional(),
+  photoCaptureRef: z.string().min(1).optional(),
+  videoCaptureRef: z.string().min(1).optional(),
   market: z.string().min(1),
   createdAt: TimestampSchema,
   status: IntentStatusSchema,
@@ -29,6 +31,8 @@ export const IntentPostedSchema = z.object({
   unit: z.string().min(1),
   priceBand: PriceBandSchema,
   note: z.string().optional(),
+  photoCaptureRef: z.string().min(1).optional(),
+  videoCaptureRef: z.string().min(1).optional(),
   market: z.string().min(1),
   /** Echoed from the posted intent; absent → the wire carried no buyer identity. */
   buyerId: z.string().min(1).optional(),
@@ -47,7 +51,12 @@ export const IntentExpiredSchema = z.object({
   type: z.literal("intent.expired"),
   intentId: z.string().min(1),
   expiredAt: TimestampSchema,
+  /** Media-bearing intents also retire through the archive for finite private retention. */
+  snapshot: IntentSchema.optional(),
+  market: z.string().min(1).optional(),
   /** Trusted server-side attribution for notification delivery; absent on legacy anonymous intents. */
   buyerId: z.string().min(1).optional(),
+  /** Timer expiry has no originating request; retained for a consistent archive envelope. */
+  requestId: RequestIdSchema.optional(),
 });
 export type IntentExpired = z.infer<typeof IntentExpiredSchema>;

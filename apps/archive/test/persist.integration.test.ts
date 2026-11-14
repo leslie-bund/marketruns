@@ -13,6 +13,7 @@ import {
   disputes,
   ledgerEntries,
   liveRuns,
+  retainedMedia,
   runsArchive,
   settlementRecords,
 } from "../../../infra/drizzle/schema.js";
@@ -20,6 +21,8 @@ import { listAdminDisputes, listAdminRuns } from "../src/admin.js";
 import { createDatabase } from "../src/db.js";
 import consumer from "../src/index.js";
 import { loadReputation } from "../src/reputation.js";
+import { loadParticipantHistory } from "../src/history.js";
+import { cleanupExpiredRetainedMedia, setRetainedMediaHold } from "../src/media-retention.js";
 
 /**
  * Functional integration test for the archive pipeline — first-class: it runs
@@ -44,10 +47,10 @@ describe("archive consumer against real Postgres", () => {
     db = drizzle(sql);
     // Hermetic start: a crashed prior run must not leak rows into the
     // unfiltered assertions below (the suite still truncates on exit too).
-    await sql`TRUNCATE runs_archive, settlement_records, archived_products, ledger_entries, live_runs CASCADE`;
+    await sql`TRUNCATE runs_archive, settlement_records, archived_products, carts_archive, archive_queue_messages, retained_media, ledger_entries, live_runs CASCADE`;
   });
   afterAll(async () => {
-    await sql`TRUNCATE runs_archive, settlement_records, archived_products, ledger_entries, live_runs CASCADE`;
+    await sql`TRUNCATE runs_archive, settlement_records, archived_products, carts_archive, archive_queue_messages, retained_media, ledger_entries, live_runs CASCADE`;
     await sql.end();
   });
 
@@ -383,6 +386,50 @@ describe("archive consumer against real Postgres", () => {
     expect(legsAfterReplay).toHaveLength(legsAfterFailure.length);
   });
 
+  it("serves durable cart, sale, and run history to the correct participants", async () => {
+    const cartId = "itest-history-cart";
+    const runId = "itest-history-run";
+    const productId = "itest-history-product";
+    const product = {
+      id: productId, intentId: "itest-history-intent", shopItem: "Tomatoes", quantity: 2, unit: "kg",
+      priceKobo: 100_000, sellerName: "History Store", sellerParticipantId: "itest-history-seller",
+      exchangePoint: "History Point", expiresAt: now + 60_000,
+    };
+    await consumer.queue({
+      messages: [
+        queueMessage("m-history-run", { ...JSON.parse(batch[0]!.body as string), runId, cartId, buyerId: "itest-history-buyer" }),
+        queueMessage("m-history-product", {
+          type: "product.retired", productId, intentId: product.intentId, reason: "sold", retiredAt: now,
+          market: "Balogun", buyerId: "itest-history-buyer", cartId,
+          snapshot: { ...product, status: "retired" },
+        }),
+        queueMessage("m-history-cart", {
+          type: "cart.retired", cartId, market: "Balogun", reason: "checked-out", retiredAt: now,
+          snapshot: {
+            id: cartId, market: "Balogun", products: [{ ...product, status: "accepted" }],
+            firstAcceptedAt: now - 60_000, acceptanceCount: 1, deadline: now + 60_000,
+            status: "checked-out", buyerId: "itest-history-buyer",
+          },
+        }),
+      ], queue: "archive-snapshots", retryAll: () => undefined,
+    } as unknown as MessageBatch<unknown>, { DATABASE_URL: url, PAYMENT_QUEUE: noopPaymentQueue });
+
+    const buyer = await db.transaction(async (tx) => loadParticipantHistory(tx, { participantId: "itest-history-buyer", role: "buyer" }));
+    expect(buyer.carts.map((entry) => entry.cartId)).toEqual([cartId]);
+    expect(buyer.carts[0]?.runId).toBe(runId);
+    expect(buyer.runs.map((entry) => entry.runId)).toEqual([runId]);
+
+    const seller = await db.transaction(async (tx) => loadParticipantHistory(tx, { participantId: "itest-history-seller", role: "seller" }));
+    expect(seller.sales.map((entry) => entry.productId)).toEqual([productId]);
+    expect(seller.sales[0]?.runId).toBe(runId);
+    expect(seller.runs.map((entry) => entry.runId)).toEqual([runId]);
+
+    const runner = await db.transaction(async (tx) => loadParticipantHistory(tx, { participantId: "runner:internal", role: "runner" }));
+    expect(runner.runs.some((entry) => entry.runId === runId)).toBe(true);
+    const stranger = await db.transaction(async (tx) => loadParticipantHistory(tx, { participantId: "itest-history-stranger", role: "buyer" }));
+    expect(stranger).toEqual({ carts: [], sales: [], runs: [] });
+  });
+
   describe("durable dispute resolution", () => {
     type SettlementMode = "completed" | "aborted" | "disputed";
 
@@ -528,6 +575,110 @@ describe("archive consumer against real Postgres", () => {
         createdAt: new Date(now),
         resolvedAt: new Date(now + 60_000),
       });
+    });
+  });
+
+  describe("retained product and intent media", () => {
+    it("schedules finite retention, honors holds, and retries failed R2 deletion", async () => {
+      const photoKey = "products/captures/itest-media-product.jpg";
+      const intentKey = "intents/captures/itest-media-intent.jpg";
+      const product = {
+        type: "product.retired",
+        productId: "itest-media-product",
+        intentId: "itest-media-intent-source",
+        reason: "sold",
+        retiredAt: now,
+        cartId: "itest-media-cart",
+        market: "Balogun",
+        buyerId: "itest-media-buyer",
+        snapshot: {
+          ...JSON.parse(batch[2]!.body as string).snapshot,
+          id: "itest-media-product",
+          photoCaptureRef: `r2://archive/${photoKey}`,
+        },
+      };
+      const intent = {
+        type: "intent.expired",
+        intentId: "itest-media-intent",
+        expiredAt: now,
+        market: "Balogun",
+        buyerId: "itest-media-buyer",
+        snapshot: {
+          id: "itest-media-intent",
+          shopItem: "Tomatoes",
+          quantity: 2,
+          unit: "kg",
+          priceBand: { minKobo: 1000, maxKobo: 2000 },
+          market: "Balogun",
+          createdAt: now - 1000,
+          status: "open",
+          buyerId: "itest-media-buyer",
+          photoCaptureRef: `r2://archive/${intentKey}`,
+        },
+      };
+      const run = {
+        ...JSON.parse(batch[0]!.body as string),
+        runId: "itest-media-run",
+        cartId: "itest-media-cart",
+        buyerId: "itest-media-buyer",
+        runnerId: "itest-media-runner",
+        settlementLegs: [{ sellerId: "itest-media-seller", amountKobo: 148_500 }],
+        closedAt: now + 5000,
+      };
+      const archive = async (id: string, value: unknown) => consumer.queue(
+        { messages: [queueMessage(id, value)], queue: "archive-snapshots", retryAll: () => undefined } as unknown as MessageBatch<unknown>,
+        { DATABASE_URL: url, PAYMENT_QUEUE: noopPaymentQueue },
+      );
+      await archive("itest-media-product-message", product);
+      await archive("itest-media-intent-message", intent);
+      await archive("itest-media-run-message", run);
+      await archive("itest-media-product-message", product);
+
+      let rows = await db.select().from(retainedMedia).orderBy(retainedMedia.id);
+      expect(rows).toHaveLength(2);
+      expect(rows.find((row) => row.subjectType === "intent")).toMatchObject({
+        subjectId: "itest-media-intent",
+        ownerId: "itest-media-buyer",
+        deleteAfter: new Date(now + 7 * 24 * 60 * 60 * 1000),
+        status: "retained",
+      });
+      expect(rows.find((row) => row.subjectType === "product")).toMatchObject({
+        subjectId: "itest-media-product",
+        cartId: "itest-media-cart",
+        runId: "itest-media-run",
+        deleteAfter: new Date(now + 5000 + 90 * 24 * 60 * 60 * 1000),
+        status: "retained",
+      });
+
+      const held = await db.transaction((tx) => setRetainedMediaHold(tx, "product:itest-media-product:image", "hold", {
+        reason: "itest incident review", heldBy: "admin@example.com",
+      }));
+      expect(typeof held === "object" && held.status).toBe("held");
+
+      const deleted: string[] = [];
+      let failIntent = true;
+      const bucket = { delete: async (key: string) => {
+        if (key === intentKey && failIntent) throw new Error("itest R2 outage");
+        deleted.push(key);
+      } } as unknown as R2Bucket;
+      const failed = await cleanupExpiredRetainedMedia(db, bucket, new Date(now + 8 * 24 * 60 * 60 * 1000));
+      expect(failed).toEqual({ claimed: 1, deleted: 0, failed: 1 });
+      rows = await db.select().from(retainedMedia).where(eq(retainedMedia.id, "intent:itest-media-intent:image"));
+      expect(rows[0]).toMatchObject({ status: "retained" });
+      expect(rows[0]?.lastError).toContain("itest R2 outage");
+
+      failIntent = false;
+      const retried = await cleanupExpiredRetainedMedia(db, bucket, new Date(now + 8 * 24 * 60 * 60 * 1000));
+      expect(retried).toEqual({ claimed: 1, deleted: 1, failed: 0 });
+      expect(deleted).toEqual([intentKey]);
+
+      const released = await db.transaction((tx) => setRetainedMediaHold(tx, "product:itest-media-product:image", "release"));
+      expect(typeof released === "object" && released.status).toBe("retained");
+      const productRow = (await db.select().from(retainedMedia).where(eq(retainedMedia.id, "product:itest-media-product:image")))[0]!;
+      const cleaned = await cleanupExpiredRetainedMedia(db, bucket, new Date(productRow.deleteAfter.getTime() + 1));
+      expect(cleaned).toEqual({ claimed: 1, deleted: 1, failed: 0 });
+      expect(deleted).toEqual([intentKey, photoKey]);
+      expect(deleted).not.toContain("evidence/runs/itest-handoff.jpg");
     });
   });
 

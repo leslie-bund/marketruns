@@ -1,9 +1,9 @@
 import { SELF, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import { HANDOFF_AUTO_CONFIRM_MS } from "@market-runs/domain";
-import { DeliveryCodeSchema } from "@market-runs/proto";
+import { describe, expect, it, vi } from "vitest";
+import { HANDOFF_AUTO_CONFIRM_MS, INTENT_TTL_MS } from "@market-runs/domain";
+import { DeliveryCodeSchema, IntentExpiredSchema } from "@market-runs/proto";
 import { STATE_KEY } from "../src/do/state.js";
-import { readJson, runStub, shiftTime } from "./helpers.js";
+import { bindings, internalPost, marketStub, productStub, readJson, runStub, shiftTime } from "./helpers.js";
 import {
   BASE,
   RUNNER,
@@ -39,10 +39,10 @@ function handoffs(run: Record<string, unknown>): HandoffView[] {
   return run.handoffs as HandoffView[];
 }
 
-async function upload(bytes: Uint8Array, owner = identity(RUNNER, "runner"), runId?: string): Promise<Record<string, unknown>> {
+async function upload(bytes: Uint8Array, owner = identity(RUNNER, "runner"), runId?: string, purpose?: "product" | "intent"): Promise<Record<string, unknown>> {
   const response = await SELF.fetch(new Request(`${BASE}/captures`, {
     method: "POST",
-    headers: { "content-type": "image/jpeg", ...owner, ...(runId ? { "x-run-id": runId } : {}) },
+    headers: { "content-type": "image/jpeg", ...owner, ...(runId ? { "x-run-id": runId } : {}), ...(purpose ? { "x-capture-purpose": purpose } : {}) },
     body: bytes,
   }));
   expect(response.status).toBe(200);
@@ -112,6 +112,80 @@ describe("product and ops evidence reads", () => {
     const opsMedia = await getJson(opsPath);
     expect(opsMedia.status).toBe(200);
     expect(new Uint8Array(await opsMedia.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("accepts 15-second product videos and retains private media at retirement", async () => {
+    const market = "product-video";
+    const buyerId = "buyer:product-video";
+    const productId = "product-product-video";
+    const intentId = "intent-product-video";
+    const seller = identity(SELLER, "seller");
+    const photo = await upload(new Uint8Array([1, 2, 3]), seller);
+    const videoResponse = await SELF.fetch(new Request(`${BASE}/captures`, {
+      method: "POST",
+      headers: { "content-type": "video/mp4", "x-capture-duration-ms": "15000", ...seller },
+      body: new Uint8Array([4, 5, 6]),
+    }));
+    expect(videoResponse.status).toBe(200);
+    const video = await readJson(videoResponse);
+    const tooLong = await SELF.fetch(new Request(`${BASE}/captures`, {
+      method: "POST",
+      headers: { "content-type": "video/mp4", "x-capture-duration-ms": "15001", ...seller },
+      body: new Uint8Array([4, 5, 6]),
+    }));
+    expect(tooLong.status).toBe(400);
+
+    expect((await postJson("/command", {
+      type: "intent.posted", intentId, shopItem: "Tomatoes", quantity: 1, unit: "kg",
+      priceBand: { minKobo: 100_000, maxKobo: 200_000 }, market,
+    }, identity(buyerId, "buyer"))).status).toBe(200);
+    expect((await postJson(`/markets/${market}/offers`, {
+      productId, intentId, market, shopItem: "Tomatoes", quantity: 1, unit: "kg",
+      priceKobo: 150_000, sellerName: "Amina's Fresh Store", sellerParticipantId: SELLER,
+      exchangePoint: `${market} Market, Stall B14`, photoCaptureRef: photo.ref, videoCaptureRef: video.ref,
+    })).status).toBe(200);
+    expect((await getJson(`/products/${productId}/capture?media=video`, identity(buyerId, "buyer"))).status).toBe(200);
+
+    expect((await productStub(productId).fetch(internalPost("/retire", { reason: "withdrawn" }))).status).toBe(200);
+    expect((await getJson(String(photo.url), seller)).status).toBe(200);
+    expect((await getJson(String(video.url), seller)).status).toBe(200);
+  });
+});
+
+describe("buyer intent media", () => {
+  it("authorizes buyer and matching-seller reads and archives media on expiry", async () => {
+    const market = "intent-media";
+    const buyerId = "buyer:intent-media";
+    const intentId = "intent-intent-media";
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 4, 5, 6]);
+    const uploaded = await upload(bytes, identity(buyerId, "buyer"), undefined, "intent");
+    expect(String(uploaded.ref)).toContain("r2://archive/intents/captures/");
+    expect((await postJson("/command", {
+      type: "store.registered", storeId: "store:intent-media", market, name: "Intent Media Store",
+      sellerParticipantId: SELLER, exchangePoint: `${market} Market, Stall B14`, shopItems: ["Tomatoes"],
+    }, identity(SELLER, "seller"))).status).toBe(200);
+    expect((await postJson("/command", {
+      type: "intent.posted", intentId, shopItem: "Tomatoes", quantity: 2, unit: "kg",
+      priceBand: { minKobo: 120_000, maxKobo: 180_000 }, market, photoCaptureRef: uploaded.ref,
+    }, identity(buyerId, "buyer"))).status).toBe(200);
+
+    const mediaPath = `/markets/${market}/intents/${intentId}/capture`;
+    expect((await getJson(mediaPath)).status).toBe(401);
+    expect((await getJson(mediaPath, identity("seller:stranger", "seller"))).status).toBe(403);
+    for (const headers of [identity(buyerId, "buyer"), identity(SELLER, "seller")]) {
+      const media = await getJson(mediaPath, headers);
+      expect(media.status).toBe(200);
+      expect(new Uint8Array(await media.arrayBuffer())).toEqual(bytes);
+    }
+
+    const sendSpy = vi.spyOn(bindings.ARCHIVE_QUEUE, "send");
+    await shiftTime(marketStub(market), INTENT_TTL_MS + 1);
+    await runDurableObjectAlarm(marketStub(market));
+    const expired = sendSpy.mock.calls.map(([body]) => IntentExpiredSchema.safeParse(JSON.parse(String(body))))
+      .find((result) => result.success && result.data.intentId === intentId);
+    expect(expired?.success).toBe(true);
+    if (expired?.success) expect(expired.data.snapshot?.photoCaptureRef).toBe(uploaded.ref);
+    sendSpy.mockRestore();
   });
 });
 

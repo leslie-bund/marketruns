@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, router } from "expo-router";
-import { Text, View, Pressable} from "react-native";
-import { getOwnedStore, identities, setActiveStore, useActiveMarket, useActiveParticipant, useActiveStore } from "../../src/api";
+import { Image, Text, View, Pressable} from "react-native";
+import { getOwnedStore, intentCaptureUrl, participantHeaders, sessionHeaders, setActiveStore, useActiveMarket, useActiveParticipant, useActiveStore } from "../../src/api";
 import { PayoutAccountCard, sellerTripBadge, useOpenIntents, useSellerProducts } from "../../src/features/seller";
 import { useSellerRun } from "../../src/features/run";
+import { ProductVideo } from "../../src/features/product-video";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
 
 export default function SellerHome() {
@@ -75,6 +76,8 @@ export default function SellerHome() {
               <Pill active>MATCH</Pill>
             </View>
             {intent.note ? <Text style={s.body}>{intent.note}</Text> : null}
+            {intent.photoCaptureRef ? <View style={{ height: 180, overflow: "hidden", borderRadius: 14 }}><Image source={{ uri: intentCaptureUrl(intent.market, intent.id), headers: { ...sessionHeaders(), ...participantHeaders() } }} style={{ flex: 1 }} resizeMode="cover" /></View> : null}
+            {intent.videoCaptureRef ? <ProductVideo uri={intentCaptureUrl(intent.market, intent.id, "video")} /> : null}
             <Link
               href={{ pathname: "/seller/respond", params: { intentId: intent.id, shopItem: intent.shopItem, quantity: String(intent.quantity), unit: intent.unit } }}
               asChild
@@ -111,9 +114,7 @@ export default function SellerHome() {
         </Card>
       </Pressable>
 
-      <Section title="Payouts">
-        <PayoutAccountCard participantId={participant?.id ?? identities.seller.id} />
-      </Section>
+      {participant ? <Section title="Payouts"><PayoutAccountCard participantId={participant.id} /></Section> : null}
     </Page>
   );
 }

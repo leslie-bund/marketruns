@@ -38,7 +38,7 @@ Authentication is participant-keyed **1:1** comparison against the enrolled encr
 
 ## Better Auth is ops-only
 
-**Decision:** Better Auth may protect the operations console and operations identities only. It is not the participant authentication system and does not replace participant sessions, device credentials, face verification, or recovery.
+**Decision:** Better Auth may protect the operations console and operations identities only. It is not the participant authentication system and does not replace participant sessions, device credentials, face verification, or recovery. Its admin plugin provides the admin-only operator invitation, role-assignment, and session-revocation surface; public sign-up, impersonation, and other unlisted admin routes remain closed, self-role changes are refused, and successful mutations enter the ops audit.
 
 **Rationale:** staff administration and participant authentication have different trust and recovery models. Sharing a library must not collapse that boundary.
 
@@ -67,6 +67,14 @@ Authentication is participant-keyed **1:1** comparison against the enrolled encr
 Operations privileges do not permit arbitrary mutation of money or evidence. Settlement amounts, ledger effects, payment records, handoff photographs/references, QR scan/confirmation facts, and dispute evidence are immutable through the console: corrections require controlled append-only records or the existing settlement/dispute process, with actor, timestamp, reason, and before/after audit context where applicable. Telemetry must not dump raw biometrics, BVN/NIN, secrets, full evidence payloads, or unbounded live state.
 
 **Rationale:** launch operations need leverage and observability without creating a back door around ADR-0007, ADR-0019, or ADR-0020. “Immutable” here governs operational mutation; it does not override a lawful deletion obligation.
+
+## Public mobile catalogue and dedicated operator app
+
+**Decision:** mobile market selection uses anonymous `GET /markets/catalog`. This intentionally exposes only the registry fields needed by the picker: market id, name, opening hours, and online-seller count. Geofence coordinates and radius are not part of this public contract; the existing full `/markets` response is unchanged. The catalogue may be filtered by `?market=` but requires no participant session or development identity headers.
+
+The dedicated `apps/ops` React application uses the existing ops-only Better Auth database, roles, and edge authorization. Its Cloudflare Worker keeps auth and API calls same-origin and reaches the staging edge through a service binding, avoiding unsupported same-zone Worker-to-Worker HTTP fetches over `workers.dev`. The edge's ops proxies likewise use `ARCHIVE_SERVICE`, `PAYMENTS_SERVICE`, and `IDENTITY_SERVICE` for downstream reads and actions; their public HTTPS URLs remain configuration for local development and client/provider flows, not deployed Worker-to-Worker ops transport. The redundant embedded edge HTML console has been removed; the edge retains only the authenticated operator API, Better Auth handlers, and controlled CLI. Invited operators at any role can request ten-minute single-use magic links delivered through Resend; self-registration and delivery to unknown addresses remain disabled. The staging administrator address is `founder@marketruns.org`; passwords and Resend credentials remain secret and are never stored in the app or documentation.
+
+**Rationale:** unonboarded participant devices need a minimal registry before choosing a market, while operational credentials must remain separate from participant identity. A dedicated app provides a maintainable operator surface without splitting the identity or authorization model.
 
 ## Consequences
 

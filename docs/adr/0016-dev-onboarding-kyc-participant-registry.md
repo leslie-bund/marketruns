@@ -23,8 +23,9 @@ app exercises the real flows before vendors and sessions ship.
 - **Auth**: the app attaches `x-participant-id` / `x-participant-role` from
   the onboarded identity — the exact dev-stage resolution ADR-0015 records.
   `/command` adoption narrows buyer attribution to the server-asserted caller
-  when the wire omits `buyerId`; demo identities remain as explicit fallbacks
-  for unonboarded exploration.
+  when the wire omits `buyerId`. Anonymous role exploration and demo identity
+  fallbacks have subsequently been removed from the app; transactional screens
+  and writes require the matching participant and a live session.
 - **Participant home**: a fifth Durable Object, the global ParticipantDO
   registry. ADR-0014's Postgres-anchoring question stays open; the registry
   swaps homes without a wire change. *[Amended: the registry is rekeyed per
@@ -34,7 +35,8 @@ app exercises the real flows before vendors and sessions ship.
 - **Markets**: a zone registry (KV index, self-healing on join) backs the
   market list every role joins from. Geohash cells remain rejected as the
   market axis (ADR-0001); an ops admin portal for zones is v2. *[Amended:
-  the zone portal shipped in ADR-0017 by owner decision.]*
+  the zone portal shipped in ADR-0017 by owner decision. The core registry
+  now uses Postgres in deployed environments; the unused KV path is removed.]*
 
 ## Consequences
 

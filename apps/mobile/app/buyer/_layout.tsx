@@ -62,6 +62,7 @@ function BuyerTabs() {
           tabBarIcon: ({ color, size }) => <Ionicons name="navigate-outline" color={color} size={size} />,
         }}
       />
+      <Tabs.Screen name="history" options={{ title: "History", tabBarLabel: "History", tabBarIcon: ({ color, size }) => <Ionicons name="time-outline" color={color} size={size} /> }} />
       {/* Phase-detail screens: reachable, never tabs. */}
       <Tabs.Screen name="post" options={{ href: null, title: "Post an Intent" }} />
       <Tabs.Screen name="products" options={{ href: null, title: "Products" }} />

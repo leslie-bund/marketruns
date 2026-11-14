@@ -125,6 +125,36 @@ export const OpsRunDetailSchema = z.object({
 });
 export type OpsRunDetail = z.infer<typeof OpsRunDetailSchema>;
 
+export const RetainedMediaStatusSchema = z.enum(["retained", "held", "deleting", "deleted"]);
+export type RetainedMediaStatus = z.infer<typeof RetainedMediaStatusSchema>;
+
+/** Durable product/intent media metadata; private R2 bytes follow deleteAfter unless held. */
+export const RetainedMediaViewSchema = z.object({
+  id: z.string().min(1),
+  subjectType: z.enum(["product", "intent"]),
+  subjectId: z.string().min(1),
+  captureRef: z.string().min(1),
+  objectKey: z.string().min(1),
+  mediaKind: z.enum(["image", "video"]),
+  ownerId: z.string().min(1).nullable(),
+  cartId: z.string().min(1).nullable(),
+  runId: z.string().min(1).nullable(),
+  status: RetainedMediaStatusSchema,
+  retiredAt: TimestampSchema,
+  deleteAfter: TimestampSchema,
+  holdReason: z.string().nullable(),
+  heldBy: z.string().min(1).nullable(),
+  heldAt: TimestampSchema.nullable(),
+  lastError: z.string().nullable(),
+  deletedAt: TimestampSchema.nullable(),
+});
+export type RetainedMediaView = z.infer<typeof RetainedMediaViewSchema>;
+
+export const RetainedMediaHoldRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+  heldBy: z.string().trim().min(1).max(120),
+});
+
 /** Paginated list envelope shared by every /admin/* list endpoint. */
 export function AdminListSchema<Item extends z.ZodTypeAny>(itemSchema: Item) {
   return z.object({
@@ -166,3 +196,36 @@ export const OpsHealthSchema = z.object({
   computedAt: TimestampSchema,
 });
 export type OpsHealth = z.infer<typeof OpsHealthSchema>;
+
+
+export const ArchiveQueueStatusSchema = z.enum(["received", "persisted", "retrying", "rejected"]);
+export type ArchiveQueueStatus = z.infer<typeof ArchiveQueueStatusSchema>;
+
+/** Durable archive-consumer receipt; Cloudflare's internal queue backlog is not readable by a Worker. */
+export const ArchiveQueueMessageSchema = z.object({
+  id: z.string().min(1),
+  eventType: z.string().min(1),
+  status: ArchiveQueueStatusSchema,
+  attempts: z.number().int().positive(),
+  requestId: z.string().min(1).nullable(),
+  error: z.string().nullable(),
+  firstReceivedAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  completedAt: TimestampSchema.nullable(),
+});
+export type ArchiveQueueMessage = z.infer<typeof ArchiveQueueMessageSchema>;
+
+export const ArchiveQueueResponseSchema = z.object({
+  items: z.array(ArchiveQueueMessageSchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  summary: z.object({
+    received: z.number().int().nonnegative(),
+    persisted: z.number().int().nonnegative(),
+    retrying: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+    oldestUnresolvedAt: TimestampSchema.nullable(),
+  }),
+});
+export type ArchiveQueueResponse = z.infer<typeof ArchiveQueueResponseSchema>;

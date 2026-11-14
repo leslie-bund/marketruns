@@ -38,8 +38,9 @@ export const ProductSchema = z.object({
   exchangePoint: z.string().min(1),
   expiresAt: TimestampSchema,
   status: ProductStatusSchema,
-  /** Camera-only capture at offer time; the signed R2 reference, never bytes. */
+  /** Camera-only captures at offer time; signed R2 references, never bytes. */
   photoCaptureRef: z.string().min(1).optional(),
+  videoCaptureRef: z.string().min(1).optional(),
 });
 export type Product = z.infer<typeof ProductSchema>;
 

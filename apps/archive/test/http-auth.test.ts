@@ -21,6 +21,7 @@ describe("archive internal read authentication", () => {
       "/admin/settlements",
       "/admin/ledger",
       "/admin/ops-health?market=Balogun",
+      "/admin/retained-media",
       "/admin/future-read",
     ];
 

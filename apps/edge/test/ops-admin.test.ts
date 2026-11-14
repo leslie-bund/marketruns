@@ -210,6 +210,24 @@ describe("ops admin archive proxies", () => {
     expect((await readJson(response)).market).toBe("rs");
   });
 
+  it("exposes validated archive queue receipts through the ops proxy", async () => {
+    const payload = {
+      items: [{
+        id: "message-1", eventType: "cart.retired", status: "retrying", attempts: 2,
+        requestId: "request-1", error: "database unavailable", firstReceivedAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000, completedAt: null,
+      }],
+      total: 1, limit: 50, offset: 0,
+      summary: { received: 0, persisted: 0, retrying: 1, rejected: 0, oldestUnresolvedAt: 1_700_000_000_000 },
+    };
+    fetchMock.get("http://localhost:8788").intercept({ path: "/admin/archive-queue?status=retrying" })
+      .reply(200, JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+
+    const response = await SELF_FETCH("/ops/api/admin/archive-queue?status=retrying", {});
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toEqual(payload);
+  });
+
   it("adds payments service auth to ops hold reads", async () => {
     let seenHeaders: Record<string, string> | undefined;
     fetchMock
@@ -528,7 +546,7 @@ describe("market config write guard (edge route layer)", () => {
 });
 
 describe("deployed Better Auth routing", () => {
-  it("serves only the login page publicly and never admits the legacy token", async () => {
+  it("serves no embedded HTML, allowlists magic links, and never admits the legacy token", async () => {
     const app = createApp();
     const env = new Proxy(bindings, {
       get: (target, prop, receiver) => {
@@ -540,99 +558,37 @@ describe("deployed Better Auth routing", () => {
       },
     }) as Env;
 
-    const login = await app.fetch(new Request(`${BASE}/ops/login?token=legacy-secret`), env);
-    expect(login.status).toBe(200);
-    expect(await login.text()).toContain("Sign in");
+    for (const path of ["/ops/login?token=legacy-secret", "/ops?token=legacy-secret"]) {
+      const retiredPage = await app.fetch(new Request(`${BASE}${path}`), env);
+      expect(retiredPage.status).toBe(404);
+      expect(retiredPage.headers.get("content-type")).toContain("application/json");
+    }
 
-    for (const path of ["/ops?token=legacy-secret", "/ops/api/session?token=legacy-secret", "/ops/api/markets?token=legacy-secret"]) {
+    for (const path of ["/ops/api/session?token=legacy-secret", "/ops/api/markets?token=legacy-secret"]) {
       const protectedResponse = await app.fetch(new Request(`${BASE}${path}`, { headers: { "x-ops-token": "legacy-secret" } }), env);
       expect(protectedResponse.status).toBe(503);
       expect((await readJson(protectedResponse)).error).toBe("ops-auth-unavailable");
     }
-  });
-});
 
-describe("ops console page guard", () => {
-  it("requires the token for the HTML page when OPS_TOKEN is set", async () => {
-    const app = createApp();
-    const env = withOpsToken("secret");
+    const magicLink = await app.fetch(new Request(`${BASE}/ops/auth/sign-in/magic-link`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "founder@marketruns.org", callbackURL: "/" }),
+    }), env);
+    expect(magicLink.status).toBe(503);
 
-    const refused = await app.fetch(new Request(`${BASE}/ops`), env);
-    expect(refused.status).toBe(403);
-    expect(refused.headers.get("content-type")).toContain("text/html");
-    const refusedBody = await refused.text();
-    expect(refusedBody).toContain("403");
-    expect(refusedBody).not.toContain("Market Runs — Ops Console");
+    const unlisted = await app.fetch(new Request(`${BASE}/ops/auth/sign-up/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }), env);
+    expect(unlisted.status).toBe(404);
 
-    const viaQuery = await app.fetch(new Request(`${BASE}/ops?token=secret`), env);
-    expect(viaQuery.status).toBe(200);
-    expect(await viaQuery.text()).toContain("Ops Console");
-
-    const viaHeader = await app.fetch(new Request(`${BASE}/ops`, { headers: { "x-ops-token": "secret" } }), env);
-    expect(viaHeader.status).toBe(200);
-
-    const wrong = await app.fetch(new Request(`${BASE}/ops?token=nope`), env);
-    expect(wrong.status).toBe(403);
-  });
-
-  it("serves the page as today when OPS_TOKEN is unset (dev)", async () => {
-    const app = createApp();
-    const page = await app.fetch(new Request(`${BASE}/ops`), bindings);
-    expect(page.status).toBe(200);
-    expect(await page.text()).toContain("Ops Console");
-  });
-
-  it("includes escaped dispute details, resolved metadata, and post-settle refresh", async () => {
-    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
-    const html = await page.text();
-
-    expect(page.status).toBe(200);
-    expect(html).toContain("statusPill(x.status)");
-    expect(html).toContain("x.ambiguous");
-    expect(html).toContain("money(x.absorbedLossKobo)");
-    expect(html).toContain("x.evidenceRefs");
-    expect(html).toContain("esc(x.reason)");
-    expect(html).toContain('x.status === "resolved"');
-    expect(html).toContain("Settlement record");
-    expect(html).toContain('esc(x.settlementRecordId || "—")');
-    expect(html).toContain("esc(dateTime(x.resolvedAt))");
-    expect(html).toContain('if (SEL.tab === "disputes") loadTab("disputes");');
-  });
-
-  it("includes refund-only resolution controls and audited resolution evidence", async () => {
-    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
-    const html = await page.text();
-
-    expect(page.status).toBe(200);
-    expect(html).toContain('data-action="refund-resolve"');
-    expect(html).toContain('x.status === "refund-review"');
-    expect(html).toContain('x.status === "refund-manual"');
-    expect(html).toContain("Accept provider refund");
-    expect(html).toContain("Allow retry");
-    expect(html).toContain("Complete manual refund");
-    expect(html).toContain("Resolution action");
-    expect(html).toContain("Resolution status");
-    expect(html).toContain("Evidence ref");
-    expect(html).toContain("Resolved by");
-    expect(html).toContain("Resolved at");
-    expect(html).toContain('/ops/api/admin/refunds/');
-  });
-
-  it("includes provider-status sync only for in-flight dispatches with confirmation and reload feedback", async () => {
-    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
-    const html = await page.text();
-
-    expect(page.status).toBe(200);
-    expect(html).toContain('x.status === "sent" || x.status === "queued"');
-    expect(html).toContain('data-action="dispatch-sync"');
-    expect(html).toContain("Sync provider status");
-    expect(html).toContain('x.status === "failed" || x.status === "pending"');
-    expect(html).toContain('data-action="dispatch-replay"');
-    expect(html).toContain("does not create a new transfer");
-    expect(html).toContain("t.disabled = true");
-    expect(html).toContain('/ops/api/admin/payments/');
-    expect(html).toContain('+ "/sync"');
-    expect(html).toContain("result.status");
-    expect(html).toContain('loadTab("payments")');
+    for (const path of ["/ops/auth/admin/list-users", "/ops/auth/admin/create-user", "/ops/auth/admin/set-role", "/ops/auth/admin/revoke-user-sessions"]) {
+      const listed = await app.fetch(new Request(`${BASE}${path}`, { method: path.endsWith("list-users") ? "GET" : "POST" }), env);
+      expect(listed.status).toBe(503);
+    }
+    const dangerous = await app.fetch(new Request(`${BASE}/ops/auth/admin/impersonate-user`, { method: "POST" }), env);
+    expect(dangerous.status).toBe(404);
   });
 });

@@ -18,7 +18,7 @@ function renderLayout(path: string) {
 describe("privacy notice", () => {
   it("publishes the canonical route and verified publication details", () => {
     expect(metadata.alternates).toEqual({ canonical: "https://www.marketruns.org/privacy" });
-    for (const detail of ["8 November 2026", "privacy-notice-v1", "Allegados Limited", "info@updates.marketruns.org"]) {
+    for (const detail of ["14 November 2026", "privacy-notice-v2", "Allegados Limited", "info@updates.marketruns.org"]) {
       expect(privacyHtml).toContain(detail);
       expect(notice).toContain(detail);
     }
@@ -35,6 +35,8 @@ describe("privacy notice", () => {
       "ArcFace",
       "1:1",
       "transit-only",
+      "seven days",
+      "90 days after run close",
       "one current enrollment selfie",
       "promptly deleted",
       "foreground-only",

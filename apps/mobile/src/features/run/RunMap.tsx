@@ -8,7 +8,7 @@ import { colors, s } from "../../ui";
  * destination, and the runner's live fix — everything the wire already
  * carries on the Run. react-native-maps is free and ships inside Expo Go
  * (Apple Maps on iOS, Google Maps on Android — no API keys). On web it
- * degrades to a summary card, since the demo's maps target the simulators.
+ * degrades to a summary card.
  */
 
 type MapsModule = typeof import("react-native-maps");

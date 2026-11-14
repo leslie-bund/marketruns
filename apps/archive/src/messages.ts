@@ -1,5 +1,6 @@
 import {
   CartRetiredSchema,
+  IntentExpiredSchema,
   ProductRetiredSchema,
   RunRetiredSchema,
   RunStartedSchema,
@@ -8,6 +9,7 @@ import {
 import { z } from "zod";
 
 const ArchiveMessageSchema = ProductRetiredSchema
+  .or(IntentExpiredSchema)
   .or(CartRetiredSchema)
   .or(RunStartedSchema)
   .or(RunRetiredSchema)

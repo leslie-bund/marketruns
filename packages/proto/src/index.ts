@@ -49,6 +49,7 @@ export * from "./participant.js";
 export * from "./archive.js";
 export * from "./payments.js";
 export * from "./admin.js";
+export * from "./history.js";
 export * from "./auth.js";
 export * from "./registry.js";
 export * from "./notifications.js";

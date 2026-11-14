@@ -8,3 +8,11 @@ export function betterAuth() {
 export function drizzleAdapter() {
   throw new Error("Better Auth is not available in the legacy workerd test stub");
 }
+
+export function admin() {
+  return { id: "admin" };
+}
+
+export function magicLink() {
+  return { id: "magic-link" };
+}

@@ -2,6 +2,7 @@ import { Link, useLocalSearchParams } from "expo-router";
 import { Image, Text, View } from "react-native";
 import { participantHeaders, productCaptureUrl, sessionHeaders } from "../../src/api";
 import { useBuyerProducts, useMyIntents } from "../../src/features/buyer";
+import { ProductVideo } from "../../src/features/product-video";
 import { Button, Card, Page, Pill, Section, colors, money, s } from "../../src/ui";
 
 function minutesLeft(expiresAt: number): number {
@@ -35,6 +36,7 @@ export default function Products() {
                 <Text style={s.body}>{product.sellerName}</Text>
               </View>
             </View>
+            {product.videoCaptureRef ? <ProductVideo uri={productCaptureUrl(product.id, "video")} /> : null}
             <Text style={s.muted}>{product.exchangePoint}</Text>
             <Text style={{ color: colors.green, fontSize: 21, fontWeight: "800" }}>{money(product.priceKobo)}</Text>
             <Link href={{ pathname: "/buyer/negotiation", params: { productId: product.id } }} asChild>

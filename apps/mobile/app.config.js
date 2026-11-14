@@ -56,6 +56,7 @@ module.exports = () => {
 
   return {
     ...base,
+    plugins: [...new Set([...(base.plugins ?? []), "expo-video"])],
     ios: {
       ...base.ios,
       bundleIdentifier: base.ios?.bundleIdentifier || "ng.marketruns.app",

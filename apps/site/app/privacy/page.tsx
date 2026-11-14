@@ -41,8 +41,8 @@ export default function PrivacyPage() {
           identity, marketplace, payment, and delivery services in Nigeria.
         </p>
         <dl className="privacy-meta">
-          <div><dt>Effective date</dt><dd>8 November 2026</dd></div>
-          <div><dt>Notice version</dt><dd><code>privacy-notice-v1</code></dd></div>
+          <div><dt>Effective date</dt><dd>14 November 2026</dd></div>
+          <div><dt>Notice version</dt><dd><code>privacy-notice-v2</code></dd></div>
           <div><dt>Controller</dt><dd>Allegados Limited</dd></div>
           <div><dt>Privacy, security &amp; rights</dt><dd><ContactLink /></dd></div>
         </dl>
@@ -109,6 +109,7 @@ export default function PrivacyPage() {
                   <tr><th scope="row">Verified identity</th><td>Verified legal name, verification status, BVN/NIN-derived keyed hash, provider references, and verification outcomes</td><td>Verify identity, meet applicable requirements, prevent duplicate or fraudulent accounts, and support recovery</td></tr>
                   <tr><th scope="row">Contact</th><td>Email address and support correspondence</td><td>Send early-access, service, and security messages; respond to enquiries; and resolve disputes</td></tr>
                   <tr><th scope="row">Marketplace</th><td>Intents, offers, negotiations, carts, shop items, stores, market activity, reputation signals, and seller presence</td><td>Match buyers and sellers, operate markets, coordinate checkout, and maintain marketplace integrity</td></tr>
+                  <tr><th scope="row">Product and intent media</th><td>Fresh camera photos and videos of up to 15 seconds, capture references, retention deadlines, and hold/deletion records</td><td>Show what the buyer needs or seller offers, support accurate-description and non-delivery review, and investigate incidents</td></tr>
                   <tr><th scope="row">Payment and payout</th><td>Transaction references, amounts, currency, provider-returned payment-method details, hold/refund/payout status, seller payout-account details, and settlement records</td><td>Confirm holds, calculate settlement, process refunds and payouts, reconcile accounts, and investigate fraud or disputes</td></tr>
                   <tr><th scope="row">Location and run</th><td>Plus Codes, muster points, pickup and drop-off coordinates, route or floor-rate estimates, runner location, timestamps, and run status</td><td>Coordinate collection and delivery, show progress, estimate delivery charges, protect participants, and investigate incidents</td></tr>
                   <tr><th scope="row">Handoff and dispute</th><td>One-time QR challenge/scan records, handoff photographs, capture references, timestamps, dispute reasons, and supporting records</td><td>Confirm exchanges, establish chain of custody, resolve disputes, and protect against fraudulent claims</td></tr>
@@ -259,6 +260,7 @@ export default function PrivacyPage() {
             <ul>
               <li>The current ArcFace embedding and one approved enrollment selfie are kept for ongoing face authentication and replaced through successful re-enrollment, subject to an approved deletion/de-identification request and applicable exceptions.</li>
               <li>Login and recovery captures are transit-only. Pending enrollment captures are deleted promptly on failure, rejection, expiry, abandonment, or another terminal failure.</li>
+              <li>Product and intent media remain private. Expired intents and unaccepted products are deleted after seven days. Sold-product media is deleted 90 days after run close, with a 97-day backstop if no close event has arrived. A documented incident/legal hold can pause deletion of a specific item; releasing it restores the existing deadline. Scheduled cleanup deletes the bytes, and media metadata remains.</li>
               <li>Run, payment, settlement, refund, payout, and dispute records may need to remain after an account request for lawful financial, fraud-prevention, dispute, or legal purposes.</li>
               <li>Operational logs, temporary files, and cached copies are removed under schedules appropriate to their purpose and sensitivity.</li>
             </ul>

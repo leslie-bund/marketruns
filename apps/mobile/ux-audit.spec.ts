@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 const evidence = "test-results/ux";
 
-test("overview, role homes, and representative forms fit mobile without browser errors", async ({ page }) => {
+test("public launch, markets, and onboarding fit mobile without browser errors", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
@@ -23,17 +23,8 @@ test("overview, role homes, and representative forms fit mobile without browser 
     await page.screenshot({ path: `${evidence}/${name}.png`, fullPage: true });
   };
 
-  await inspect("/", "launch", "Explore as (demo)");
-  await page.getByText("Buyer", { exact: true }).click();
-  await expect(page.getByText("Choose a market for buyer")).toBeVisible();
-  await page.screenshot({ path: `${evidence}/markets.png`, fullPage: true });
-
-  await inspect("/buyer", "buyer", "Your errands");
-  await inspect("/seller", "seller", "Join your market");
-  await inspect("/seller/join", "seller-join", "Create your Store");
-  await inspect("/runner", "runner", "Available to claim");
-  await inspect("/buyer/post", "post-intent", "What do you need?");
-  await inspect("/buyer/checkout", "checkout", "Delivery");
+  await inspect("/", "launch", "Market Runs");
+  await inspect("/markets", "markets", "Markets");
   await inspect("/onboarding", "onboarding", "Who are you?");
 
   console.log("BROWSER_ERRORS", JSON.stringify(errors));

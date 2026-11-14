@@ -2,9 +2,8 @@ import { useRef, useState } from "react";
 import { router } from "expo-router";
 import { Alert, Platform, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { DEV_FACE_IMAGE_BASE64, captureFaceSequence, getParticipant, recoverDevice, setActiveParticipant, useActiveParticipant } from "../src/api";
+import { captureFaceSequence, getParticipant, recoverDevice, setActiveParticipant, useActiveParticipant } from "../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, s } from "../src/ui";
-import { devDemoMode } from "../src/api/dev-mode";
 
 /** Self-service recovery: participant id + fresh liveness + 1:1 match. */
 export default function DeviceReset() {
@@ -32,7 +31,6 @@ export default function DeviceReset() {
   };
   const capture = async () => { try { await submit(await captureFaceSequence(camera)); }
     catch (error) { Alert.alert("Capture failed", error instanceof Error ? error.message : String(error)); } };
-  const devCapture = { image: DEV_FACE_IMAGE_BASE64, livenessImages: Array(7).fill(DEV_FACE_IMAGE_BASE64) as string[] };
 
   return (
     <Page eyebrow="DEVICE RECOVERY" title="Prove it’s you">
@@ -47,7 +45,6 @@ export default function DeviceReset() {
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 220, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>
           <Button title={busy ? "Recovering…" : "Capture 7 frames and recover"} onPress={() => { if (consented && !busy) void capture(); }} />
-          {devDemoMode ? <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} /> : null}
         </>}
       </Section>
       <Button title="Back" secondary onPress={() => router.back()} />

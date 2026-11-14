@@ -4,6 +4,7 @@ import type { Context } from "hono";
 import {
   AdminListSchema,
   AdminRunEntrySchema,
+  ArchiveQueueResponseSchema,
   DisputeViewSchema,
   LedgerViewSchema,
   OpsHealthSchema,
@@ -11,6 +12,7 @@ import {
   PaymentHoldViewSchema,
   PaymentRecoveryItemSchema,
   PaymentRefundViewSchema,
+  RetainedMediaViewSchema,
   SettlementViewSchema,
 } from "@market-runs/proto";
 import type { Env } from "../config/env.js";
@@ -18,6 +20,7 @@ import { errorResponse } from "../do/runtime/index.js";
 import { correlationHeaders } from "../app/middleware/request-id.js";
 import { paymentsAuthConfigured, paymentsServiceHeaders } from "../config/payments-auth.js";
 import { requireOpsRole } from "./auth.js";
+import { auditOps } from "./audit.js";
 
 /** Dev default for the payments worker (wrangler dev of apps/payments); override with PAYMENTS_URL. */
 const PAYMENTS_URL_DEFAULT = "http://localhost:8790";
@@ -64,6 +67,10 @@ export function archiveAdminRoutes(): Hono<{ Bindings: Env }> {
   app.get("/admin/settlements", (c) => proxyArchive(c, "/admin/settlements", AdminListSchema(SettlementViewSchema)));
   app.get("/admin/ledger", (c) => proxyArchive(c, "/admin/ledger", AdminListSchema(LedgerViewSchema)));
   app.get("/admin/ops-health", (c) => proxyArchive(c, "/admin/ops-health", OpsHealthSchema));
+  app.get("/admin/archive-queue", (c) => proxyArchive(c, "/admin/archive-queue", ArchiveQueueResponseSchema));
+  app.get("/admin/retained-media", (c) => proxyArchive(c, "/admin/retained-media", AdminListSchema(RetainedMediaViewSchema)));
+  app.post("/admin/retained-media/:id/hold", requireOpsRole("admin"), (c) => retainedMediaHold(c, "hold"));
+  app.post("/admin/retained-media/:id/release", requireOpsRole("admin"), (c) => retainedMediaHold(c, "release"));
   // Second upstream: the payments worker owns its own dispatch table and
   // serves /dispatches itself — the console just proxies (PAYMENTS_URL, dev
   // default above). Same failure contract, payments-* error codes.
@@ -77,6 +84,28 @@ export function archiveAdminRoutes(): Hono<{ Bindings: Env }> {
   app.get("/admin/refunds", (c) => proxyPayments(c, "/payments/refunds", AdminListSchema(PaymentRefundViewSchema)));
 
   return app;
+}
+
+async function retainedMediaHold(c: Context<{ Bindings: Env }>, action: "hold" | "release"): Promise<Response> {
+  const id = decodeURIComponent(c.req.param("id") ?? "");
+  const input = action === "hold"
+    ? z.object({ reason: z.string().trim().min(1).max(500) }).safeParse(await c.req.json().catch(() => null))
+    : null;
+  if (input && !input.success) return errorResponse(400, "invalid-body", "a hold reason is required");
+  const actor = c.get("opsIdentity");
+  const response = await proxyArchive(c, `/admin/retained-media/${encodeURIComponent(id)}/${action}`, z.object({ media: RetainedMediaViewSchema }), {
+    body: action === "hold" && input ? { reason: input.data.reason, heldBy: actor.email } : {},
+  });
+  if (response.ok) {
+    await auditOps(c, {
+      action: `retained-media.${action}`,
+      entityType: "retained-media",
+      entityId: id,
+      summary: `${action === "hold" ? "Held" : "Released"} retired media ${id}`,
+      metadata: action === "hold" && input ? { reason: input.data.reason } : {},
+    });
+  }
+  return response;
 }
 
 /** Forward the request (query string included) to the payments worker and validate its 2xx body. */
@@ -93,7 +122,7 @@ async function proxyPayments<S extends z.ZodTypeAny>(
   target.search = new URL(c.req.url).search;
   let upstream: Response;
   try {
-    upstream = await fetch(target, { headers: paymentsServiceHeaders(c.env, correlationHeaders(c)) });
+    upstream = await (c.env.PAYMENTS_SERVICE ?? { fetch }).fetch(target, { headers: paymentsServiceHeaders(c.env, correlationHeaders(c)) });
   } catch {
     return errorResponse(503, "payments-unavailable", `payments service at ${base} did not respond`);
   }
@@ -120,6 +149,7 @@ async function proxyArchive<S extends z.ZodTypeAny>(
   c: Context<{ Bindings: Env }>,
   path: string,
   schema: S,
+  options?: { body: unknown },
 ): Promise<Response> {
   if (!c.env.OPS_ARCHIVE_URL) {
     return errorResponse(503, "archive-unavailable", "OPS_ARCHIVE_URL is not configured on the edge worker");
@@ -128,10 +158,13 @@ async function proxyArchive<S extends z.ZodTypeAny>(
   target.search = new URL(c.req.url).search;
   let upstream: Response;
   try {
-    upstream = await fetch(target, {
+    upstream = await (c.env.ARCHIVE_SERVICE ?? { fetch }).fetch(target, {
+      method: options ? "POST" : "GET",
       headers: correlationHeaders(c, {
+        ...(options ? { "content-type": "application/json" } : {}),
         ...(c.env.ARCHIVE_INTERNAL_TOKEN ? { "x-archive-internal": c.env.ARCHIVE_INTERNAL_TOKEN } : {}),
       }),
+      ...(options ? { body: JSON.stringify(options.body) } : {}),
     });
   } catch {
     return errorResponse(503, "archive-unavailable", `archive service at ${c.env.OPS_ARCHIVE_URL} did not respond`);

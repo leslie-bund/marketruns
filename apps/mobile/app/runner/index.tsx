@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Text } from "react-native";
-import { buyerIdForRun, claimRun, finalDelivery, getDeviceLocationFix, initiateHandoff, locationTick, identities, newId } from "../../src/api";
+import { buyerIdForRun, claimRun, finalDelivery, getDeviceLocationFix, initiateHandoff, newId } from "../../src/api";
 import { canRunnerMutate, HandoffList, RunMap, StopList, TripSummaryCard, useRunnerLocationStream, useRunnerPool } from "../../src/features/run";
 import { PayoutAccountCard } from "../../src/features/seller";
 import { useActiveMarket, useActiveParticipant } from "../../src/api";
 import { Button, Card, Page, Pill, Section, s } from "../../src/ui";
-import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function RunnerHome() {
   const { runId } = useLocalSearchParams<{ runId?: string }>();
@@ -15,15 +14,13 @@ export default function RunnerHome() {
   const [gpsWanted, setGpsWanted] = useState(false);
   const market = useActiveMarket();
   const { participant } = useActiveParticipant();
-  const runnerId = participant?.id ?? identities.runner.id;
+  const runnerId = participant?.id ?? "";
   const current = run.run;
   const claimed = current ? canRunnerMutate(current, runnerId) : false;
   const gps = useRunnerLocationStream(gpsWanted && claimed && current ? current.id : null);
-  const payoutAccount = (
-    <Section title="Payouts">
-      <PayoutAccountCard participantId={runnerId} recipientRole="runner" />
-    </Section>
-  );
+  const payoutAccount = participant ? (
+    <Section title="Payouts"><PayoutAccountCard participantId={participant.id} recipientRole="runner" /></Section>
+  ) : null;
 
   const act = (work: () => Promise<unknown>, label: string) => async () => {
     setBusy(true);
@@ -126,7 +123,6 @@ export default function RunnerHome() {
       ) : null}
       <Button title={gps.sharing ? "Live location ON — stop sharing" : "Share live location (GPS)"} secondary={gps.sharing} onPress={() => setGpsWanted((wanted) => !wanted)} />
       {gps.error ? <Text style={s.muted}>{gps.error}</Text> : null}
-      {devDemoMode && !gps.sharing ? <Button title="Location tick (dev)" secondary onPress={act(() => locationTick(current.id, 6.4541, 3.3947), "Location failed")} /> : null}
       {allCollected && deliveryHandoff?.status === "confirmed" && current.status !== "delivered" ? <Button title="Final delivery" onPress={act(() => finalDelivery(current.id), "Final delivery refused")} /> : null}
       {payoutAccount}
       {queue}

@@ -16,7 +16,5 @@ export function preferredRunnerRunId(runs: ActiveRun[]): string | null {
 /** Client-side command gate; the RunDO remains the authoritative atomic gate. */
 export function canRunnerMutate(run: Run, participantId: string): boolean {
   if (run.status === "unassigned") return false;
-  if (run.runnerId) return run.runnerId === participantId;
-  // Legacy header-auth demo runs predate runnerId on the wire.
-  return participantId === "runner:internal";
+  return run.runnerId === participantId;
 }

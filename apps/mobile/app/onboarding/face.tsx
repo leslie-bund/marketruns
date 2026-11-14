@@ -3,11 +3,10 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Platform, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import {
-  DEV_FACE_IMAGE_BASE64, awaitFaceJob, captureFaceSequence, confirmDisplayName, enrollFace,
+  awaitFaceJob, captureFaceSequence, confirmDisplayName, enrollFace,
   isFaceJobPending, registerDeviceKey, useActiveParticipant,
 } from "../../src/api";
 import { Button, Card, Field, Label, Page, Section, s } from "../../src/ui";
-import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function OnboardingFace() {
   const params = useLocalSearchParams<{ role?: string; enrollmentProof?: string; docType?: string; docNumber?: string }>();
@@ -45,7 +44,6 @@ export default function OnboardingFace() {
     catch (error) { Alert.alert("Could not confirm name", error instanceof Error ? error.message : String(error)); }
   };
   if (!participant || !params.enrollmentProof) return <Page eyebrow="ONBOARDING" title="Enrollment proof required"><Card><Text style={s.body}>The edge must return a short-lived enrollmentProof from verified onboarding. Restart KYC after that integration is enabled.</Text></Card></Page>;
-  const devCapture = { image: DEV_FACE_IMAGE_BASE64, livenessImages: Array(7).fill(DEV_FACE_IMAGE_BASE64) as string[] };
   return (
     <Page eyebrow={`${role.toUpperCase()} · SIGN-IN`} title="Set up face sign-in">
       {!enrolled ? <Section title="Consent and seven-frame capture">
@@ -54,7 +52,6 @@ export default function OnboardingFace() {
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>
           <Button title={busy ? "Verifying…" : "Capture 7 frames and enroll"} onPress={() => { if (consented && !busy) void capture(); }} />
-          {devDemoMode ? <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} /> : null}
         </>}
       </Section> : <Section title="Confirm your display name">
         <Label>Vendor legal name may prefill this; your verified legal name will not change.</Label>

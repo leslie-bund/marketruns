@@ -3,6 +3,8 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Text, View } from "react-native";
 import { acceptProduct, buyerOffer, getProduct, useLiveEvents, usePoll } from "../../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, money, s, timeAgo } from "../../src/ui";
+import { ProductVideo } from "../../src/features/product-video";
+import { productCaptureUrl } from "../../src/api";
 
 /**
  * The 1:1 negotiation (ADR-0002): one buyer, one seller, one product. The
@@ -82,6 +84,8 @@ export default function NegotiationThread() {
           </View>
         </Card>
       </Section>
+
+      {current?.videoCaptureRef ? <Section title="Product video"><ProductVideo uri={productCaptureUrl(current.id, "video")} /></Section> : null}
 
       <Section title="Price history">
         {history.length === 0 ? <Card><Text style={s.muted}>No moves yet.</Text></Card> : null}

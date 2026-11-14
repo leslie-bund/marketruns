@@ -16,6 +16,13 @@ function withPaymentsToken(): Env {
   }) as Env;
 }
 
+function withArchiveToken(): Env {
+  return new Proxy(bindings, {
+    get: (target, prop, receiver) =>
+      prop === "ARCHIVE_INTERNAL_TOKEN" ? INTERNAL_TOKEN : Reflect.get(target, prop, receiver),
+  }) as Env;
+}
+
 const recoveryPayload = {
   items: [
     {
@@ -125,48 +132,48 @@ describe("ops admin recovery proxy", () => {
     expect(response.status).toBe(403);
     expect((await readJson(response)).error).toBe("forbidden");
   });
-});
 
-describe("ops Recovery tab", () => {
-  it("renders grouped run, market, issue, and action values through escaping helpers", async () => {
-    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
-    const html = await page.text();
+  it("lets only admins hold retained media and forwards the audited actor", async () => {
+    const media = {
+      id: "product:1:image", subjectType: "product", subjectId: "1",
+      captureRef: "r2://archive/products/captures/1.jpg", objectKey: "products/captures/1.jpg",
+      mediaKind: "image", ownerId: "seller:1", cartId: null, runId: null, status: "held",
+      retiredAt: 1_700_000_000_000, deleteAfter: 1_700_000_100_000,
+      holdReason: "incident review", heldBy: "admin@example.test", heldAt: 1_700_000_000_000,
+      lastError: null, deletedAt: null,
+    };
+    let requestBody = "";
+    let seenHeaders: Record<string, string> | undefined;
+    fetchMock.get("http://localhost:8788").intercept({
+      path: "/admin/retained-media/product%3A1%3Aimage/hold", method: "POST",
+    }).reply(200, async (opts) => {
+      requestBody = String(opts.body);
+      seenHeaders = opts.headers as Record<string, string>;
+      return JSON.stringify({ media });
+    }, { headers: { "content-type": "application/json" } });
 
-    expect(page.status).toBe(200);
-    expect(html).toContain('{ id: "recovery", label: "Recovery" }');
-    expect(html).toContain("renderRecoveryItem");
-    expect(html).toContain("esc(x.runId)");
-    expect(html).toContain("esc(x.market)");
-    expect(html).toContain("esc(x.settlementRecordId)");
-    expect(html).toContain("esc(x.buyerId)");
-    expect(html).toContain("esc(x.runnerId)");
-    expect(html).toContain("esc(issue.kind)");
-    expect(html).toContain("statusPill(issue.status)");
-    expect(html).toContain("esc(issue.id)");
-    expect(html).toContain("esc(money(issue.amountKobo))");
-    expect(html).toContain("esc(timeAgo(issue.updatedAt))");
-    expect(html).toContain("esc(action.targetId)");
-    expect(html).toContain("All settlements clear");
-  });
+    const app = new Hono<{ Bindings: Env }>();
+    app.use("*", async (c, next) => {
+      c.set("opsIdentity", { id: "ops:admin", email: "admin@example.test", name: "Admin", role: "admin", mustChangePassword: false });
+      await next();
+    });
+    app.route("/ops/api", archiveAdminRoutes());
+    const response = await app.fetch(new Request(`${BASE}/ops/api/admin/retained-media/product%3A1%3Aimage/hold`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason: "incident review" }),
+    }), withArchiveToken());
+    expect(response.status).toBe(200);
+    expect(JSON.parse(requestBody)).toEqual({ reason: "incident review", heldBy: "admin@example.test" });
+    expect(seenHeaders?.["x-archive-internal"]).toBe(INTERNAL_TOKEN);
 
-  it("maps every supplied action to the existing admin endpoint with confirmation, errors, and Recovery reload", async () => {
-    const page = await createApp().fetch(new Request(`${BASE}/ops`), bindings);
-    const html = await page.text();
-
-    expect(page.status).toBe(200);
-    for (const action of ["replay-dispatch", "sync-dispatch", "resolve-refund", "redrive-settlement"]) {
-      expect(html).toContain(action);
-    }
-    expect(html).toContain('"/ops/api/admin/payments/"');
-    expect(html).toContain('"/replay"');
-    expect(html).toContain('"/sync"');
-    expect(html).toContain('"/ops/api/admin/refunds/"');
-    expect(html).toContain('"/resolution"');
-    expect(html).toContain('"/ops/api/admin/settlements/"');
-    expect(html).toContain('"/redrive"');
-    expect(html).toContain("window.confirm");
-    expect(html).toContain('resolveRefund(t.getAttribute("data-id"), t, "recovery")');
-    expect(html).toContain('loadTab("recovery")');
-    expect(html).toContain("recovery action failed");
+    const deniedApp = new Hono<{ Bindings: Env }>();
+    deniedApp.use("*", async (c, next) => {
+      c.set("opsIdentity", { id: "ops:operator", email: "operator@example.test", name: "Operator", role: "operator", mustChangePassword: false });
+      await next();
+    });
+    deniedApp.route("/ops/api", archiveAdminRoutes());
+    const denied = await deniedApp.fetch(new Request(`${BASE}/ops/api/admin/retained-media/product%3A1%3Aimage/hold`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason: "incident review" }),
+    }), withPaymentsToken());
+    expect(denied.status).toBe(403);
   });
 });

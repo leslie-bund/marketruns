@@ -25,6 +25,8 @@ export const ProductRetiredSchema = z.object({
   /** The product's market and buyer (when the intent carried one) for archive attribution. */
   market: z.string().min(1).optional(),
   buyerId: z.string().min(1).optional(),
+  /** Edge-derived cart for accepted products; absent on unaccepted retirement. */
+  cartId: z.string().min(1).optional(),
   /** Correlation id of the triggering request, when the retirement ran inside one. Append-only. */
   requestId: RequestIdSchema.optional(),
 });

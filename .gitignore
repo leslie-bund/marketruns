@@ -14,3 +14,10 @@ ops-test*.log
 **/test-results/
 # Large ONNX weights are baked into private container images, never committed.
 apps/biometrics/models/
+tmp
+.smoke
+ops-console-artifacts
+ios/
+android/
+.vercel
+.env*

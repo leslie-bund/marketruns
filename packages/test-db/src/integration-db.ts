@@ -184,17 +184,14 @@ export async function resolveIntegrationDatabase({ envVar }: IntegrationDatabase
 
   if (override) {
     await probe(override);
-    if (!(await waitForMigrations(override, MIGRATION_GRACE_MS))) {
-      await applyMigrations(override);
-    }
+    await waitForMigrations(override, MIGRATION_GRACE_MS);
+    await applyMigrations(override);
     return override;
   }
 
   await ensureContainer();
   await ensureTestDatabase();
   await probe(TEST_DATABASE_URL);
-  if ((await migrationCount(TEST_DATABASE_URL)) === 0) {
-    await applyMigrations(TEST_DATABASE_URL);
-  }
+  await applyMigrations(TEST_DATABASE_URL);
   return TEST_DATABASE_URL;
 }

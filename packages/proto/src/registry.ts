@@ -27,6 +27,12 @@ export type MarketRegistryUpsert = z.infer<typeof MarketRegistryUpsertSchema>;
 export const MarketRegistryResponseSchema = z.object({ markets: z.array(MarketRegistryEntrySchema) });
 export type MarketRegistryResponse = z.infer<typeof MarketRegistryResponseSchema>;
 
+/** Public, minimal projection for the mobile market picker; no geofence or operator data. */
+export const MarketCatalogEntrySchema = MarketRegistryEntrySchema.omit({ geofence: true });
+export type MarketCatalogEntry = z.infer<typeof MarketCatalogEntrySchema>;
+export const MarketCatalogResponseSchema = z.object({ markets: z.array(MarketCatalogEntrySchema) });
+export type MarketCatalogResponse = z.infer<typeof MarketCatalogResponseSchema>;
+
 export const PRESENCE_TTL_MS = 60_000;
 
 export interface SellerPresence {

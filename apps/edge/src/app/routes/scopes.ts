@@ -18,6 +18,7 @@ import { correlationHeaders } from "../middleware/request-id.js";
 import { coreRegistry } from "../../registry/index.js";
 import { requireTransactionRole } from "../middleware/participant.js";
 import { runForParticipant } from "../run-access.js";
+import { captureObjectKey } from "../../media.js";
 
 /**
  * The per-object scopes: /products/:productId, /carts/:cartId, /runs/:runId.
@@ -75,10 +76,12 @@ export function productsRoute(): Hono<{ Bindings: Env }> {
   app.get("/:productId/capture", async (c) => {
     const access = await productForParticipant(c);
     if ("denied" in access) return access.denied;
-    const ref = access.body.product.photoCaptureRef;
-    const prefix = "r2://archive/captures/";
-    if (!ref?.startsWith(prefix)) return errorResponse(404, "not-found", "product has no capture");
-    const object = await c.env.ARCHIVE_BUCKET.get(ref.slice("r2://archive/".length));
+    const media = c.req.query("media") ?? "photo";
+    if (media !== "photo" && media !== "video") return errorResponse(400, "invalid-query", "media must be photo or video");
+    const ref = media === "video" ? access.body.product.videoCaptureRef : access.body.product.photoCaptureRef;
+    const key = ref ? captureObjectKey(ref) : null;
+    if (!key) return errorResponse(404, "not-found", "product has no capture");
+    const object = await c.env.ARCHIVE_BUCKET.get(key);
     if (!object) return errorResponse(404, "not-found", "unknown capture");
     return new Response(object.body, {
       headers: {

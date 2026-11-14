@@ -1,6 +1,6 @@
 # Runbook — staging provisioning, deployment, go/no-go, and rollback
 
-This is the followable-cold procedure for a repeatable **staging** deployment. The default rehearsal posture is real Flutterwave **test-mode** payments plus hybrid identity: Smile ID **sandbox**, an externally deployed private biometrics service, and private identity-capture R2. The wizard applies migrations through `0018_audited_refund_resolutions`, provisions the archive/payment/notification queues and DLQs, archive and identity-capture R2, `MARKET_CONFIG` KV, and one shared Hyperdrive configuration, then deploys in the archive-first order required by ADR-0029.
+This is the followable-cold procedure for a repeatable **staging** deployment. The default rehearsal posture is real Flutterwave **test-mode** payments plus hybrid identity: Smile ID **sandbox**, an externally deployed private biometrics service, and private identity-capture R2. The wizard applies migrations through `0018_audited_refund_resolutions`, provisions the archive/payment/notification queues and DLQs, archive and identity-capture R2, and one shared Hyperdrive configuration, then deploys in the archive-first order required by ADR-0029.
 
 **OSRM remains out of scope:** staging edge leaves `OSRM_BASE_URL` unset so checkout uses static floor-rate estimates. `stub` payment/identity mode is available only for explicitly infrastructure-only validation. It is not approval for a real paid/hybrid rehearsal.
 
@@ -10,8 +10,8 @@ Collect these before starting. The wizard opens the relevant service dashboards 
 
 | Input | Required form / destination |
 | --- | --- |
-| Cloudflare access | Wrangler login with permission to manage Workers, Queues, R2, KV, Hyperdrive, secrets, and deployments in the staging account |
-| Public Worker routes | Five **distinct**, non-local HTTPS origins, with no URL paths: edge, archive, identity, payments, notifications. DNS/custom routes must already map them to the staging Workers. Edge is also `OPS_BASE_URL`. |
+| Cloudflare access | Wrangler login with permission to manage Workers, Queues, R2, Hyperdrive, secrets, and deployments in the staging account |
+| Public Worker routes | Five **distinct**, non-local HTTPS Worker origins, with no URL paths: edge, archive, identity, payments, notifications, plus a separate reachable `OPS_DASHBOARD_URL`. Use `https://ops.marketruns.org` once its Cloudflare Custom Domain is active; until then use `https://market-runs-ops-staging.leslie-bund.workers.dev` so admin magic links remain reachable. Edge is also `OPS_BASE_URL`; the dashboard origin is embedded in admin magic links. |
 | Launch market | Exact market name. `Balogun` and `Computer Village` have built-in geography; any other name also needs center latitude, center longitude, and a positive integer radius in meters. |
 | Neon | **Staging** pooled Postgres connection string. Used directly for migrations/CLI and by Hyperdrive at runtime. Never use the production database. |
 | Ops and document auth | `OPS_AUTH_SECRET` (at least 32 characters) and `ID_DOCUMENT_HMAC_SECRET` |
@@ -35,24 +35,23 @@ From the repository root:
 bash infra/staging-setup.sh
 ```
 
-Do not pipe the wizard's input or run it unattended. Its 16 stages are:
+Do not pipe the wizard's input or run it unattended. Its 15 stages are:
 
 1. Preflight and Wrangler authentication.
-2. Launch market/geofence and five distinct public HTTPS routes.
+2. Launch market/geofence, five distinct public Worker routes, and the dedicated ops dashboard origin.
 3. `stub` infrastructure-only or `flutterwave` paid-test posture. Paid mode selects `FACE_VERIFIER=hybrid`; stub selects payment and identity stubs.
 4. Smile ID sandbox callback/privacy configuration, hybrid public values and secrets, biometrics health, and explicit model/token/HTTPS confirmation.
 5. Neon and Hyperdrive.
 6. Six queues/DLQs, archive R2, and—only for hybrid—the private identity-capture R2 bucket.
-7. `MARKET_CONFIG` KV.
-8. Confirmed public staging TOML updates.
-9. Edge/identity auth secrets, including the three hybrid identity secrets when selected.
-10. Archive/notifications/payments shared service auth.
-11. Flutterwave and Resend secrets.
-12. Migrations through `0018` and launch-market seed.
-13. One-time first ops admin bootstrap.
-14. Paid mobile/EAS and webhook configuration.
-15. Archive-first Worker deployment; external biometrics must already be running.
-16. Strict executable go/no-go and reconciliation.
+7. Confirmed public staging TOML updates.
+8. Edge/identity auth secrets, including the three hybrid identity secrets when selected.
+9. Archive/notifications/payments shared service auth.
+10. Flutterwave and Resend secrets.
+11. Migrations through `0018` and launch-market seed.
+12. One-time first ops admin bootstrap.
+13. Paid mobile/EAS and webhook configuration.
+14. Archive-first Worker deployment; external biometrics must already be running.
+15. Strict executable go/no-go and reconciliation.
 
 Existing resources are reused by name/id. Secret entry is hidden. Secret values are piped to `wrangler secret put`; they are never written to tracked TOML. On a re-run, Enter keeps an existing state-file value. To rotate a value, paste a replacement rather than accepting the current one.
 
@@ -65,7 +64,6 @@ Existing resources are reused by name/id. Secret entry is hidden. Secret values 
 | Notification queue / DLQ | `notification-events-staging` / `notification-events-dlq-staging` |
 | Marketplace evidence R2 | `market-runs-archive-staging` |
 | Identity captures R2 / binding | `market-runs-identity-captures-staging` / `IDENTITY_CAPTURES` on identity only |
-| KV title / binding | `market-runs-market-config-staging` / `MARKET_CONFIG` |
 | Hyperdrive / binding | `market-runs-staging` / `HYPERDRIVE` on all five Workers |
 
 Never attach a public bucket domain or public read route to identity captures. The bucket stores pending and enrolled normalized selfies under opaque identity-owned keys.
@@ -98,14 +96,14 @@ The wizard applies this matrix with `--env staging`. Shared values must match ex
 
 | Worker/service | Secrets or tokens |
 | --- | --- |
-| edge | `OPS_AUTH_SECRET`, `ID_DOCUMENT_HMAC_SECRET`, `ARCHIVE_INTERNAL_TOKEN`, `NOTIFICATION_INTERNAL_TOKEN`, `PAYMENTS_INTERNAL_TOKEN`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN` |
+| edge | `OPS_AUTH_SECRET`, `ID_DOCUMENT_HMAC_SECRET`, `ARCHIVE_INTERNAL_TOKEN`, `NOTIFICATION_INTERNAL_TOKEN`, `PAYMENTS_INTERNAL_TOKEN`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN`, `RESEND_API_KEY` |
 | archive | `ARCHIVE_INTERNAL_TOKEN` |
 | identity | `IDENTITY_ENCRYPTION_KEY`, `IDENTITY_SESSION_SECRET`, `IDENTITY_INTERNAL_TOKEN`; hybrid adds `SMILEID_PARTNER_ID`, `SMILEID_API_KEY`, `BIOMETRICS_SERVICE_TOKEN` |
 | payments | `PAYMENTS_INTERNAL_TOKEN`, `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_WEBHOOK_SECRET_HASH` |
 | notifications | `NOTIFICATION_INTERNAL_TOKEN`, `RESEND_API_KEY` |
 | external biometrics service | `BIOMETRICS_INTERNAL_TOKEN` must be **exactly the same value** as identity `BIOMETRICS_SERVICE_TOKEN` |
 
-`RESEND_FROM_EMAIL` is public Worker configuration, not a secret. `OPS_TOKEN` and `ALLOW_HEADER_AUTH=true` are local-development mechanisms and must not be enabled in staging. The biometrics token never belongs on edge, payments, notifications, or the mobile app.
+`RESEND_FROM_EMAIL` is public Worker configuration on edge and notifications, not a secret. Edge uses it only for existing-admin magic links; notifications uses it for participant delivery. `OPS_TOKEN` and `ALLOW_HEADER_AUTH=true` are local-development mechanisms and must not be enabled in staging. The biometrics token never belongs on edge, payments, notifications, or the mobile app.
 
 For a manual repair, use the matching config and let Wrangler prompt without echoing the value:
 
@@ -168,6 +166,8 @@ npx pnpm@9.15.4 --filter @market-runs/edge ops:seed-markets -- \
 
 For `Balogun` or `Computer Village`, omit all three geofence flags to use the built-in geography. For any custom market, supply all three. Re-running repairs registry geography without replacing runtime MarketDO configuration.
 
+After the first administrator exists, operators can instead onboard additional markets in the dedicated ops app: choose **Onboard market**, click the map or drag the marker to set the center, and set the radius with the numeric field or slider. Latitude/longitude inputs are the keyboard and tile-outage fallback. This calls the same audited `POST /ops/api/markets` route, applies the 08:00–18:00 registry hours plus existing launch rate/settlement defaults, and starts exchange and muster points empty. The Leaflet map loads public OpenStreetMap tiles and must retain the visible OpenStreetMap attribution; tile access requires external network connectivity. Use a simulated/intercepted response for UI tests so rehearsal testing does not create unintended registry entries.
+
 ## 7. First ops admin
 
 Run only when no operator exists; bootstrap closes permanently after the first user is created:
@@ -181,7 +181,7 @@ npx pnpm@9.15.4 --filter @market-runs/edge ops:bootstrap-admin -- \
   --email "$OPS_ADMIN_EMAIL" --password "$OPS_ADMIN_PASSWORD"
 ```
 
-Use a temporary password of at least 12 characters and enter it through the wizard's hidden prompt rather than placing it in shell history. After deployment, open `$EDGE_PUBLIC_URL/ops/login`, sign in, and complete the required password change. The go/no-go also requires at least one database user with role `admin` and verifies that anonymous `/ops/api/overview` access is rejected.
+Use a temporary password of at least 12 characters and enter it through the wizard's hidden prompt rather than placing it in shell history. After deployment, open the dedicated ops app at `https://ops.marketruns.org` (or `https://market-runs-ops-staging.leslie-bund.workers.dev`), sign in, and complete the required password change. The embedded edge fallback no longer exists. Existing admins can instead choose **Email me a sign-in link**: edge sends a ten-minute single-use link through Resend only for an existing admin address, with no self-registration or non-admin delivery. The current staging administrator is `founder@marketruns.org`; its password and Resend key are held only in staging secrets. The go/no-go also requires at least one database user with role `admin` and verifies that anonymous `/ops/api/overview` access is rejected.
 
 ## 8. Paid staging and mobile/EAS configuration
 
@@ -235,6 +235,15 @@ npx wrangler deploy --config infra/wrangler.edge.toml --env staging
 
 The archive deploys its canonical payment producer **before** edge. During a mixed-version rollout, temporary dual emission is idempotent. Reversing this order can create a payment-emission gap (ADR-0029). Do not remove or rewrite queue messages as part of deployment. Identity deploys after its external biometrics dependency is available; edge deploys last so the public callback/proxy plane lands after its owning Workers.
 
+Build and deploy the dedicated dashboard after edge:
+
+```bash
+npx pnpm@9.15.4 --filter @market-runs/ops build
+npx wrangler deploy --config apps/ops/wrangler.toml --env staging
+```
+
+`apps/ops/wrangler.toml` declares `ops.marketruns.org` with `custom_domain = true` and retains the `workers.dev` preview. When `marketruns.org` is an active Cloudflare zone in the same account, deployment creates its DNS record and certificate automatically; no manual CNAME is needed. Otherwise add the domain as a Cloudflare zone, change the registrar's nameservers to those assigned by Cloudflare, wait for the zone to become active, then redeploy. The dashboard Worker must be deployed after edge so magic-link verification and API proxying use the new auth contract.
+
 ## 10. Executable go/no-go
 
 Run from the repository root after deployment and ops login/password-change verification:
@@ -253,12 +262,12 @@ bash infra/staging-check.sh --allow-stub # infrastructure-only; never paid/hybri
 The default strict gate checks:
 
 - required state is present; paid mode uses Flutterwave **test** secret/public keys, `PAYMENTS_REQUIRED=true`, hybrid identity, and Smile ID sandbox;
-- all five public Worker origins are distinct; callback, privacy, biometrics, identity reconciliation, and other public values have the required HTTPS relationships;
-- staging TOML has no `example.com` or `set-with-wrangler` placeholders, has the expected public values and Hyperdrive/KV/capture bindings, and has no deployed header-auth fallback; the generator leaves the top-level identity cleanup cron untouched;
-- Cloudflare authentication and all six queues/DLQs, archive R2, hybrid capture R2, Hyperdrive, and KV exist;
-- every required secret **name** exists on each staging Worker, including all three hybrid identity secrets;
+- all five public Worker origins and the dedicated ops dashboard origin are distinct; callback, privacy, biometrics, identity reconciliation, and other public values have the required HTTPS relationships;
+- staging TOML has no `example.com` or `set-with-wrangler` placeholders, has the expected public values and Hyperdrive/capture bindings, and has no deployed header-auth fallback; the generator leaves the top-level identity cleanup cron untouched;
+- Cloudflare authentication and all six queues/DLQs, archive R2, hybrid capture R2, and Hyperdrive exist;
+- every required secret **name** exists on each staging Worker, including all three hybrid identity secrets and Resend on edge;
 - migration `0018` matches exactly, its schema exists, the launch market is seeded, and an ops admin exists;
-- all five HTTPS health routes succeed, payments reports the selected dispatcher, ops login loads, and anonymous ops API access is rejected;
+- all five HTTPS health routes succeed, payments reports the selected dispatcher, the dedicated ops dashboard loads, the retired edge login returns `404`, and anonymous ops API access is rejected;
 - archive internal reads reject anonymous/invalid credentials with `401`, and the valid shared credential reaches routing;
 - payments rejects anonymous/invalid bank-directory credentials; paid mode also loads `/payments/banks` through edge, proving the edge→payments service-auth path and provider directory call;
 - hybrid Smile ID callbacks through edge reject both missing and invalid signatures with exactly `401`; the privacy URL is reachable; biometrics reports its model version and rejects an invalid bearer token;
@@ -303,7 +312,7 @@ Rollback is a controlled traffic/code action, not permission to delete evidence.
    ```
 
 3. If required, roll back notifications, payments, identity, then archive, in that order, checking health and queue drain between steps. Do not roll archive back while leaving an edge version that depends on the newer archive contract. Keep the external biometrics service compatible with whichever identity version remains active.
-4. **Do not automatically reverse database migrations.** Migrations through `0018` are part of the deployed schema; use a reviewed forward migration for any schema correction. Never drop Neon tables, queues/DLQs, R2 evidence/captures, or KV to “clean up” an incident.
+4. **Do not automatically reverse database migrations.** Migrations through `0018` are part of the deployed schema; use a reviewed forward migration for any schema correction. Never drop Neon tables, queues/DLQs, or R2 evidence/captures to “clean up” an incident.
 5. To disable paid checkout without a code rollback, set staging edge `PAYMENTS_REQUIRED="false"` and payments `PAYMENT_DISPATCHER="stub"` through the confirmed public TOML workflow, redeploy payments then edge, and mark paid scenarios not tested. To disable hybrid identity as well, select `FACE_VERIFIER="stub"` through that infrastructure-only workflow and redeploy identity; this removes hybrid-only public vars but is not a data-deletion procedure. Existing holds/refunds and retained captures still require reconciliation and honest completion.
 6. Re-run `bash infra/staging-check.sh --allow-stub` for infrastructure recovery, run reconciliation, and keep strict paid/hybrid go/no-go blocked until Flutterwave test configuration, hybrid identity, and all money checks pass again.
 

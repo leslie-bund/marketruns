@@ -3,6 +3,8 @@ import { useLocalSearchParams } from "expo-router";
 import { Alert, Text, View } from "react-native";
 import { getProduct, sellerOffer, useLiveEvents, usePoll } from "../../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, money, s, timeAgo } from "../../src/ui";
+import { ProductVideo } from "../../src/features/product-video";
+import { productCaptureUrl } from "../../src/api";
 
 /** The seller's side of the 1:1 thread — same product, `by: "seller"` moves. */
 export default function SellerNegotiation() {
@@ -49,6 +51,8 @@ export default function SellerNegotiation() {
           </View>
         </Card>
       </Section>
+
+      {current?.videoCaptureRef ? <Section title="Product video"><ProductVideo uri={productCaptureUrl(current.id, "video")} /></Section> : null}
 
       <Section title="Price history">
         {history.length === 0 ? <Card><Text style={s.muted}>No moves yet.</Text></Card> : null}

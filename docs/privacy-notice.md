@@ -1,7 +1,7 @@
 # Market Runs Nigeria Privacy Notice
 
-- **Effective date:** 8 November 2026
-- **Notice version:** `privacy-notice-v1`
+- **Effective date:** 14 November 2026
+- **Notice version:** `privacy-notice-v2`
 - **Controller:** Allegados Limited
 - **Privacy, security, and rights contact:** [info@updates.marketruns.org](mailto:info@updates.marketruns.org)
 - **Published at:** [https://www.marketruns.org/privacy](https://www.marketruns.org/privacy)
@@ -35,6 +35,7 @@ The data we handle depends on your role and actions.
 | Verified identity data | Verified legal name, verification status, BVN/NIN-derived keyed hash, provider references, and verification outcomes | Verify identity, meet applicable requirements, prevent duplicate or fraudulent accounts, and support recovery |
 | Contact data | Email address and support correspondence | Send early-access, service, and security messages; respond to enquiries; and resolve disputes |
 | Marketplace data | Intents, offers, negotiations, carts, shop items, stores, market activity, reputation signals, and seller presence | Match buyers and sellers, operate markets, coordinate checkout, and maintain marketplace integrity |
+| Product and intent media | Fresh camera photos and videos of up to 15 seconds, capture references, retention deadlines, and hold/deletion records | Show what the buyer needs or seller offers, support accurate-description and non-delivery review, and investigate incidents |
 | Payment and payout data | Charge and transaction references, amounts, currency, payment-method details returned by the provider, hold/refund/payout status, seller payout-account details, and settlement records | Confirm holds, calculate settlement, execute or record refunds and payouts, reconcile accounts, and investigate fraud or disputes |
 | Location and run data | Plus Codes, muster points, pickup and drop-off coordinates, route or floor-rate estimates, runner location, timestamps, and run status | Coordinate collection and delivery, show run progress, estimate delivery charges, protect participants, and investigate incidents |
 | Handoff and dispute evidence | One-time QR challenge/scan records, handoff photographs, capture references, scan/confirmation timestamps, dispute reasons, and supporting records | Confirm exchanges, establish chain of custody, resolve disputes, and protect against fraudulent claims |
@@ -113,6 +114,7 @@ We keep different records only for as long as reasonably needed for the purposes
 
 - The current ArcFace embedding and one current approved enrollment selfie are kept for ongoing face authentication and replaced through successful re-enrollment, subject to an approved deletion/de-identification request and applicable exceptions.
 - Login and recovery captures are transit-only. Pending enrollment captures are deleted promptly on failure, rejection, expiry, abandonment, or another terminal failure.
+- Product and intent media remain private. Expired intents and unaccepted products are deleted after seven days. Sold-product media is deleted 90 days after run close, with a 97-day backstop if the close event has not arrived. A documented incident/legal hold can pause deletion of a specific item; releasing it restores the existing deadline. Scheduled cleanup performs deletion, and media metadata remains after byte deletion.
 - Run, payment, settlement, refund, payout, and dispute records may need to remain after an account request for lawful financial, fraud-prevention, dispute, or legal purposes.
 - Operational logs, temporary files, and cached copies are removed under schedules appropriate to their purpose and sensitivity.
 

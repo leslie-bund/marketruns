@@ -193,11 +193,11 @@ describe("end-to-end over the public HTTP surface", () => {
     expect(missing.status).toBe(404);
   });
 
-  it("serves the ops console HTML and the reputation proxy failure clearly", async () => {
+  it("retires embedded ops HTML and reports the reputation proxy failure clearly", async () => {
     const page = await getJson("/ops");
-    expect(page.status).toBe(200);
-    expect(page.headers.get("content-type")).toContain("text/html");
-    expect(await page.text()).toContain("Ops Console");
+    expect(page.status).toBe(404);
+    expect(page.headers.get("content-type")).toContain("application/json");
+    expect(await page.text()).not.toContain("<!doctype html");
 
     // With no archive service reachable this is a clear 503; in a dev
     // environment where one happens to be running (OPS_ARCHIVE_URL is a

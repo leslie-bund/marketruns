@@ -8,41 +8,25 @@ import { OpsSettleRequestSchema } from "../do/schemas.js";
 import { fetchInternal } from "../do/transport.js";
 import { cartIdForBuyer, runIdForCart } from "../config/ids.js";
 import { correlationHeaders } from "../app/middleware/request-id.js";
-import { OPS_CONSOLE_HTML } from "./html.js";
 import { archiveAdminRoutes } from "./archive-proxy.js";
 import { identityAdminRoutes } from "./identity-admin.js";
 import { managementRoutes } from "./management.js";
 import { requireOpsRole } from "./auth.js";
 import { auditOps, listOpsAudit } from "./audit.js";
-import { OPS_LOGIN_HTML } from "./login.js";
 import { telemetryRoutes } from "./telemetry.js";
 import { marketsAdminRoutes } from "./markets-admin.js";
 import { databaseConfigured } from "./db.js";
 import { paymentsAuthConfigured, paymentsServiceHeaders } from "../config/payments-auth.js";
 
 /**
- * Minimal ops console (ADR-0013), mounted at /ops. A single embedded HTML
- * page plus a small JSON API. The ONLY adjustment it exposes is the
- * settlement function — ops can pick a mode and dispute evidence shape,
- * never move money directly (ADR-0007).
- *
- * Auth: /ops/login is public; the console root and every /ops/api/* route run
- * behind the ops guard. Deployed environments require Better Auth. Only the
- * explicit local legacy mode accepts OPS_TOKEN as x-ops-token or ?token=.
+ * Operator JSON API mounted at /ops. The dedicated apps/ops Worker owns every
+ * HTML surface; the edge owns only authenticated operations and authorization.
+ * Settlement adjustments still choose a mode and evidence shape, never move
+ * money directly (ADR-0007).
  */
-export function opsLoginPage(): Response {
-  return new Response(OPS_LOGIN_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-}
-
 export function opsConsole(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
 
-  app.get("/login", opsLoginPage);
-  app.get("/", (c) => {
-    const identity = c.get("opsIdentity");
-    if (identity?.mustChangePassword) return c.redirect("/ops/login", 302);
-    return new Response(OPS_CONSOLE_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-  });
   app.get("/api/session", (c) => c.json({ operator: c.get("opsIdentity") }));
   app.get("/api/audit", listOpsAudit);
 
@@ -50,7 +34,9 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
   // capture reads intentionally do not recognize an ops token or browser session.
   app.get("/api/captures/:key{.+}", async (c) => {
     const key = decodeURIComponent(c.req.param("key"));
-    if (!key.startsWith("captures/")) return errorResponse(404, "not-found", "unknown capture");
+    if (!["captures/", "products/captures/", "intents/captures/", "evidence/runs/"].some((prefix) => key.startsWith(prefix))) {
+      return errorResponse(404, "not-found", "unknown capture");
+    }
     const object = await c.env.ARCHIVE_BUCKET.get(key);
     if (!object) return errorResponse(404, "not-found", "unknown capture");
     return new Response(object.body, {
@@ -111,7 +97,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
     if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
     const headers = paymentsServiceHeaders(c.env, correlationHeaders(c));
-    const response = await fetch(new URL(`/dispatches/${encodeURIComponent(id)}/replay`, base), { method: "POST", headers }).catch(() => null);
+    const response = await (c.env.PAYMENTS_SERVICE ?? { fetch }).fetch(new URL(`/dispatches/${encodeURIComponent(id)}/replay`, base), { method: "POST", headers }).catch(() => null);
     if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
     if (response.ok) await auditOps(c, { action: "payment-dispatch.replay", entityType: "payment-dispatch", entityId: id, summary: `Replayed failed dispatch ${id} through the existing dispatcher` });
     return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
@@ -122,7 +108,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
     if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
     const headers = paymentsServiceHeaders(c.env, correlationHeaders(c));
-    const response = await fetch(new URL(`/dispatches/${encodeURIComponent(id)}/sync`, base), { method: "POST", headers }).catch(() => null);
+    const response = await (c.env.PAYMENTS_SERVICE ?? { fetch }).fetch(new URL(`/dispatches/${encodeURIComponent(id)}/sync`, base), { method: "POST", headers }).catch(() => null);
     if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
     if (response.ok) await auditOps(c, { action: "payment-dispatch.sync", entityType: "payment-dispatch", entityId: id, summary: `Synced current provider status for dispatch ${id} without a new transfer` });
     return new Response(response.body, {
@@ -153,7 +139,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
     if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
     const headers = paymentsServiceHeaders(c.env, correlationHeaders(c, { "content-type": "application/json" }));
-    const response = await fetch(new URL(`/payments/refunds/${encodeURIComponent(id)}/resolution`, base), {
+    const response = await (c.env.PAYMENTS_SERVICE ?? { fetch }).fetch(new URL(`/payments/refunds/${encodeURIComponent(id)}/resolution`, base), {
       method: "POST",
       headers,
       body: JSON.stringify(request),
@@ -193,7 +179,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     const base = c.env.PAYMENTS_URL ?? "http://localhost:8790";
     if (!paymentsAuthConfigured(c.env)) return errorResponse(503, "payments-auth-unconfigured", "PAYMENTS_INTERNAL_TOKEN is required");
     const headers = paymentsServiceHeaders(c.env, correlationHeaders(c));
-    const response = await fetch(new URL(`/settlements/${encodeURIComponent(id)}/redrive`, base), { method: "POST", headers }).catch(() => null);
+    const response = await (c.env.PAYMENTS_SERVICE ?? { fetch }).fetch(new URL(`/settlements/${encodeURIComponent(id)}/redrive`, base), { method: "POST", headers }).catch(() => null);
     if (!response) return errorResponse(503, "payments-unavailable", "payments service did not respond");
     if (response.ok) await auditOps(c, { action: "settlement.redrive", entityType: "settlement", entityId: id, summary: `Re-drove payment execution for settlement ${id}` });
     return new Response(response.body, { status: response.status, headers: { "content-type": "application/json" } });
@@ -206,7 +192,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
     const target = new URL("/reputation", c.env.OPS_ARCHIVE_URL);
     target.search = new URL(c.req.url).search;
     try {
-      const upstream = await fetch(target, {
+      const upstream = await (c.env.ARCHIVE_SERVICE ?? { fetch }).fetch(target, {
         headers: correlationHeaders(c, {
           ...(c.env.ARCHIVE_INTERNAL_TOKEN ? { "x-archive-internal": c.env.ARCHIVE_INTERNAL_TOKEN } : {}),
         }),
@@ -226,7 +212,7 @@ export function opsConsole(): Hono<{ Bindings: Env }> {
   app.route("/api", archiveAdminRoutes());
   app.route("/api", identityAdminRoutes());
 
-  // Explicit no-database development keeps the original KV/DO market admin
+  // Explicit no-database development keeps the original DO market admin
   // usable. Deployed Better Auth always has Postgres and takes the audited
   // management routes below instead.
   const legacyMarkets = marketsAdminRoutes();

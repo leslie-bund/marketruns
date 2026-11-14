@@ -33,7 +33,7 @@ A named geographic zone that locals already recognize (e.g. Balogun, Computer Vi
 A seller's virtual storefront, registered to a particular market. A seller active in several markets has a store in each. The store's registration determines which market it trades in and which sellers an intent can reach.
 
 **Intent**:
-A buyer's expression of demand for specific goods, visible to stores whose shop items match it. An intent carries structured core attributes (item, quantity, price band) and an optional free-text note.
+A buyer's expression of demand for specific goods, visible to stores whose shop items match it. An intent carries structured core attributes (item, quantity, price band), an optional free-text note, and an optional reference photo or 15-second-maximum video.
 _Avoid_: order, request, bid (buyer-side)
 
 **Price Band**:
@@ -44,8 +44,12 @@ A persistent catalog entry inside a store, describing what that store can supply
 _Avoid_: listing, product (for the persistent sense)
 
 **Product**:
-An ephemeral offer created by a seller in response to an intent. It exists only until it is accepted, expired, or withdrawn, and disappears after sale. An unaccepted product dies with its intent, and a product released without sale is retired, never resurrected. A product is accepted exactly once.
+An ephemeral offer created by a seller in response to an intent. It exists only until it is accepted, expired, or withdrawn, and disappears after sale. Its optional photo and 15-second-maximum video become private when the product retires and are retained for a finite support/dispute period. An unaccepted product dies with its intent, and a product released without sale is retired, never resurrected. A product is accepted exactly once.
 _Avoid_: listing, seller bid
+
+**Media Hold**:
+A documented incident or legal reason that temporarily prevents deletion of a particular retired product's or expired intent's photo or video. It never resurrects the subject, changes a settlement, or applies to unrelated media.
+_Avoid_: permanent retention, evidence freeze
 
 **Negotiation**:
 The private thread between one buyer and one seller over a single product, in which either side may adjust the price. Only the buyer who posted the intent participates; no other buyers can see or join it.

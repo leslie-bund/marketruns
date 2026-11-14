@@ -32,10 +32,6 @@ queue = "notification-events"
 binding = "ARCHIVE_BUCKET"
 bucket_name = "market-runs-archive"
 
-[[kv_namespaces]]
-binding = "MARKET_CONFIG"
-id = "set-with-wrangler"
-
 [vars]
 # Dev-only: base URL of the archive service for the ops console reputation
 # panel. In deployed environments this becomes a Service binding.
@@ -64,26 +60,23 @@ NOTIFICATIONS_URL = "http://localhost:8791"
 #   wrangler secret put NOTIFICATION_INTERNAL_TOKEN # on BOTH edge and notifications — reads and delivery callbacks
 #   wrangler secret put ID_DOCUMENT_HMAC_SECRET   # edge only — keyed BVN/NIN digests
 #   wrangler secret put OPS_AUTH_SECRET           # edge only — Better Auth, at least 32 characters
+#   wrangler secret put RESEND_API_KEY            # edge + notifications — ops magic links and delivery
 #   (IDENTITY_ENCRYPTION_KEY lives on the identity worker only)
 
 # Dev-only: the free public OSRM demo server (no key, demo usage policy).
 # Production must point at the self-hosted deployment — see infra/osrm.
 OSRM_BASE_URL = "https://router.project-osrm.org"
 
-# Hyperdrive config is provisioned with wrangler; set via wrangler secrets — never commit the Neon connection string.
-# [[hyperdrive]]
-# binding = "HYPERDRIVE"
-# id = "set-with-wrangler"
-
-# Explicit staging example. Replace each example.com hostname with the staged
-# worker's HTTPS route before `wrangler deploy --env staging`; validation rejects
-# missing or loopback values instead of inheriting the local [vars] above.
+# Staging validation rejects missing or loopback values instead of inheriting
+# the local [vars] above.
 [env.staging]
 name = "market-runs-edge-staging"
 
 [env.staging.vars]
 PAYMENTS_REQUIRED = "true"
 OPS_BASE_URL = "https://market-runs-edge-staging.leslie-bund.workers.dev"
+OPS_DASHBOARD_URL = "https://market-runs-ops-staging.leslie-bund.workers.dev"
+RESEND_FROM_EMAIL = "Market Runs <hello@updates.marketruns.org>"
 EDGE_ENV = "staging"
 OPS_ARCHIVE_URL = "https://market-runs-archive-staging.leslie-bund.workers.dev"
 IDENTITY_URL = "https://market-runs-identity-staging.leslie-bund.workers.dev"
@@ -119,12 +112,12 @@ queue = "notification-events-staging"
 binding = "ARCHIVE_BUCKET"
 bucket_name = "market-runs-archive-staging"
 
-[[env.staging.kv_namespaces]]
-binding = "MARKET_CONFIG"
-id = "712212413f85478f997b7d736ec21d61"
-
 # Native Worker-to-Worker paths. Public URLs stay configured for mobile and
 # provider callbacks; local development continues using the URL proxies.
+[[env.staging.services]]
+binding = "ARCHIVE_SERVICE"
+service = "market-runs-archive-staging"
+
 [[env.staging.services]]
 binding = "IDENTITY_SERVICE"
 service = "market-runs-identity-staging"

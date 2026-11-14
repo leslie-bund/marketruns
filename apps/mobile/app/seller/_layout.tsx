@@ -64,6 +64,7 @@ function SellerTabs() {
           tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" color={color} size={size} />,
         }}
       />
+      <Tabs.Screen name="history" options={{ title: "Sales History", tabBarLabel: "History", tabBarIcon: ({ color, size }) => <Ionicons name="time-outline" color={color} size={size} /> }} />
       {/* Phase-detail screens: reachable, never tabs. */}
       <Tabs.Screen name="respond" options={{ href: null, title: "Respond to Intent" }} />
       <Tabs.Screen name="negotiation" options={{ href: null, title: "Negotiation" }} />

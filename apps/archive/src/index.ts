@@ -1,7 +1,7 @@
 import { createDatabase } from "./db.js";
 import type { Env } from "./env.js";
 import { buildPaymentDispatchRequest, buildPaymentRefundRequest } from "@market-runs/domain";
-import { RequestIdSchema, notificationSourceEnvelope, type SettlementReleased } from "@market-runs/proto";
+import { ArchiveQueueStatusSchema, RequestIdSchema, RetainedMediaHoldRequestSchema, notificationSourceEnvelope, type SettlementReleased } from "@market-runs/proto";
 import { eq } from "drizzle-orm";
 import { runsArchive, settlementRecords } from "../../../infra/drizzle/schema.js";
 import {
@@ -17,7 +17,10 @@ import {
 } from "./admin.js";
 import { parseArchiveMessage, type ArchiveMessage } from "./messages.js";
 import { persistMessage } from "./persist.js";
+import { loadParticipantHistory, parseParticipantHistoryQuery } from "./history.js";
+import { listArchiveQueue, recordArchiveQueueReceipt } from "./queue-receipts.js";
 import { loadReputation, parseReputationQuery } from "./reputation.js";
+import { cleanupExpiredRetainedMedia, listRetainedMedia, parseRetainedMediaStatus, setRetainedMediaHold } from "./media-retention.js";
 
 /**
  * Request correlation (x-request-id): honor a well-formed inbound id, else
@@ -56,43 +59,65 @@ export default {
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    const parsed: Array<{ message: Message; value: ArchiveMessage }> = [];
-    for (const message of batch.messages) {
-      const result = parseArchiveMessage(message.body);
-      if (!result.success) {
-        console.error(
-          JSON.stringify({ event: "archive.dead_letter", messageId: message.id, issues: result.error.issues }),
-        );
-        message.ack();
-        continue;
-      }
-      parsed.push({ message, value: result.data });
-    }
-    if (parsed.length === 0) return;
-
     const { db, client } = createDatabase(env);
-    // run.retired must precede settlement.released for the FK; queue batches
-    // are not ordered guarantees, so impose the same durable order on both
-    // persistence and post-commit delivery.
-    const ordered = [...parsed].sort((a, b) => rank(a.value.type) - rank(b.value.type));
     try {
-      await db.transaction(async (tx) => {
-        for (const { message, value } of ordered) {
-          try {
-            await persistMessage(tx, value, env.ARCHIVE_BUCKET);
-          } catch (error) {
-            console.error(
-              JSON.stringify({
-                event: "archive.dead_letter",
-                messageId: message.id,
-                ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
-                error: String(error),
-              }),
-            );
-            throw error;
-          }
+      const parsed: Array<{ message: Message; value: ArchiveMessage }> = [];
+      for (const message of batch.messages) {
+        const result = parseArchiveMessage(message.body);
+        if (!result.success) {
+          const error = "Archive message failed schema validation";
+          await db.transaction(async (tx) => recordArchiveQueueReceipt(tx, {
+            id: message.id, eventType: "invalid", status: "rejected", error,
+          }));
+          console.error(
+            JSON.stringify({ event: "archive.dead_letter", messageId: message.id, issues: result.error.issues }),
+          );
+          message.ack();
+          continue;
         }
-      });
+        await db.transaction(async (tx) => recordArchiveQueueReceipt(tx, {
+          id: message.id,
+          eventType: result.data.type,
+          status: "received",
+          ...(result.data.requestId !== undefined ? { requestId: result.data.requestId } : {}),
+        }));
+        parsed.push({ message, value: result.data });
+      }
+      if (parsed.length === 0) return;
+
+      // run.retired must precede settlement.released for the FK; queue batches
+      // are not ordered guarantees, so impose the same durable order on both
+      // persistence and post-commit delivery.
+      const ordered = [...parsed].sort((a, b) => rank(a.value.type) - rank(b.value.type));
+      try {
+        await db.transaction(async (tx) => {
+          for (const { message, value } of ordered) {
+            try {
+              await persistMessage(tx, value, env.ARCHIVE_BUCKET);
+            } catch (error) {
+              console.error(
+                JSON.stringify({
+                  event: "archive.dead_letter",
+                  messageId: message.id,
+                  ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+                  error: String(error),
+                }),
+              );
+              throw error;
+            }
+          }
+        });
+      } catch (error) {
+        await db.transaction(async (tx) => {
+          for (const { message, value } of ordered) {
+            await recordArchiveQueueReceipt(tx, {
+              id: message.id, eventType: value.type, status: "retrying", error: String(error),
+              ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+            });
+          }
+        });
+        throw error;
+      }
 
       // Nothing external is sent until every durable write has committed. A
       // post-commit failure retries only its own message; replay is idempotent.
@@ -105,6 +130,12 @@ export default {
             // The original edge event id is retained so archive + realtime sinks dedupe.
             await env.NOTIFICATION_QUEUE.send(notificationSourceEnvelope("edge", value));
           }
+          await db.transaction(async (tx) => recordArchiveQueueReceipt(tx, {
+            id: message.id,
+            eventType: value.type,
+            status: "persisted",
+            ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+          }));
           // One line per persisted message; requestId joins the row to the
           // originating request's trace when the emitter carried one.
           console.log(
@@ -126,9 +157,23 @@ export default {
               error: String(error),
             }),
           );
+          await db.transaction(async (tx) => recordArchiveQueueReceipt(tx, {
+            id: message.id, eventType: value.type, status: "retrying", error: String(error),
+            ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+          }));
           message.retry({ delaySeconds: 30 });
         }
       }
+    } finally {
+      await client.end();
+    }
+  },
+  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    if (!env.ARCHIVE_BUCKET) return;
+    const { db, client } = createDatabase(env);
+    try {
+      const result = await cleanupExpiredRetainedMedia(db, env.ARCHIVE_BUCKET);
+      console.log(JSON.stringify({ event: "archive.retained_media_cleanup", ...result }));
     } finally {
       await client.end();
     }
@@ -197,7 +242,7 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET" && url.pathname === "/healthz") {
     return Response.json({ ok: true, service: "market-runs-archive" });
   }
-  if (url.pathname === "/reputation" || url.pathname.startsWith("/admin/")) {
+  if (url.pathname === "/reputation" || url.pathname === "/participant/history" || url.pathname.startsWith("/admin/")) {
     if (env.ARCHIVE_INTERNAL_TOKEN) {
       if (request.headers.get("x-archive-internal") !== env.ARCHIVE_INTERNAL_TOKEN) {
         return Response.json({ error: "unauthorized", message: "valid internal authentication is required" }, { status: 401 });
@@ -216,6 +261,17 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
     try {
       const reputation = await db.transaction(async (tx) => loadReputation(tx, parsed.participantId, parsed.role));
       return Response.json(reputation);
+    } finally {
+      await client.end();
+    }
+  }
+  if (request.method === "GET" && url.pathname === "/participant/history") {
+    const parsed = parseParticipantHistoryQuery(url);
+    if (parsed instanceof Response) return parsed;
+    const { db, client } = createDatabase(env);
+    try {
+      const history = await db.transaction(async (tx) => loadParticipantHistory(tx, parsed));
+      return Response.json(history);
     } finally {
       await client.end();
     }
@@ -285,6 +341,61 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
     try {
       const health = await db.transaction(async (tx) => loadOpsHealth(tx, parsed.market));
       return Response.json(health);
+    } finally {
+      await client.end();
+    }
+  }
+  if (request.method === "GET" && url.pathname === "/admin/archive-queue") {
+    const params = parseListParams(url);
+    if (params instanceof Response) return params;
+    const status = ArchiveQueueStatusSchema.nullable().safeParse(optionalFilter(url, "status"));
+    if (!status.success) return Response.json({ error: "invalid-query", message: "unknown archive queue status" }, { status: 400 });
+    const { db, client } = createDatabase(env);
+    try {
+      const list = await db.transaction(async (tx) => listArchiveQueue(tx, {
+        status: status.data, eventType: optionalFilter(url, "eventType"),
+      }, params));
+      return Response.json(list);
+    } finally {
+      await client.end();
+    }
+  }
+  if (request.method === "GET" && url.pathname === "/admin/retained-media") {
+    const params = parseListParams(url);
+    if (params instanceof Response) return params;
+    const status = parseRetainedMediaStatus(optionalFilter(url, "status"));
+    if (status instanceof Response) return status;
+    const subjectType = optionalFilter(url, "subjectType");
+    if (subjectType !== null && subjectType !== "product" && subjectType !== "intent") {
+      return Response.json({ error: "invalid-query", message: "subjectType must be product or intent" }, { status: 400 });
+    }
+    const { db, client } = createDatabase(env);
+    try {
+      const list = await db.transaction(async (tx) => listRetainedMedia(tx, {
+        status,
+        subjectType,
+        subjectId: optionalFilter(url, "subjectId"),
+        runId: optionalFilter(url, "runId"),
+      }, params));
+      return Response.json(list);
+    } finally {
+      await client.end();
+    }
+  }
+  const mediaHoldMatch = url.pathname.match(/^\/admin\/retained-media\/([^/]+)\/(hold|release)$/);
+  if (request.method === "POST" && mediaHoldMatch) {
+    const id = decodeURIComponent(mediaHoldMatch[1] ?? "");
+    const action = mediaHoldMatch[2] as "hold" | "release";
+    const input = action === "hold" ? RetainedMediaHoldRequestSchema.safeParse(await request.json().catch(() => null)) : null;
+    if (input && !input.success) return Response.json({ error: "invalid-body", message: "hold reason and actor are required" }, { status: 400 });
+    const { db, client } = createDatabase(env);
+    try {
+      const result = await db.transaction(async (tx) => setRetainedMediaHold(tx, id, action, input?.data));
+      if (result === "not-found") return Response.json({ error: "unknown-retained-media" }, { status: 404 });
+      if (result === "deleted") return Response.json({ error: "retained-media-deleted" }, { status: 409 });
+      if (result === "cleanup-in-progress") return Response.json({ error: "retained-media-cleanup-in-progress" }, { status: 409 });
+      if (result === "not-held") return Response.json({ error: "retained-media-not-held" }, { status: 409 });
+      return Response.json({ media: result });
     } finally {
       await client.end();
     }

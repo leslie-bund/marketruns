@@ -7,10 +7,12 @@ const runner = source("app/runner/handoff.tsx");
 const buyerRun = source("app/buyer/run.tsx");
 const products = source("app/buyer/products.tsx");
 const respond = source("app/seller/respond.tsx");
+const captureMedia = source("src/features/capture-media.tsx");
 const notifications = source("app/notifications.tsx");
 const negotiations = source("app/seller/negotiations.tsx");
 const badges = source("src/features/seller/hooks.ts");
-const opsHtml = source("../edge/src/ops-console/html.ts");
+const opsCapture = source("../ops/src/lib/format.ts");
+const opsEvidence = source("../ops/src/components/ops.tsx");
 
 test("failed or wrong pickup scans expose a real retry and receiver copy names the runner", () => {
   assert.match(runner, /setScanProblem\("This is not the server-issued QR/);
@@ -33,9 +35,11 @@ test("delivery codes expose loading, error, expiry, retry, and authenticated rot
 test("product and ops evidence never rely on unauthenticated image links", () => {
   assert.match(products, /productCaptureUrl\(product.id\)/);
   assert.match(products, /headers: \{ \.\.\.sessionHeaders\(\), \.\.\.participantHeaders\(\) \}/);
-  assert.match(respond, /captureUrl\(photo.ref\), headers:/);
-  assert.match(opsHtml, /href="\/ops\/api\/captures\//);
-  assert.doesNotMatch(opsHtml, /href="\/captures\//);
+  assert.match(respond, /CaptureMediaInput purpose="product"/);
+  assert.match(captureMedia, /captureUrl\(value.photo.ref\), headers:/);
+  assert.match(opsCapture, /`\/ops\/api\/captures\/\$\{encodeURIComponent/);
+  assert.match(opsEvidence, /href=\{url\}/);
+  assert.doesNotMatch(opsEvidence, /href="\/captures\//);
 });
 
 test("notification centre distinguishes first load, pages results, and reports read errors", () => {

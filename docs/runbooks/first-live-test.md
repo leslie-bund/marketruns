@@ -22,8 +22,8 @@ scenarios (see §6 incident scripts for sanctioned fallbacks).
 
 | # | Check | Command / where | Pass looks like |
 |---|-------|-----------------|-----------------|
-| 1 | Stack boots clean | `npx pnpm@9.15.4 dev:all -- --tunnel` | Postgres ready, migrations applied, edge :8787 / archive :8788 / identity :8789 / payments :8790 all healthy, demo seed no-ops, summary box prints tunnel URL + `EXPO_PUBLIC_EDGE_URL=…` line + guarded `/ops?token=…` link |
-| 2 | Demo driver passes end-to-end | Ops console → "Dev demo driver" panel (collapsed at the bottom) | Buyer → seller → runner wire flow completes with no error feed entries |
+| 1 | Stack boots clean | `npx pnpm@9.15.4 dev:all -- --tunnel` | Postgres ready, migrations applied, edge :8787 / archive :8788 / identity :8789 / payments :8790 all healthy, demo seed no-ops, summary box prints tunnel URL + `EXPO_PUBLIC_EDGE_URL=…` line; the dedicated `apps/ops` dashboard is started separately with `OPS_EDGE_URL` pointing at this edge |
+| 2 | Core wire flow passes end-to-end | `npx pnpm@9.15.4 --filter @market-runs/edge exec vitest run test/e2e.test.ts` | All buyer → seller → runner and ops-settlement end-to-end tests pass |
 | 3 | Reconcile exits 0 modulo baseline | `node infra/reconcile.mjs` (full stack up so queued dispatches land first) | Exit 0. **If the two known 2026-10-15 baseline settlements are still present**, the only accepted exceptions are their 6 payout legs with no dispatch rows (created before the payments worker existed) — document them once in the session log and never re-litigate them. A fresh/reset dev DB will not have them. **Pre-alias e2e baseline (2026-10-21):** dispatch WARNs whose `payment_dispatches.provider_reference IS NULL` are pre-fix e2e artifacts (12 stub terminal legs + 12 reference-cap/recipient failures) retained as evidence; they are explained and must not be replayed as part of the session. Any WARN row with a non-null `provider_reference`, any *other* FAIL, or any unexplained WARN is no-go. |
 | 4 | Buyer collection key | `apps/mobile/.env` → `EXPO_PUBLIC_FLW_PUBLIC_KEY=FLWPUBK_TEST-…` | Set; unset silently degrades checkout to unpaid dev mode |
 | 5 | Payout dispatcher | `infra/.dev.vars` → `PAYMENT_DISPATCHER=flutterwave`, `FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-…`, and `FLUTTERWAVE_TEST_MODE=true` | Payments worker starts without throwing (a missing key throws at startup). `FLUTTERWAVE_TEST_MODE` (ADR-0026) appends the provider's mock-success suffix so mock transfers complete in **~1 min instead of ~10**; reconcile strips the same suffix. The provider reference is the short deterministic alias (`mr_` + 48 hex, ADR-0024 amendment), not the 66+ character local idempotency key, so it fits Flutterwave's 64-character cap. Real test-mode payouts are expected to dispatch; confirm the Payments tab shows `queued`/`sent`/`completed`, not `failed`. |
@@ -66,9 +66,9 @@ the Flutterwave webhook, `SMILEID_CALLBACK_URL`, and every friend's
 
 Recommended: use a **named tunnel** with a stable hostname, and route:
 
-- `<tunnel-host>` → `http://localhost:8787` (edge — app API/WS + ops console)
+- `<tunnel-host>` → `http://localhost:8787` (edge — app API/WS and authenticated ops JSON API)
 
-**One tunnel suffices.** The edge proxies `/webhooks/*` to the payments worker
+**One backend tunnel suffices.** The edge proxies `/webhooks/*` to the payments worker
 (Flutterwave transfer/charge webhooks) and `/callbacks/*` to the identity
 worker (the Smile ID callback is `POST /callbacks/smileid`) as dumb pipes —
 signature/hash verification stays at the owning worker (ADR-0026). Neither the
@@ -77,7 +77,8 @@ exposure. If you set `SMILEID_CALLBACK_URL`, point it at
 `https://<edge-tunnel>/callbacks/smileid`.
 
 If you stay on quick tunnels, you must re-register the webhook (§1.3) and
-re-distribute the ops link every time you restart the backend tunnel.
+update the dedicated dashboard's `OPS_EDGE_URL` every time you restart the
+backend tunnel.
 
 ### 1.3 Flutterwave webhook
 
@@ -98,25 +99,22 @@ expect a few of these in a short session and explain them in the session log
 rather than treating webhook lag as a failure. With `FLUTTERWAVE_TEST_MODE=true`
 (§0 item 5) mock transfers land in ~1 min, so pending WARNs should be rare.
 
-### 1.4 Open the session console
+### 1.4 Open the operator surface
 
-Open the guarded ops link printed in the boot summary box:
-`https://<tunnel>/ops?token=<OPS_TOKEN>`. With `--tunnel`, an `OPS_TOKEN` is
-mandatory — a random one is generated if unset. Never share this link with
-testers.
+The redundant embedded edge console has been retired. Use the dedicated
+`apps/ops` application with `OPS_EDGE_URL` pointing at the backend environment,
+and sign in with a provisioned operator account. Existing staging admins can
+use a Resend-delivered magic link; local legacy `?token=` console links are no
+longer an HTML entry point.
 
-Console orientation (one embedded page, no build step):
-
-- **Header** — market selector, gate-pass pill, **Markets** button (zone admin
-  dialog: market config + vocabulary moderation).
-- **Gate-metrics strip** — five market health numbers.
-- **Left column** — market overview (buyer picker) + runs list.
-- **Middle column** — run detail (per-handoff photo/timestamp evidence and,
-  while a run is disputed, the dispute block: reason, raiser, merged evidence
-  refs) + **ops settle** control.
-- **Right column** — Oversight tabs: **Disputes · Settlements · Ledger ·
-  Reputation · Payments · Resets** (the device-reset approval queue).
-- **Bottom strip** — capped live event feed; collapsed dev demo driver.
+Use **Runs** for route and handoff evidence, **Disputes** for evidence review
+and admin settlement, **Settlements** and **Ledger** for durable money records,
+and **Payments** for dispatches, holds, refunds, and recovery. **Markets**
+includes map-based onboarding, operational configuration, activation, and
+vocabulary; **Stores & catalog**, **Runner pools**, **Participants**,
+**Archive**, **Events & audit**, **Object health**, and **Access recovery**
+cover the remaining session workflows. The retired embedded presentation is
+not a supported fallback. Do not direct testers to `/ops?token=…`.
 
 ### 1.5 Friends' phones
 
@@ -267,14 +265,14 @@ confirm recovery before moving on.
 | c | App kill mid-run | Buyer force-quits Expo Go mid-run, reopens | State restored from the server (cart/run ids are edge-authoritative — the client re-reads them) | Event feed: reconnect |
 | d | Double-tap Pay | Buyer mashes Pay at checkout | One charge. `txRef` is unique; a confirmed hold is reusable — a retry shows "payment confirmed" instead of charging again | **Payments tab**: exactly one hold for the cart |
 | e | Wrong-face sign-in | Friend B tries to sign in as Friend A on B's phone | Sandbox verdict is simulated — the interesting observation is whether testers *expect* it to fail | Event feed |
-| f | Second-device sign-in | Friend A signs in on a second phone | With `FIDO_UPSERT_ENABLED=true` (identity var, multi-device testing), the new device credential upserts; without it the registration refuses with `credential-exists` and points at device reset | **Resets tab**: a filed device reset appears as a pending request — approve (revokes credentials + sessions) or reject from the console |
+| f | Second-device sign-in | Friend A signs in on a second phone | With `FIDO_UPSERT_ENABLED=true` (identity var, multi-device testing), the new device credential upserts; without it the registration refuses with `credential-exists` and points at device reset | **Access recovery**: a filed device reset appears as a pending request — approve (revokes credentials + sessions) or reject from the dashboard |
 
 ### S6 — Ops actions (owner, between tester scenarios)
 
 | # | Action | How | Expected | Watch |
 |---|--------|-----|----------|-------|
-| a | Vocabulary rename | Ops console → **Markets** button → vocabulary moderation → rename an item | Market vocabulary updates; buyers see the new term | Market overview |
-| b | Market config tune | **Markets** button → config (e.g. shorten a timer) | Live MarketDO config updates | Gate-metrics strip, header gate-pass pill |
+| a | Vocabulary rename | **Markets** → market inspector → **Market item vocabulary** → rename an item | Market vocabulary updates; buyers see the new term | Market inspector and **Events & audit** |
+| b | Market config tune | **Markets** → **Edit operational configuration** (e.g. adjust the close buffer or floor rate) | Live MarketDO config updates | Market inspector and **Overview** expansion gate |
 
 ---
 
@@ -396,7 +394,7 @@ anything.
 | H1 | **The QR + photo handshake earns trust** — buyers accept "silence = consent" because evidence exists | Buyers reference the photo/QR unprompted when asked why they trust the delivery | Testers ignore or bypass the handshake (confirm without looking, "just mark it done"), or say they'd still call the seller to verify — trust is being carried by the relationship, not the system |
 | H2 | **Untrained users complete the core loop unassisted** — intent → offer → accept → pay → handoff | ≥ 2 buyers and ≥ 1 seller finish S1–S2 with at most one hint each | Any tester needs step-by-step rescue on a core screen, or abandons a task |
 | H3 | **The money ties out under real humans** — holds, settlements, refunds, and dispatches reconcile exactly | `reconcile.mjs` exits 0 modulo the accepted baseline; every WARN explained | Any FAIL beyond the baseline, any unexplained kobo, any double-charge — doctrine says this stops the test |
-| H4 | **The ops console is sufficient as the session console** — one operator can observe and intervene without touching code | Owner resolves S3's dispute and S4's abort from the dashboard alone | An ops action requires a database query, a curl, or a code read to complete |
+| H4 | **The dedicated ops dashboard is sufficient as the session console** — one operator can observe and intervene without touching code | Owner resolves S3's dispute and S4's abort from the dashboard alone | An ops action requires a database query, a curl, or a code read to complete |
 | H5 | **The system survives real-network chaos** — interruptions degrade gracefully, never corrupt | S5 games all recover; no stuck state survives its timer | Any unrecoverable run, any photoless confirm, any session crossing between testers |
 
 Kill criteria are session-level: hitting one does not necessarily kill the
@@ -410,7 +408,7 @@ write it up the same day.
 | Thing | Where |
 |-------|-------|
 | Boot | `npx pnpm@9.15.4 dev:all -- --tunnel` |
-| Ops console | `https://<tunnel>/ops?token=<OPS_TOKEN>` (printed at boot) |
+| Ops dashboard | `apps/ops` with `OPS_EDGE_URL` pointing at the edge; sign in with a provisioned operator account or an existing admin's Resend magic link |
 | Reconcile | `node infra/reconcile.mjs` / `--json` / `--market=Balogun` |
 | Secrets | `infra/.dev.vars` (gitignored; all dev workers read it) |
 | Mobile env | `apps/mobile/.env` (`EXPO_PUBLIC_EDGE_URL`, `EXPO_PUBLIC_FLW_PUBLIC_KEY`) |

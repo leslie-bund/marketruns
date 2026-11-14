@@ -36,6 +36,7 @@ import { IntentLookupResponseSchema, OfferProductRequestSchema, RetireProductReq
 import { fetchInternal, internalPost } from "./transport.js";
 import { cartIdForBuyer } from "../config/ids.js";
 import { headerAuthAllowed } from "../registry/index.js";
+import { validateCaptureMedia } from "../media.js";
 
 interface PriceMove {
   by: "buyer" | "seller";
@@ -140,6 +141,13 @@ export class ProductDO extends DurableObject<Env> {
       return jsonResponse(event);
     }
 
+    const invalidMedia = await validateCaptureMedia(this.env, {
+      refs: [[data.photoCaptureRef, "image"], [data.videoCaptureRef, "video"]],
+      ownerId: data.sellerParticipantId,
+      purpose: "product",
+    });
+    if (invalidMedia) return invalidMedia;
+
     // The intent must be live in the product's market; its expiry bounds the product's TTL.
     const marketStub = this.env.MARKET_DO.get(this.env.MARKET_DO.idFromName(data.market));
     const lookup = await fetchInternal(
@@ -169,6 +177,7 @@ export class ProductDO extends DurableObject<Env> {
       expiresAt,
       status: "available",
       ...(data.photoCaptureRef !== undefined ? { photoCaptureRef: data.photoCaptureRef } : {}),
+      ...(data.videoCaptureRef !== undefined ? { videoCaptureRef: data.videoCaptureRef } : {}),
     };
     this.state.product = product;
     this.state.market = data.market;
@@ -291,11 +300,13 @@ export class ProductDO extends DurableObject<Env> {
     return jsonResponse(await append.json());
   }
 
-  /** Retirement: snapshot to the archive queue, tell attached sockets, delete DO storage. */
+  /** Retirement snapshots media references for finite archive retention, notifies sockets, then deletes DO storage. */
   private async retire(request: RetireProductRequest, now: number, requestId?: string): Promise<Response> {
     const product = this.state.product;
-    this.state.retired = true;
     if (product) {
+      const cartId = product.status === "accepted" && this.state.market
+        ? cartIdForBuyer(this.state.market, this.state.intentBuyerId ?? "buyer:anonymous")
+        : undefined;
       product.status = "retired";
       const event: ServerEvent = {
         type: "product.retired",
@@ -306,11 +317,13 @@ export class ProductDO extends DurableObject<Env> {
         snapshot: product,
         ...(this.state.market !== undefined ? { market: this.state.market } : {}),
         ...(this.state.intentBuyerId !== undefined ? { buyerId: this.state.intentBuyerId } : {}),
+        ...(cartId !== undefined ? { cartId } : {}),
         ...(requestId !== undefined ? { requestId } : {}),
       };
       broadcast(this.ctx, this.env,event);
       await this.env.ARCHIVE_QUEUE.send(serializeEvent(event));
     }
+    this.state.retired = true;
     await this.ctx.storage.deleteAll();
     return jsonResponse({ retired: true, reason: request.reason });
   }

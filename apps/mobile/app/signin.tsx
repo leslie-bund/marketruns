@@ -3,11 +3,10 @@ import { router } from "expo-router";
 import { Alert, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import {
-  AuthError, DEV_FACE_IMAGE_BASE64, authenticateDeviceKey, captureFaceSequence,
+  AuthError, authenticateDeviceKey, captureFaceSequence,
   useActiveParticipant, useDeviceCredential, verifyFace,
 } from "../src/api";
 import { Button, Card, Page, Section, colors, s } from "../src/ui";
-import { devDemoMode } from "../src/api/dev-mode";
 
 export default function SignIn() {
   const { participant } = useActiveParticipant(); const { credential } = useDeviceCredential();
@@ -34,7 +33,6 @@ export default function SignIn() {
     finally { setBusy(false); }
   };
   if (!participant) return <Page eyebrow="SIGN IN" title="Welcome back"><Card><Text style={s.body}>Onboard first, or recover a participant on this device.</Text></Card></Page>;
-  const devCapture = { image: DEV_FACE_IMAGE_BASE64, livenessImages: Array(7).fill(DEV_FACE_IMAGE_BASE64) as string[] };
   return (
     <Page eyebrow="SIGN IN" title={`Welcome back, ${participant.displayName}`}>
       {problem ? <Card style={{ borderColor: colors.orange }}><Text style={s.body}>{problem}</Text></Card> : null}
@@ -44,7 +42,6 @@ export default function SignIn() {
         {!permission?.granted ? <Button title="Allow camera" onPress={requestPermission} /> : <>
           <View style={{ height: 240, overflow: "hidden", borderRadius: 18 }}><CameraView ref={camera} style={{ flex: 1 }} facing="front" /></View>
           <Button title={busy ? "Verifying…" : "Capture 7 frames and sign in"} onPress={() => { if (consented && !busy) void capture(); }} />
-          {devDemoMode ? <Button title="Use dev capture (stub only)" secondary onPress={() => { if (consented && !busy) void submit(devCapture); }} /> : null}
         </>}
       </Section>
       {hasDeviceKey ? <Button title="Use this device’s key instead" secondary onPress={deviceKeySignIn} /> : null}

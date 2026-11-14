@@ -39,7 +39,7 @@ test("runner commands require a claimed run owned by this participant", () => {
   assert.equal(canRunnerMutate(run("assigned", "runner:one"), "runner:one"), true);
 });
 
-test("legacy demo runs remain workable only for runner:internal", () => {
-  assert.equal(canRunnerMutate(run("assigned"), "runner:internal"), true);
+test("a run without an assigned runner cannot be mutated", () => {
+  assert.equal(canRunnerMutate(run("assigned"), "runner:internal"), false);
   assert.equal(canRunnerMutate(run("assigned"), "runner:one"), false);
 });

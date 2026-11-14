@@ -304,6 +304,7 @@ export const archivedProducts = pgTable(
     marketId: text("market_id").notNull(),
     /** Buyer when the intent carried one on the wire; NULL otherwise. */
     buyerId: text("buyer_id"),
+    sellerParticipantId: text("seller_participant_id"),
     finalPriceKobo: bigint("final_price_kobo", { mode: "number" }).notNull(),
     quantity: integer("quantity").notNull(),
     /** Why retired: accepted | expired | withdrawn | cart_expired. */
@@ -315,6 +316,7 @@ export const archivedProducts = pgTable(
   },
   (table) => [
     index("archived_products_store_id_idx").on(table.storeId),
+    index("archived_products_seller_participant_id_idx").on(table.sellerParticipantId),
     index("archived_products_market_id_idx").on(table.marketId),
     index("archived_products_retired_at_idx").on(table.retiredAt),
     check("archived_products_final_price_nonnegative", sql`${table.finalPriceKobo} >= 0`),
@@ -1068,6 +1070,9 @@ export const opsUsers = pgTable("user", {
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
   role: text("role").notNull().default("viewer"),
+  banned: boolean("banned").default(false),
+  banReason: text("ban_reason"),
+  banExpires: timestamp("ban_expires", { withTimezone: true }),
   mustChangePassword: boolean("must_change_password").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1079,6 +1084,7 @@ export const opsSessions = pgTable("session", {
   token: text("token").notNull().unique(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
+  impersonatedBy: text("impersonated_by"),
   userId: text("user_id").notNull().references(() => opsUsers.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1153,3 +1159,87 @@ export const doTelemetry = pgTable("do_telemetry", {
   alarmAt: timestamp("alarm_at", { withTimezone: true }),
   reportedAt: timestamp("reported_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("do_telemetry_reported_at_idx").on(table.reportedAt)]);
+
+
+export const ARCHIVE_QUEUE_STATUSES = ["received", "persisted", "retrying", "rejected"] as const;
+
+/** Durable consumer receipts make archive delivery and retries visible to operations. */
+export const archiveQueueMessages = pgTable(
+  "archive_queue_messages",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    status: text("status").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    requestId: text("request_id"),
+    error: text("error"),
+    firstReceivedAt: timestamp("first_received_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("archive_queue_messages_status_idx").on(table.status),
+    index("archive_queue_messages_updated_at_idx").on(table.updatedAt),
+    check("archive_queue_messages_status_valid", sql`${table.status} IN ('received', 'persisted', 'retrying', 'rejected')`),
+    check("archive_queue_messages_attempts_positive", sql`${table.attempts} > 0`),
+  ],
+);
+
+
+/** Enumerable cart history; the same retirement snapshot can also be retained in R2. */
+export const cartsArchive = pgTable(
+  "carts_archive",
+  {
+    id: text("id").primaryKey(),
+    cartId: text("cart_id").notNull(),
+    marketId: text("market_id").notNull(),
+    buyerId: text("buyer_id").notNull(),
+    reason: text("reason").notNull(),
+    snapshot: jsonb("snapshot").$type<unknown>().notNull(),
+    retiredAt: timestamp("retired_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("carts_archive_buyer_id_idx").on(table.buyerId),
+    index("carts_archive_cart_id_idx").on(table.cartId),
+    index("carts_archive_retired_at_idx").on(table.retiredAt),
+    check("carts_archive_reason_valid", sql`${table.reason} IN ('deadline-expired', 'checked-out', 'aborted')`),
+  ],
+);
+
+export const RETAINED_MEDIA_STATUSES = ["retained", "held", "deleting", "deleted"] as const;
+
+/** Finite product/intent media retention; bytes live in R2 and deletion follows this durable schedule. */
+export const retainedMedia = pgTable(
+  "retained_media",
+  {
+    id: text("id").primaryKey(),
+    subjectType: text("subject_type").notNull(),
+    subjectId: text("subject_id").notNull(),
+    captureRef: text("capture_ref").notNull().unique(),
+    objectKey: text("object_key").notNull(),
+    mediaKind: text("media_kind").notNull(),
+    ownerId: text("owner_id"),
+    cartId: text("cart_id"),
+    runId: text("run_id"),
+    status: text("status").notNull().default("retained"),
+    retiredAt: timestamp("retired_at", { withTimezone: true }).notNull(),
+    deleteAfter: timestamp("delete_after", { withTimezone: true }).notNull(),
+    holdReason: text("hold_reason"),
+    heldBy: text("held_by"),
+    heldAt: timestamp("held_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("retained_media_subject_idx").on(table.subjectType, table.subjectId),
+    index("retained_media_cart_id_idx").on(table.cartId),
+    index("retained_media_run_id_idx").on(table.runId),
+    index("retained_media_cleanup_idx").on(table.status, table.deleteAfter),
+    check("retained_media_subject_valid", sql`${table.subjectType} IN ('product', 'intent')`),
+    check("retained_media_kind_valid", sql`${table.mediaKind} IN ('image', 'video')`),
+    check("retained_media_status_valid", sql`${table.status} IN ('retained', 'held', 'deleting', 'deleted')`),
+  ],
+);

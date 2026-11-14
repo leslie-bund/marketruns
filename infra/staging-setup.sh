@@ -294,24 +294,9 @@ hyperdrive_id_from_list() {
   ' "$1"
 }
 
-kv_id_from_list() {
-  "${WRANGLER[@]}" kv namespace list 2>/dev/null | node -e '
-    let input = "";
-    process.stdin.on("data", (chunk) => input += chunk);
-    process.stdin.on("end", () => {
-      try {
-        const list = JSON.parse(input);
-        const found = list.find((item) => item.title === process.argv[1]);
-        if (found) { process.stdout.write(found.id); return; }
-      } catch {}
-      process.exit(1);
-    });
-  ' "$1"
-}
-
 run_wizard() {
 
-TOTAL_STAGES=16
+TOTAL_STAGES=15
 
 cd "$REPO_ROOT" || fail_setup "Run from the market-runs repository."
 mkdir -p "$(dirname "$ENV_FILE")"
@@ -362,6 +347,7 @@ if [[ "$LAUNCH_MARKET" != Balogun && "$LAUNCH_MARKET" != "Computer Village" ]]; 
   write_env LAUNCH_MARKET_RADIUS_METERS "$LAUNCH_MARKET_RADIUS_METERS"
 fi
 ask_public_url EDGE_PUBLIC_URL "Edge public HTTPS origin (also OPS_BASE_URL):"
+ask_public_url OPS_DASHBOARD_URL "Dedicated ops dashboard public HTTPS origin:"
 ask_public_url ARCHIVE_PUBLIC_URL "Archive public HTTPS origin:"
 ask_public_url IDENTITY_PUBLIC_URL "Identity public HTTPS origin:"
 ask_public_url PAYMENTS_PUBLIC_URL "Payments public HTTPS origin:"
@@ -369,12 +355,12 @@ ask_public_url NOTIFICATIONS_PUBLIC_URL "Notifications public HTTPS origin:"
 if ! node -e '
   const origins = process.argv.slice(1).map((value) => new URL(value).origin);
   process.exit(new Set(origins).size === origins.length ? 0 : 1);
-' "$EDGE_PUBLIC_URL" "$ARCHIVE_PUBLIC_URL" "$IDENTITY_PUBLIC_URL" "$PAYMENTS_PUBLIC_URL" "$NOTIFICATIONS_PUBLIC_URL"; then
-  fail_setup "The five public Worker origins must be distinct."
+' "$EDGE_PUBLIC_URL" "$OPS_DASHBOARD_URL" "$ARCHIVE_PUBLIC_URL" "$IDENTITY_PUBLIC_URL" "$PAYMENTS_PUBLIC_URL" "$NOTIFICATIONS_PUBLIC_URL"; then
+  fail_setup "The five Worker origins and dedicated ops dashboard origin must be distinct."
 fi
 ask RESEND_FROM_EMAIL "Verified Resend sender (for example: Market Runs <staging@your-domain>):"
 [[ -n "$RESEND_FROM_EMAIL" ]] || fail_setup "RESEND_FROM_EMAIL is required."
-for key in EDGE_PUBLIC_URL ARCHIVE_PUBLIC_URL IDENTITY_PUBLIC_URL PAYMENTS_PUBLIC_URL NOTIFICATIONS_PUBLIC_URL RESEND_FROM_EMAIL; do
+for key in EDGE_PUBLIC_URL OPS_DASHBOARD_URL ARCHIVE_PUBLIC_URL IDENTITY_PUBLIC_URL PAYMENTS_PUBLIC_URL NOTIFICATIONS_PUBLIC_URL RESEND_FROM_EMAIL; do
   write_env "$key" "${!key}"
 done
 write_env OPS_BASE_URL "$EDGE_PUBLIC_URL"
@@ -508,28 +494,6 @@ else
   fail_setup "Queues, DLQs, and required R2 buckets are required."
 fi
 
-stage "KV MARKET_CONFIG"
-KV_TITLE=market-runs-market-config-staging
-MARKET_CONFIG_KV_ID=$(_existing MARKET_CONFIG_KV_ID || true)
-if [[ -z "$MARKET_CONFIG_KV_ID" ]]; then MARKET_CONFIG_KV_ID=$(kv_id_from_list "$KV_TITLE" || true); fi
-if [[ -n "$MARKET_CONFIG_KV_ID" ]]; then
-  say "✓ reusing KV namespace $MARKET_CONFIG_KV_ID"
-elif confirm "Create KV namespace $KV_TITLE for binding MARKET_CONFIG?"; then
-  KV_OUTPUT=$("${WRANGLER[@]}" kv namespace create "$KV_TITLE" 2>&1) || fail_setup "KV namespace creation failed."
-  MARKET_CONFIG_KV_ID=$(printf '%s' "$KV_OUTPUT" | node -e '
-    let input = ""; process.stdin.on("data", (c) => input += c);
-    process.stdin.on("end", () => {
-      const match = input.match(/[0-9a-f]{32}/i);
-      if (match) process.stdout.write(match[0]); else process.exit(1);
-    });
-  ') || fail_setup "KV was created but its ID could not be parsed; re-run to reuse it."
-  say "✓ created KV namespace $MARKET_CONFIG_KV_ID"
-else
-  fail_setup "MARKET_CONFIG KV is required."
-fi
-write_env MARKET_CONFIG_KV_ID "$MARKET_CONFIG_KV_ID"
-unset KV_OUTPUT
-
 stage "Public staging TOML updates"
 say "Only public [env.staging] values and resource IDs will change in five wrangler.*.toml files."
 say "The update sets OPS_BASE_URL, disables staging OSRM, and applies the selected $FACE_VERIFIER identity mode."
@@ -539,10 +503,10 @@ if ! confirm "Apply these tracked public TOML updates now?"; then
   finish
   return 0
 fi
-EDGE_PUBLIC_URL="$EDGE_PUBLIC_URL" ARCHIVE_PUBLIC_URL="$ARCHIVE_PUBLIC_URL" \
+EDGE_PUBLIC_URL="$EDGE_PUBLIC_URL" OPS_DASHBOARD_URL="$OPS_DASHBOARD_URL" ARCHIVE_PUBLIC_URL="$ARCHIVE_PUBLIC_URL" \
 IDENTITY_PUBLIC_URL="$IDENTITY_PUBLIC_URL" PAYMENTS_PUBLIC_URL="$PAYMENTS_PUBLIC_URL" \
 NOTIFICATIONS_PUBLIC_URL="$NOTIFICATIONS_PUBLIC_URL" RESEND_FROM_EMAIL="$RESEND_FROM_EMAIL" \
-HYPERDRIVE_ID="$HYPERDRIVE_ID" MARKET_CONFIG_KV_ID="$MARKET_CONFIG_KV_ID" \
+HYPERDRIVE_ID="$HYPERDRIVE_ID" \
 PAYMENT_DISPATCHER="$PAYMENT_DISPATCHER" FACE_VERIFIER="$FACE_VERIFIER" \
 SMILEID_ENV="${SMILEID_ENV:-}" SMILEID_CALLBACK_URL="${SMILEID_CALLBACK_URL:-}" \
 SMILEID_PRIVACY_NOTICE_URL="${SMILEID_PRIVACY_NOTICE_URL:-}" BIOMETRICS_SERVICE_URL="${BIOMETRICS_SERVICE_URL:-}" \
@@ -603,6 +567,7 @@ capture_secret RESEND_API_KEY "RESEND_API_KEY (hidden):"
 put_secret payments FLUTTERWAVE_SECRET_KEY "$FLUTTERWAVE_SECRET_KEY"
 put_secret payments FLUTTERWAVE_WEBHOOK_SECRET_HASH "$FLUTTERWAVE_WEBHOOK_SECRET_HASH"
 put_secret notifications RESEND_API_KEY "$RESEND_API_KEY"
+put_secret edge RESEND_API_KEY "$RESEND_API_KEY"
 
 stage "Migrations through 0018 and launch market"
 say "Drizzle migrates Neon directly; Hyperdrive is runtime-only. Re-running is idempotent."

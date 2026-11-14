@@ -5,7 +5,9 @@ import {
   AdminListSchema,
   AdminRunEntrySchema,
   MarketRegistryResponseSchema,
+  MarketCatalogResponseSchema,
   CartQuoteRequestSchema,
+  IntentSchema,
   type ActiveRun,
   type LiveRun,
 } from "@market-runs/proto";
@@ -18,6 +20,7 @@ import { requireTransactionRole } from "../middleware/participant.js";
 import { requireOpsRole, withOpsAuth } from "../../ops-console/auth.js";
 import { correlationHeaders } from "../middleware/request-id.js";
 import { coreRegistry } from "../../registry/index.js";
+import { captureObjectKey } from "../../media.js";
 
 function scopeRest(c: Context<{ Bindings: Env }>, prefixSegments: number): string {
   const path = new URL(c.req.url).pathname;
@@ -54,6 +57,16 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
     const filter = c.req.query("market")?.trim().toLowerCase();
     const markets = await coreRegistry(c.env).listMarkets();
     return c.json(MarketRegistryResponseSchema.parse({ markets: markets.filter((market) => !filter || market.id.toLowerCase() === filter || market.name.toLowerCase() === filter) }));
+  });
+
+  /** Minimal anonymous catalogue for the mobile market picker (no session or participant headers). */
+  app.get("/catalog", async (c) => {
+    const filter = c.req.query("market")?.trim().toLowerCase();
+    const rows = await coreRegistry(c.env).listMarkets();
+    const markets = rows
+      .filter((market) => !filter || market.id.toLowerCase() === filter || market.name.toLowerCase() === filter)
+      .map(({ id, name, opensAt, closesAt, onlineSellers }) => ({ id, name, opensAt, closesAt, onlineSellers }));
+    return c.json(MarketCatalogResponseSchema.parse({ markets }));
   });
 
   app.get("/:market/store", async (c) => {
@@ -178,6 +191,34 @@ export function marketsRoute(): Hono<{ Bindings: Env }> {
   app.post("/:market/config", withOpsAuth(), requireOpsRole("admin"), (c) =>
     forwardTo(c, marketStub(c), "/config", { extraHeaders: { "x-market-id": decodeURIComponent(c.req.param("market") ?? "") } }),
   );
+
+  app.get("/:market/intents/:intentId/capture", async (c) => {
+    const who = c.get("participant");
+    if (who.source === "anonymous" || who.source === "unauthenticated") {
+      return errorResponse(401, "unauthorized", "a participant identity is required to read intent media");
+    }
+    const intentId = decodeURIComponent(c.req.param("intentId"));
+    const response = await marketStub(c).fetch(new Request(`http://do/intent-media/${encodeURIComponent(intentId)}`, {
+      headers: correlationHeaders(c, resolvedHeaders(c)),
+    }));
+    if (!response.ok) return response;
+    const body = await response.json() as { intent?: unknown };
+    const parsed = IntentSchema.safeParse(body.intent);
+    if (!parsed.success) return errorResponse(502, "bad-intent-response", "intent media authorization returned an invalid intent");
+    const media = c.req.query("media") ?? "photo";
+    if (media !== "photo" && media !== "video") return errorResponse(400, "invalid-query", "media must be photo or video");
+    const ref = media === "video" ? parsed.data.videoCaptureRef : parsed.data.photoCaptureRef;
+    const key = ref ? captureObjectKey(ref) : null;
+    if (!key) return errorResponse(404, "not-found", "intent has no capture");
+    const object = await c.env.ARCHIVE_BUCKET.get(key);
+    if (!object) return errorResponse(404, "not-found", "unknown capture");
+    return new Response(object.body, {
+      headers: {
+        "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+        "cache-control": "private, no-store",
+      },
+    });
+  });
 
   app.get("/:market/discovery", async (c) => {
     const who = c.get("participant");

@@ -9,12 +9,13 @@ import { internalPost } from "../do/transport.js";
 import { coreRegistry, headerAuthAllowed } from "../registry/index.js";
 import { participant } from "./middleware/participant.js";
 import { correlationHeaders, requestId } from "./middleware/request-id.js";
-import { opsConsole, opsLoginPage } from "../ops-console/index.js";
+import { opsConsole } from "../ops-console/index.js";
 import { handleOpsAuth, withOpsAuth } from "../ops-console/auth.js";
 import { commandRoute } from "./routes/command.js";
 import { authRoute, callbacksRoute } from "./routes/auth.js";
 import { paymentsRoute, webhooksRoute } from "./routes/payments.js";
 import { capturesRoute } from "./routes/captures.js";
+import { historyRoute } from "./routes/history.js";
 import { marketsRoute } from "./routes/markets.js";
 import { cartsRoute, participantsRoute, productsRoute, runsRoute } from "./routes/scopes.js";
 import { internalNotificationsRoute, notificationContactRoute, notificationsRoute } from "./routes/notifications.js";
@@ -65,7 +66,7 @@ export function internalIdentityKycRoute(): Hono<{ Bindings: Env }> {
  * The edge application: Hono app, explicit routes, one visible auth seam.
  *
  *   app.use("*", participant())        — who is calling (ADR-0015)
- *   app.route("/ops", opsConsole())    — behind requireOps inside the console
+ *   app.route("/ops", opsConsole())    — authenticated operator JSON API only
  *
  * Everything under a scope forwards to the owning Durable Object.
  */
@@ -112,18 +113,17 @@ export function createApp(): Hono<{ Bindings: Env }> {
   app.route("/internal/notification-contact", notificationContactRoute());
   app.route("/internal/identity", internalIdentityKycRoute());
   app.route("/markets", marketsRoute());
+  app.route("/history", historyRoute());
   app.route("/participants", participantsRoute());
   app.route("/products", productsRoute());
   app.route("/carts", cartsRoute());
   app.route("/runs", runsRoute());
 
   const ops = new Hono<{ Bindings: Env }>();
-  // Only the sign-in page and the explicitly allow-listed auth endpoints are
-  // public. The console root and every API route still require Better Auth.
-  ops.get("/login", opsLoginPage);
+  // Dedicated apps/ops serves the UI. Only allow-listed auth endpoints are
+  // public here; every operator API route requires the established ops guard.
   ops.all("/auth/*", handleOpsAuth);
   ops.use("/api/*", withOpsAuth());
-  ops.use("/", withOpsAuth());
   ops.route("/", opsConsole());
   app.route("/ops", ops);
 

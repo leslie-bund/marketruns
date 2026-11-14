@@ -10,7 +10,6 @@ import {
   getActiveParticipant,
   getCart,
   getCartDeliveryOptions,
-  identities,
   newTxRef,
   paymentsConfigured,
   quoteCart,
@@ -55,7 +54,7 @@ export default function Checkout() {
   const [checkoutProblem, setCheckoutProblem] = useState<string | null>(null);
   const recoveryStarted = useRef(new Set<string>());
 
-  const buyerId = getActiveParticipant()?.id ?? identities.buyer.id;
+  const buyerId = getActiveParticipant()?.id ?? "";
   const attempts = useMemo(() => payment?.attempts ?? [], [payment]);
   const heldAttempts = attempts.filter((attempt) => attempt.stage === "held");
   const heldRefs = heldAttempts.map((attempt) => attempt.txRef);

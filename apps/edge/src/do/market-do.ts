@@ -8,6 +8,7 @@ import type { Env } from "../config/env.js";
 import {
   acceptHibernatedWebSocket,
   broadcast,
+  errorResponse,
   expectCommand,
   handleWebSocketClose,
   handleWebSocketError,
@@ -18,10 +19,12 @@ import {
   notFound,
   parseClientCommand,
   parseInternal,
+  serializeEvent,
 } from "./runtime/index.js";
 import { fetchInternal } from "./transport.js";
 import { STATE_KEY } from "./state.js";
 import { coreRegistry, headerAuthAllowed } from "../registry/index.js";
+import { validateCaptureMedia } from "../media.js";
 import {
   IntentProductRequestSchema,
   MARKET_OPEN_WINDOW_MS,
@@ -176,6 +179,13 @@ export class MarketDO extends DurableObject<Env> {
       if (!parsed.ok) return parsed.response;
       return internalErrorGuard(() => this.moderateVocabulary(parsed.data));
     }
+    if (request.method === "GET" && path.startsWith("/intent-media/")) {
+      return this.getIntentMedia(
+        decodeURIComponent(path.slice("/intent-media/".length)),
+        request.headers.get("x-resolved-participant-id"),
+        request.headers.get("x-resolved-participant-role"),
+      );
+    }
     if (request.method === "GET" && path.startsWith("/intent/")) {
       return this.getIntent(path.slice("/intent/".length));
     }
@@ -211,6 +221,16 @@ export class MarketDO extends DurableObject<Env> {
       return jsonResponse({ type: "intent.recorded", intent: existing.intent } satisfies ServerEvent);
     }
 
+    if ((command.photoCaptureRef || command.videoCaptureRef) && !command.buyerId) {
+      return errorResponse(401, "unauthorized", "intent media requires an identified buyer");
+    }
+    const invalidMedia = await validateCaptureMedia(this.env, {
+      refs: [[command.photoCaptureRef, "image"], [command.videoCaptureRef, "video"]],
+      ownerId: command.buyerId,
+      purpose: "intent",
+    });
+    if (invalidMedia) return invalidMedia;
+
     const intent: Intent = {
       id: command.intentId,
       shopItem: command.shopItem,
@@ -221,6 +241,8 @@ export class MarketDO extends DurableObject<Env> {
       createdAt: now,
       status: "open",
       ...(command.note !== undefined ? { note: command.note } : {}),
+      ...(command.photoCaptureRef !== undefined ? { photoCaptureRef: command.photoCaptureRef } : {}),
+      ...(command.videoCaptureRef !== undefined ? { videoCaptureRef: command.videoCaptureRef } : {}),
       ...(command.buyerId !== undefined ? { buyerId: command.buyerId } : {}),
     };
     this.state.intents.push({ intent, expiresAt: now + INTENT_TTL_MS });
@@ -261,8 +283,7 @@ export class MarketDO extends DurableObject<Env> {
 
   /**
    * A participant joins the market (idempotent per participant). Membership
-   * also upserts the global markets index in KV so the zone becomes
-   * discoverable in the market list.
+   * also upserts the core market registry so the zone stays discoverable.
    */
   private async joinMarket(command: MarketJoined): Promise<Response> {
     this.state.marketId ??= command.market;
@@ -410,6 +431,19 @@ export class MarketDO extends DurableObject<Env> {
     return products.filter((product): product is Product => product !== null);
   }
 
+  private getIntentMedia(intentId: string, participantId: string | null, role: string | null): Response {
+    const stored = this.state.intents.find((candidate) => candidate.intent.id === intentId);
+    if (!stored || stored.expiresAt <= this.now()) return notFound("intent is expired or unknown");
+    if (!participantId) return errorResponse(401, "unauthorized", "a participant identity is required to read intent media");
+    const intent = stored.intent;
+    const allowed = role === "buyer"
+      ? intent.buyerId === participantId
+      : role === "seller" && this.state.stores.some((store) =>
+        store.sellerParticipantId === participantId && store.shopItems.some((item) => item.toLowerCase() === intent.shopItem.toLowerCase()));
+    if (!allowed) return errorResponse(403, "forbidden", "intent media is visible only to its buyer and matching sellers");
+    return jsonResponse({ intent });
+  }
+
   /** Internal: ProductDO offer lookup — is this intent open, and when does it die? */
   private getIntent(intentId: string): Response {
     const now = this.now();
@@ -464,38 +498,22 @@ export class MarketDO extends DurableObject<Env> {
     return jsonResponse(gate);
   }
 
-  /** Config precedence: DO state (ops writes), then MARKET_CONFIG KV, then defaults. */
+  /** Config precedence: DO state (ops writes), then registry geography and defaults. */
   private async config(): Promise<MarketConfig> {
     if (!this.state.config) {
       const marketId = this.state.marketId;
-      if (marketId) {
-        try {
-          const fromKv = await this.env.MARKET_CONFIG.get(`market-config:${marketId}`, "json");
-          const parsed = MarketConfigSchema.safeParse(fromKv);
-          if (parsed.success) {
-            // KV configs are operator-seeded: treat them as ops-set unless
-            // explicitly marked otherwise, so they never roll forward.
-            this.state.config = { ...parsed.data, opsConfigured: parsed.data.opsConfigured ?? true };
-            await this.ctx.storage.put(STATE_KEY, this.state);
-          }
-        } catch {
-          // KV unavailable (e.g. local test runtime) — fall through to defaults.
-        }
+      const registered = marketId
+        ? (await coreRegistry(this.env).listMarkets().catch(() => [])).find((market) => market.id.toLowerCase() === marketId.toLowerCase())
+        : undefined;
+      if (registered?.geofence) {
+        this.state.config = defaultMarketConfig(this.now(), registered.geofence.center);
+        this.state.config.geo!.radiusMeters = registered.geofence.radiusMeters;
+      } else {
+        this.state.config = defaultMarketConfig(this.now());
+        // Production never invents an enforcement center for an unknown market.
+        if (!headerAuthAllowed(this.env)) delete this.state.config.geo;
       }
-      if (!this.state.config) {
-        const registered = marketId
-          ? (await coreRegistry(this.env).listMarkets().catch(() => [])).find((market) => market.id.toLowerCase() === marketId.toLowerCase())
-          : undefined;
-        if (registered?.geofence) {
-          this.state.config = defaultMarketConfig(this.now(), registered.geofence.center);
-          this.state.config.geo!.radiusMeters = registered.geofence.radiusMeters;
-        } else {
-          this.state.config = defaultMarketConfig(this.now());
-          // Production never invents an enforcement center for an unknown market.
-          if (!headerAuthAllowed(this.env)) delete this.state.config.geo;
-        }
-        await this.ctx.storage.put(STATE_KEY, this.state);
-      }
+      await this.ctx.storage.put(STATE_KEY, this.state);
     }
 
     // Dev-stage lazy rollover (ADR-0013): an auto-generated config whose
@@ -531,12 +549,18 @@ export class MarketDO extends DurableObject<Env> {
     const now = this.now();
     const expired = this.state.intents.filter((stored) => stored.expiresAt <= now);
     for (const stored of expired) {
-      broadcast(this.ctx, this.env, {
+      const event: ServerEvent = {
         type: "intent.expired",
         intentId: stored.intent.id,
         expiredAt: now,
+        snapshot: stored.intent,
+        ...(this.state.marketId ? { market: this.state.marketId } : {}),
         ...(stored.intent.buyerId ? { buyerId: stored.intent.buyerId } : {}),
-      });
+      };
+      broadcast(this.ctx, this.env, event);
+      if (stored.intent.photoCaptureRef || stored.intent.videoCaptureRef) {
+        await this.env.ARCHIVE_QUEUE.send(serializeEvent(event));
+      }
     }
     this.state.intents = this.state.intents.filter((stored) => stored.expiresAt > now);
     // The discovery index dies with its intent: drop intentProducts entries

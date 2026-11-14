@@ -25,7 +25,7 @@ function registerStore(market: string, storeId: string, name: string, shopItems:
   );
 }
 
-/** Joining indexes the market in KV, making it a known zone for the ops routes. */
+/** Joining registers the market, making it a known zone for the ops routes. */
 function joinMarket(market: string, participantId: string): Promise<Response> {
   return marketStub(market).fetch(
     internalPost("/join", { type: "market.joined", market, participantId, role: "seller" }),

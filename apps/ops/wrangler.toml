@@ -1,0 +1,27 @@
+name = "market-runs-ops"
+main = "src/worker.ts"
+compatibility_date = "2025-04-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[vars]
+EDGE_ORIGIN = "http://localhost:8787"
+
+[env.staging]
+name = "market-runs-ops-staging"
+workers_dev = true
+
+[[env.staging.routes]]
+pattern = "ops.marketruns.org"
+custom_domain = true
+
+[env.staging.vars]
+EDGE_ORIGIN = "https://market-runs-edge-staging.leslie-bund.workers.dev"
+
+[[env.staging.services]]
+binding = "EDGE"
+service = "market-runs-edge-staging"

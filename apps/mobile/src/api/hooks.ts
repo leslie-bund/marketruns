@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Poll a read endpoint while the screen is mounted. The Durable Objects
- * broadcast over WebSockets, but polling keeps the demo client simple and
- * honest — refresh errors are surfaced, not swallowed.
+ * broadcast over WebSockets, while polling is the fallback — refresh errors
+ * are surfaced, not swallowed.
  */
 export function usePoll<T>(load: () => Promise<T>, intervalMs = 3000): {
   data: T | null;

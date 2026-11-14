@@ -5,6 +5,7 @@ export type ArchiveTx = PgTransaction<any, any, any>;
 import type { SettlementOutcome } from "@market-runs/domain";
 import type {
   CartRetired,
+  IntentExpired,
   ProductRetired,
   RunRetired,
   RunStarted,
@@ -13,6 +14,7 @@ import type {
 import { and, eq, isNull } from "drizzle-orm";
 import {
   archivedProducts,
+  cartsArchive,
   disputes,
   ledgerEntries,
   liveRuns,
@@ -22,6 +24,7 @@ import {
   type SettlementOutcomeSnapshot,
 } from "../../../infra/drizzle/schema.js";
 import { settlementLegs } from "./settlement-legs.js";
+import { markRunRetainedMediaClosed, recordRetiredMedia } from "./media-retention.js";
 
 /**
  * Archive persistence: retirement events → durable rows (ADR-0010/0011).
@@ -153,18 +156,24 @@ const RETIREMENT_REASON_MAP: Record<ProductRetired["reason"], string> = {
   "cart-retired": "cart_expired",
 };
 
+export function productArchiveSnapshot(product: ProductRetired["snapshot"]): ProductRetired["snapshot"] {
+  const { photoCaptureRef: _photo, videoCaptureRef: _video, ...snapshot } = product;
+  return snapshot;
+}
+
 export function productRetiredRow(message: ProductRetired) {
   return {
     id: message.productId,
     intentId: message.intentId,
-    cartId: null as string | null,
+    cartId: message.cartId ?? null,
     storeId: message.snapshot.sellerName,
     marketId: message.market ?? "unknown",
     buyerId: message.buyerId ?? null,
+    sellerParticipantId: message.snapshot.sellerParticipantId ?? null,
     finalPriceKobo: message.snapshot.priceKobo,
     quantity: message.snapshot.quantity,
     retirementReason: RETIREMENT_REASON_MAP[message.reason],
-    finalState: message.snapshot,
+    finalState: productArchiveSnapshot(message.snapshot),
     retiredAt: new Date(message.retiredAt),
   };
 }
@@ -173,10 +182,26 @@ export function cartSnapshotKey(message: CartRetired): string {
   return `${CART_SNAPSHOT_PREFIX}${message.cartId}/${message.retiredAt}.json`;
 }
 
+export function cartArchiveSnapshot(message: CartRetired): CartRetired["snapshot"] {
+  return { ...message.snapshot, products: message.snapshot.products.map(productArchiveSnapshot) };
+}
+
+export function cartRetiredRow(message: CartRetired) {
+  return {
+    id: `${message.cartId}:${message.retiredAt}`,
+    cartId: message.cartId,
+    marketId: message.market,
+    buyerId: message.snapshot.buyerId ?? "buyer:anonymous",
+    reason: message.reason,
+    snapshot: cartArchiveSnapshot(message),
+    retiredAt: new Date(message.retiredAt),
+  };
+}
+
 /** Persist one archive message inside the queue batch's transaction. */
 export async function persistMessage(
   tx: ArchiveTx,
-  message: RunStarted | RunRetired | SettlementReleased | ProductRetired | CartRetired,
+  message: RunStarted | RunRetired | SettlementReleased | ProductRetired | CartRetired | IntentExpired,
   bucket?: R2Bucket,
 ): Promise<void> {
   switch (message.type) {
@@ -206,6 +231,7 @@ export async function persistMessage(
       // Inserted before settlement.released in the same batch (queue order),
       // satisfying the settlement_records → runs_archive FK.
       await tx.insert(runsArchive).values(runRetiredRow(message)).onConflictDoNothing();
+      await markRunRetainedMediaClosed(tx, message);
       // Dispute context rides run.retired (ADR-0019): write the disputes row
       // AFTER the runs_archive insert — disputes.run_id FKs to it, so this
       // ordering is part of the same rank rule (run.retired before
@@ -264,11 +290,16 @@ export async function persistMessage(
     }
     case "product.retired":
       await tx.insert(archivedProducts).values(productRetiredRow(message)).onConflictDoNothing();
+      await recordRetiredMedia(tx, message);
+      return;
+    case "intent.expired":
+      await recordRetiredMedia(tx, message);
       return;
     case "cart.retired":
-      // No carts table: the full snapshot is analytics-grade and lives in R2
-      // (ADR-0010: retirement snapshots → Postgres/R2). Best-effort: a failed
-      // put is logged and acked — Postgres rows remain the system of record.
+      await tx.insert(cartsArchive).values(cartRetiredRow(message)).onConflictDoNothing();
+      // The enumerable Postgres row powers participant history; R2 retains a
+      // media-free retirement snapshot for analytics. A failed R2 put remains
+      // best-effort because Postgres is the system of record.
       if (!bucket) {
         console.error(
           JSON.stringify({
@@ -281,7 +312,7 @@ export async function persistMessage(
         return;
       }
       try {
-        await bucket.put(cartSnapshotKey(message), JSON.stringify(message));
+        await bucket.put(cartSnapshotKey(message), JSON.stringify({ ...message, snapshot: cartArchiveSnapshot(message) }));
       } catch (error) {
         console.error(
           JSON.stringify({

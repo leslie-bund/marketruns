@@ -20,9 +20,10 @@ export interface Env {
   /** Trusted lifecycle events → durable notifications worker. Optional in legacy unit-test envs. */
   NOTIFICATION_QUEUE?: Queue;
   ARCHIVE_BUCKET: R2Bucket;
-  MARKET_CONFIG: KVNamespace;
   /** Archive service base URL for Ops reads and participant active-run discovery. */
   OPS_ARCHIVE_URL?: string;
+  /** Native deployed Worker-to-Worker archive path; URL proxy remains the local fallback. */
+  ARCHIVE_SERVICE?: Fetcher;
   /** Shared edge → archive secret injected on reputation and admin read calls. */
   ARCHIVE_INTERNAL_TOKEN?: string;
   /** Payments service base URL for the ops console payments proxy (dev default: http://localhost:8790). */
@@ -81,6 +82,11 @@ export interface Env {
   OPS_AUTH_SECRET?: string;
   /** Public edge origin used by Better Auth for cookies/origin checks. */
   OPS_BASE_URL?: string;
+  /** Dedicated dashboard origin embedded in emailed magic links. */
+  OPS_DASHBOARD_URL?: string;
+  /** Resend delivery for existing ops administrators only. */
+  RESEND_API_KEY?: string;
+  RESEND_FROM_EMAIL?: string;
   /** Explicit local-only switches; both must be true for legacy test identity. */
   OPS_LOCAL_DEV?: string;
   OPS_LEGACY_DEV?: string;

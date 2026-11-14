@@ -35,7 +35,7 @@ export function identityAdminRoutes(): Hono<{ Bindings: Env }> {
     target.search = new URL(c.req.url).search;
     let upstream: Response;
     try {
-      upstream = await fetch(target, { headers: internalHeaders(c) });
+      upstream = await (c.env.IDENTITY_SERVICE ?? { fetch }).fetch(target, { headers: internalHeaders(c) });
     } catch {
       return errorResponse(503, "identity-unavailable", `identity service at ${base(c)} did not respond`);
     }
@@ -73,7 +73,7 @@ export function identityAdminRoutes(): Hono<{ Bindings: Env }> {
     const target = new URL(`/auth/device-reset/${encodeURIComponent(c.req.param("id"))}/decision`, base(c));
     let upstream: Response;
     try {
-      upstream = await fetch(target, {
+      upstream = await (c.env.IDENTITY_SERVICE ?? { fetch }).fetch(target, {
         method: "POST",
         headers: internalHeaders(c),
         body: JSON.stringify(parsed.data),

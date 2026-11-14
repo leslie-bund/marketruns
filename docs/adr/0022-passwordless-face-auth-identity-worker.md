@@ -35,7 +35,7 @@ Session tokens are HMAC-signed and the verification key is shared in `packages/d
 - The edge's header identity (`x-participant-id` / `x-participant-role`) is **retained for dev** alongside Bearer sessions; `resolveParticipant` accepts either, tagged by source (`"session"` vs header). ADR-0015's seam absorbed real auth exactly as designed.
 - `FIDO_UPSERT_ENABLED` and `FIDO_STUB_ENABLED` are dev-only toggles; both default off in any deployed posture.
 - Mobile falls back to AsyncStorage for the device key on web and **flags it insecure** in the UI rather than hiding it.
-- 401 session-expired self-heals to a signed-out state on the client; demo mode is untouched.
+- 401 session-expired self-heals to a signed-out state on the client. The former scripted demo route, simulated face captures, and demo identity fallbacks have been removed; backend header auth remains an explicit development-only seam.
 
 ## Consequences
 

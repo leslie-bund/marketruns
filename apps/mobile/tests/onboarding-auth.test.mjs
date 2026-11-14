@@ -36,14 +36,15 @@ test("identity changes clear sessions and stores are participant+market scoped",
   assert.match(participant, /cache\?\.id !== participant\?\.id\) await clearSession\(\)/);
   assert.match(store, /storageKey = \(owner: string, market: string\)/);
   assert.match(store, /store\.sellerParticipantId === owner/);
-  assert.match(store, /owner === DEMO_OWNER \? await AsyncStorage\.getItem\(LEGACY_STORAGE_KEY\)/);
+  assert.doesNotMatch(store, /DEMO_OWNER|LEGACY_STORAGE_KEY/);
+  assert.match(store, /owner \? await AsyncStorage\.getItem/);
 });
 
 test("fresh and recovered launches restore a cached participant before showing signed in", () => {
   assert.match(launch, /Recover existing account/);
   assert.match(recovery, /getParticipant\(recoveredId\)/);
   assert.match(recovery, /setActiveParticipant\(recoveredParticipant\)/);
-  assert.match(roleGate, /participant && \(!session \|\| participant\.role !== role \|\| !kycEligible\)/);
+  assert.match(roleGate, /!participant \|\| !session \|\| participant\.role !== role \|\| !kycEligible/);
   assert.match(launch, /transactionReady \? <Pill active>✓ SIGNED IN/);
 });
 

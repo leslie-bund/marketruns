@@ -12,6 +12,7 @@ export default defineWorkersConfig({
     alias: [
       { find: /^better-auth$/, replacement: betterAuthStub },
       { find: /^better-auth\/adapters\/drizzle$/, replacement: betterAuthStub },
+      { find: /^better-auth\/plugins$/, replacement: betterAuthStub },
     ],
   },
   test: {

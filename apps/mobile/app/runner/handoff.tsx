@@ -6,8 +6,6 @@ import {
   ApiError,
   attachPhoto,
   confirmHandoff,
-  identities,
-  newId,
   scanChallenge,
   uploadCapture,
   useActiveParticipant,
@@ -15,13 +13,12 @@ import {
 import { canRunnerMutate, HandoffPhoto, parseHandoffPayload, useRunnerLocationStream } from "../../src/features/run";
 import { useRunnerRun } from "../../src/features/runner";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
-import { devDemoMode } from "../../src/api/dev-mode";
 
 export default function HandoffScreen() {
   const { handoffId, runId } = useLocalSearchParams<{ handoffId: string; runId?: string }>();
   const run = useRunnerRun(2000, runId);
   const { participant } = useActiveParticipant();
-  const runnerId = participant?.id ?? identities.runner.id;
+  const runnerId = participant?.id ?? "";
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(true);
   const [scanProblem, setScanProblem] = useState<string | null>(null);
@@ -85,12 +82,7 @@ export default function HandoffScreen() {
       await attachPhoto(currentRunId, handoffId, upload.ref);
       run.refresh();
     } catch (error) {
-      Alert.alert("Camera capture failed", error instanceof Error ? error.message : String(error), [
-        { text: "Cancel", style: "cancel" },
-        ...(devDemoMode ? [{ text: "Use dev reference", onPress: () => {
-          void attachPhoto(currentRunId, handoffId, `r2://archive/captures/${newId("capture")}.jpg`).then(run.refresh).catch(fail("Photo failed"));
-        } }] : []),
-      ]);
+      Alert.alert("Camera capture failed", error instanceof Error ? error.message : String(error));
     }
   };
 

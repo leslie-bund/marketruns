@@ -39,7 +39,7 @@ export function marketsAdminRoutes(): Hono<{ Bindings: Env }> {
     return jsonResponse({ markets });
   });
 
-  /** Create a zone: initialize the MarketDO config, then index it in KV. */
+  /** Create a zone: initialize the MarketDO config, then add it to the core registry. */
   app.post("/markets", async (c) => {
     let raw: unknown;
     try {

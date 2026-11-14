@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ActiveRun, Run, Store } from "@market-runs/proto";
-import { getRun, identities, listActiveRuns, useActiveCartIds } from "../../api";
+import { getRun, listActiveRuns, useActiveCartIds } from "../../api";
 import { useLiveEvents, usePoll } from "../../api";
 import { partitionRunnerRuns, preferredRunnerRunId } from "./runner-state";
 
@@ -89,10 +89,10 @@ export function useRunnerRun(intervalMs = 15000, routeRunId?: string): RunFollow
 
 /** Follow a selected live trip containing this owned store; deep-link ids win. */
 export function useSellerRun(store: Store | null, intervalMs = 15000, routeRunId?: string): RunFollow & { runs: ActiveRun[]; selectRun: (runId: string) => void } {
-  const storeId = store?.id ?? identities.seller.name;
+  const storeId = store?.id ?? "";
   const [chosenRunId, setChosenRunId] = useState<string | null>(null);
   const discovery = usePoll(
-    () => listActiveRuns({ storeId }).catch(() => ({ runs: [], warning: "Live run discovery is unavailable." })),
+    () => storeId ? listActiveRuns({ storeId }).catch(() => ({ runs: [], warning: "Live run discovery is unavailable." })) : Promise.resolve({ runs: [] }),
     intervalMs,
   );
   const runs = discovery.data?.runs ?? [];
