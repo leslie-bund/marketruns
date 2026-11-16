@@ -8,6 +8,7 @@
 | `d8e4cfd` — Add inbox attachment downloads and reply uploads | Site admin inbox attachments | Existing `origin/main` baseline; no Cloudflare Worker change in this run. |
 | `6c18121` — Add versioned consumer policy acknowledgement | In-app consumer/refund policy, explicit onboarding and existing-participant acknowledgement, session transaction gate, durable acceptance history | Migration `0023` and the edge Worker were deployed in this run. Requires a new mobile staging build for the UI. |
 | Deployment-record commit | This verified deployment summary and remaining launch inputs | Documentation only. |
+| `70aa4b4` — Disclose consumer policy acceptance records | Privacy notice `privacy-notice-v3`, effective 16 November, covering policy-version/timestamp collection and acceptance-history retention | GitHub push triggered Vercel production deployment `market-runs-site-baou3rvlj-allegados-limited.vercel.app` (`dpl_HfauaXgLK87ToMkWf4wKxpnbPYtN`), now Ready and aliased to `www.marketruns.org`. |
 
 No provisioning or checking `.sh` scripts were used. Drizzle and Wrangler were invoked directly.
 
@@ -38,6 +39,7 @@ The identity, payments, notifications and ops Workers were not changed by the po
 - All five backend `/healthz` routes returned `200`; payments reported `flutterwave`.
 - Anonymous `/ops/api/overview` returned `401`; anonymous policy acceptance returned `401`; the dedicated ops dashboard returned `200` at `https://market-runs-ops-staging.leslie-bund.workers.dev`.
 - A synthetic staging participant with a real Bearer session received `403 consumer-policy-acceptance-required` before acceptance, `200` on acceptance and retry, exactly one acceptance row, and `consumer-refund-v1` on its durable profile. Only those synthetic profile/acceptance rows were deleted afterward.
+- Site: 5 files / 30 tests and the type check passed. Vercel production deployment `dpl_HfauaXgLK87ToMkWf4wKxpnbPYtN` became Ready with `www.marketruns.org` aliased. The public privacy URL returned `200` and contained `privacy-notice-v3`, `16 November 2026`, the policy-acknowledgement data category, and acceptance-history retention language.
 
 ## Still open / not claimed by this deployment
 
