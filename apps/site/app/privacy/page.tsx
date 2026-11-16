@@ -41,8 +41,8 @@ export default function PrivacyPage() {
           identity, marketplace, payment, and delivery services in Nigeria.
         </p>
         <dl className="privacy-meta">
-          <div><dt>Effective date</dt><dd>14 November 2026</dd></div>
-          <div><dt>Notice version</dt><dd><code>privacy-notice-v2</code></dd></div>
+          <div><dt>Effective date</dt><dd>16 November 2026</dd></div>
+          <div><dt>Notice version</dt><dd><code>privacy-notice-v3</code></dd></div>
           <div><dt>Controller</dt><dd>Allegados Limited</dd></div>
           <div><dt>Privacy, security &amp; rights</dt><dd><ContactLink /></dd></div>
         </dl>
@@ -106,6 +106,7 @@ export default function PrivacyPage() {
                 <thead><tr><th>Category</th><th>Examples</th><th>Main purposes</th></tr></thead>
                 <tbody>
                   <tr><th scope="row">Account and role</th><td>Participant identifier, role, display name, account status, joined markets, device credentials, sessions, and login records</td><td>Create and secure accounts, provide role-specific features, prevent abuse, and maintain audit records</td></tr>
+                  <tr><th scope="row">Policy acknowledgement</th><td>Consumer, returns and refund policy version, participant identifier, and server-recorded acceptance timestamp</td><td>Present the current policy, record affirmative acknowledgement, enforce current-version access, and maintain contractual and legal audit history</td></tr>
                   <tr><th scope="row">Verified identity</th><td>Verified legal name, verification status, BVN/NIN-derived keyed hash, provider references, and verification outcomes</td><td>Verify identity, meet applicable requirements, prevent duplicate or fraudulent accounts, and support recovery</td></tr>
                   <tr><th scope="row">Contact</th><td>Email address and support correspondence</td><td>Send early-access, service, and security messages; respond to enquiries; and resolve disputes</td></tr>
                   <tr><th scope="row">Marketplace</th><td>Intents, offers, negotiations, carts, shop items, stores, market activity, reputation signals, and seller presence</td><td>Match buyers and sellers, operate markets, coordinate checkout, and maintain marketplace integrity</td></tr>
@@ -262,6 +263,7 @@ export default function PrivacyPage() {
               <li>Login and recovery captures are transit-only. Pending enrollment captures are deleted promptly on failure, rejection, expiry, abandonment, or another terminal failure.</li>
               <li>Product and intent media remain private. Expired intents and unaccepted products are deleted after seven days. Sold-product media is deleted 90 days after run close, with a 97-day backstop if no close event has arrived. A documented incident/legal hold can pause deletion of a specific item; releasing it restores the existing deadline. Scheduled cleanup deletes the bytes, and media metadata remains.</li>
               <li>Run, payment, settlement, refund, payout, and dispute records may need to remain after an account request for lawful financial, fraud-prevention, dispute, or legal purposes.</li>
+              <li>Consumer-policy acceptance history is retained while the participant relationship and applicable contractual, dispute, or legal record-retention needs continue. Each new policy version has its own acknowledgement; earlier acceptance timestamps are not rewritten.</li>
               <li>Operational logs, temporary files, and cached copies are removed under schedules appropriate to their purpose and sensitivity.</li>
             </ul>
             <div className="privacy-callout">

@@ -1,7 +1,7 @@
 # Market Runs Nigeria Privacy Notice
 
-- **Effective date:** 14 November 2026
-- **Notice version:** `privacy-notice-v2`
+- **Effective date:** 16 November 2026
+- **Notice version:** `privacy-notice-v3`
 - **Controller:** Allegados Limited
 - **Privacy, security, and rights contact:** [info@updates.marketruns.org](mailto:info@updates.marketruns.org)
 - **Published at:** [https://www.marketruns.org/privacy](https://www.marketruns.org/privacy)
@@ -32,6 +32,7 @@ The data we handle depends on your role and actions.
 | Category | Examples | Main purposes |
 | --- | --- | --- |
 | Account and role data | Participant identifier, role, display name, account status, joined markets, device credentials, sessions, and login records | Create and secure accounts, provide role-specific features, prevent abuse, and maintain audit records |
+| Policy acknowledgement | Consumer, returns and refund policy version, participant identifier, and server-recorded acceptance timestamp | Present the current policy, record affirmative acknowledgement, enforce current-version access, and maintain contractual and legal audit history |
 | Verified identity data | Verified legal name, verification status, BVN/NIN-derived keyed hash, provider references, and verification outcomes | Verify identity, meet applicable requirements, prevent duplicate or fraudulent accounts, and support recovery |
 | Contact data | Email address and support correspondence | Send early-access, service, and security messages; respond to enquiries; and resolve disputes |
 | Marketplace data | Intents, offers, negotiations, carts, shop items, stores, market activity, reputation signals, and seller presence | Match buyers and sellers, operate markets, coordinate checkout, and maintain marketplace integrity |
@@ -116,6 +117,7 @@ We keep different records only for as long as reasonably needed for the purposes
 - Login and recovery captures are transit-only. Pending enrollment captures are deleted promptly on failure, rejection, expiry, abandonment, or another terminal failure.
 - Product and intent media remain private. Expired intents and unaccepted products are deleted after seven days. Sold-product media is deleted 90 days after run close, with a 97-day backstop if the close event has not arrived. A documented incident/legal hold can pause deletion of a specific item; releasing it restores the existing deadline. Scheduled cleanup performs deletion, and media metadata remains after byte deletion.
 - Run, payment, settlement, refund, payout, and dispute records may need to remain after an account request for lawful financial, fraud-prevention, dispute, or legal purposes.
+- Consumer-policy acceptance history is retained while the participant relationship and applicable contractual, dispute, or legal record-retention needs continue. Each new policy version has its own acknowledgement; earlier acceptance timestamps are not rewritten.
 - Operational logs, temporary files, and cached copies are removed under schedules appropriate to their purpose and sensitivity.
 
 **Account deletion/de-identification is currently a manual request and process, not a completed self-service deletion feature.** To request it, email [info@updates.marketruns.org](mailto:info@updates.marketruns.org). We may need to verify your identity and authority. Authorized personnel will review the request and coordinate deletion or de-identification across relevant application records, identity artifacts, and active state where feasible and legally permitted.
