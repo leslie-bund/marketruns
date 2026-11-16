@@ -1,5 +1,7 @@
 # Runbook — staging provisioning, deployment, go/no-go, and rollback
 
+Verified deployment records: [16 November 2026](2026-11-16-staging-redeployment.md) (media retention and versioned consumer-policy acceptance).
+
 This is the followable-cold procedure for a repeatable **staging** deployment. The default rehearsal posture is real Flutterwave **test-mode** payments plus hybrid identity: Smile ID **sandbox**, an externally deployed private biometrics service, and private identity-capture R2. The wizard applies migrations through `0018_audited_refund_resolutions`, provisions the archive/payment/notification queues and DLQs, archive and identity-capture R2, and one shared Hyperdrive configuration, then deploys in the archive-first order required by ADR-0029.
 
 **OSRM remains out of scope:** staging edge leaves `OSRM_BASE_URL` unset so checkout uses static floor-rate estimates. `stub` payment/identity mode is available only for explicitly infrastructure-only validation. It is not approval for a real paid/hybrid rehearsal.
