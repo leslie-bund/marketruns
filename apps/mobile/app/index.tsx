@@ -1,9 +1,12 @@
 import { Link, router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Text, View, Pressable} from "react-native";
+import { CONSUMER_POLICY_VERSION } from "@market-runs/proto";
 import {
   authenticateDeviceKey,
   EDGE_URL,
+  getParticipant,
+  setActiveParticipant,
   signOut,
   useActiveMarket,
   useActiveParticipant,
@@ -34,8 +37,18 @@ export default function Launch() {
     return (await response.json()) as { service: string };
   }, 5000);
   const kycEligible = participant?.kycStatus === "verified" || participant?.kycStatus === "preverified";
-  const transactionReady = Boolean(participant && session && kycEligible);
+  const policyAccepted = participant?.consumerPolicyVersion === CONSUMER_POLICY_VERSION && Boolean(participant.consumerPolicyAcceptedAt);
+  const transactionReady = Boolean(participant && session && kycEligible && policyAccepted);
   const visibleRoles = participant ? roles.filter((role) => role.role === participant.role) : roles;
+
+  useEffect(() => {
+    if (!participant || !session) return;
+    let active = true;
+    void getParticipant(participant.id).then((fresh) => {
+      if (active && fresh) void setActiveParticipant(fresh);
+    });
+    return () => { active = false; };
+  }, [participant?.id, session?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** One-tap sign-in with the SecureStore device key (no camera needed). */
   const deviceKeySignIn = async () => {
@@ -117,6 +130,13 @@ export default function Launch() {
       ) : null}
 
       {transactionReady ? <Pill active>✓ SIGNED IN</Pill> : null}
+
+      <Section title="Consumer rights">
+        {participant && session && !policyAccepted ? <Card style={{ borderColor: colors.orange }}>
+          <Text style={s.body}>Review and acknowledge the current consumer and refund policy before transacting.</Text>
+        </Card> : null}
+        <Button title="Consumer, returns and refund policy" secondary onPress={() => router.push("/consumer-policy" as never)} />
+      </Section>
 
       {participant && session ? (
         <Section title="Account">

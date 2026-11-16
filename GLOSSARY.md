@@ -88,6 +88,10 @@ A buyer's charge confirmed server-side and held against their cart before checko
 The return of buyer money decided by the settlement, executed by the payments worker after the decision — by provider refund for card charges, an honest `refund-manual` state for methods the system cannot return money through, or `refund-review` when conflicting provider history blocks safe automatic execution. Ambiguous attempts reconcile against provider history before any retry. Admin resolution records write-once evidence and may accept existing provider/manual refunds or permit canonical retry; it never edits the settlement amount. A refund, like a dispatch, never decides money.
 _Avoid_: reversal, chargeback
 
+**Consumer Policy Acceptance**:
+A participant's affirmative acknowledgement of one immutable version of the consumer, returns and refund policy. It is distinct from identity or biometric consent and does not reduce statutory consumer rights.
+_Avoid_: general consent, refund waiver
+
 **Payout Account**:
 A seller's saved bank destination for settlement payouts, collected resolve-then-save (bank list → provider account-name lookup → save). Resolution at dispatch is DB-first; selling is never blocked on having one.
 

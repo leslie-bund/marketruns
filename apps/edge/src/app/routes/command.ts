@@ -71,6 +71,10 @@ export function commandRoute(): Hono<{ Bindings: Env }> {
     if (!registry.ok) return registry;
     const recorded = ParticipantRecordedSchema.parse(await registry.json()) as ParticipantRecorded;
     await coreRegistry(c.env).saveParticipant(recorded.participant);
+    const acceptance = await coreRegistry(c.env).acceptConsumerPolicy(command.participantId, command.consumerPolicyVersion);
+    if (!acceptance) return errorResponse(500, "policy-acceptance-failed", "consumer policy acceptance could not be recorded");
+    recorded.participant.consumerPolicyVersion = acceptance.policyVersion;
+    recorded.participant.consumerPolicyAcceptedAt = acceptance.acceptedAt;
     if (canTransact(recorded.participant.kycStatus, preverifiedTransactionsAllowed(c.env))) {
       const joined = await joinMarket(c, {
         type: "market.joined",

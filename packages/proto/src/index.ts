@@ -46,6 +46,7 @@ export * from "./run.js";
 export * from "./settlement.js";
 export * from "./store.js";
 export * from "./participant.js";
+export * from "./consumer-policy.js";
 export * from "./archive.js";
 export * from "./payments.js";
 export * from "./admin.js";

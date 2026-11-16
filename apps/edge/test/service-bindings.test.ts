@@ -44,7 +44,7 @@ describe("deployed Worker service bindings", () => {
     const response = await createApp().fetch(new Request("http://edge/command", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
         type: "participant.onboarded", participantId, role: "buyer", displayName: "Binding Test",
-        email: "binding@example.com", consentAt: Date.now(), consentVersion: "kyc-onboarding-v1",
+        email: "binding@example.com", consentAt: Date.now(), consentVersion: "kyc-onboarding-v1", consumerPolicyVersion: "consumer-refund-v1",
         idDocumentType: "bvn", idDocument: "12345678901", market: "Balogun",
       }),
     }), env);

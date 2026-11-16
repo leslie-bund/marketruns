@@ -31,6 +31,7 @@ function command(participantId: string, role: "buyer" | "seller" | "runner" = "b
     email: "first@example.com",
     consentAt: Date.now(),
     consentVersion: "kyc-onboarding-v1",
+    consumerPolicyVersion: "consumer-refund-v1",
     idDocumentType: "bvn",
     idDocument: "12345678901",
     market: "Balogun",
@@ -140,6 +141,7 @@ describe("secure first-run onboarding", () => {
         idDocumentHash: await hashIdDocument("12345678901", "test-document-hmac-key"),
         consentAt: Date.now(),
         consentVersion: "kyc-onboarding-v1",
+    consumerPolicyVersion: "consumer-refund-v1",
         markets: ["Balogun"],
         createdAt: Date.now(),
       });

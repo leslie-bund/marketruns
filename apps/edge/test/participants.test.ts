@@ -24,6 +24,7 @@ async function postCommand(body: unknown): Promise<Response> {
     email: "participant@example.com",
     consentAt: Date.now(),
     consentVersion: "kyc-onboarding-v1",
+    consumerPolicyVersion: "consumer-refund-v1",
     ...input,
   } : body;
   return SELF.fetch(new Request(`${BASE}/command`, {

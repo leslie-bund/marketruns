@@ -1,4 +1,4 @@
-import type { ActiveRunsResponse, Cart, CartDeliveryOptions, CartQuote, CheckoutAccepted, Delivery, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantHistory, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
+import type { ActiveRunsResponse, Cart, CartDeliveryOptions, CartQuote, CheckoutAccepted, ConsumerPolicyAcceptance, Delivery, DiscoveryResponse, Intent, IntentDiscoveryEntry, LocationFix, MarketRegistryEntry, Participant, ParticipantHistory, ParticipantRecorded, PriceMove, Product, Run, Store } from "@market-runs/proto";
 import { EDGE_URL, newId } from "./config";
 import { getActiveMarket } from "./active-market";
 import { getActiveParticipant, participantHeaders, setActiveParticipant } from "./participant";
@@ -70,6 +70,7 @@ export async function onboardParticipant(input: {
   email: string;
   consentAt: number;
   consentVersion: string;
+  consumerPolicyVersion: string;
   idDocumentType: "bvn" | "nin";
   idDocument: string;
   market: string;
@@ -110,6 +111,16 @@ export async function getParticipant(participantId: string): Promise<Participant
   } catch {
     return null;
   }
+}
+
+export async function acceptConsumerPolicy(participantId: string, policyVersion: string): Promise<{
+  acceptance: ConsumerPolicyAcceptance;
+  participant: Participant;
+}> {
+  return request(`/participants/${encodeURIComponent(participantId)}/consumer-policy-acceptance`, {
+    method: "POST",
+    body: JSON.stringify({ policyVersion }),
+  });
 }
 
 export async function getHistory(): Promise<ParticipantHistory> {

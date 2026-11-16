@@ -1,4 +1,4 @@
-import type { LocationFix, MarketRegistryUpsert, Participant, Store } from "@market-runs/proto";
+import type { ConsumerPolicyAcceptance, LocationFix, MarketRegistryUpsert, Participant, Store } from "@market-runs/proto";
 
 export interface MarketRecord extends MarketRegistryUpsert {}
 
@@ -16,6 +16,7 @@ export interface CoreRegistry {
   upsertMarket(market: MarketRegistryUpsert): Promise<void>;
   participant(participantId: string): Promise<Participant | null>;
   saveParticipant(participant: Participant): Promise<void>;
+  acceptConsumerPolicy(participantId: string, policyVersion: string): Promise<ConsumerPolicyAcceptance | null>;
   store(storeId: string): Promise<Store | null>;
   storeForSeller(marketId: string, participantId: string): Promise<Store | null>;
   saveStore(store: Store): Promise<void>;

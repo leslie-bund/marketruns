@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Pressable, Text, View } from "react-native";
+import { CONSUMER_POLICY_VERSION } from "@market-runs/proto";
 import { onboardParticipant, setActiveParticipant, setActiveMarket, useActiveParticipant } from "../../src/api";
 import { Button, Card, Field, Label, Page, Pill, Section, colors, s } from "../../src/ui";
 
@@ -17,6 +18,7 @@ export default function OnboardingKyc() {
   const [docNumber, setDocNumber] = useState("");
   const [email, setEmail] = useState(pending?.email ?? "");
   const [consented, setConsented] = useState(false);
+  const [policyAccepted, setPolicyAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(pending ? "Verification is still pending." : null);
   const retrying = useRef(false);
@@ -36,6 +38,10 @@ export default function OnboardingKyc() {
       if (!silent) Alert.alert("Consent required", "Consent to document verification before continuing.");
       return;
     }
+    if (!policyAccepted) {
+      if (!silent) Alert.alert("Policy acknowledgement required", "Read and acknowledge the consumer and refund policy before continuing.");
+      return;
+    }
     retrying.current = true;
     if (!silent) setBusy(true);
     try {
@@ -45,6 +51,7 @@ export default function OnboardingKyc() {
         email: email.trim(),
         consentAt: Date.now(),
         consentVersion: ONBOARDING_CONSENT_VERSION,
+        consumerPolicyVersion: CONSUMER_POLICY_VERSION,
         idDocumentType: docType,
         idDocument: docNumber,
         market: pending?.markets[0] ?? params.market ?? "Balogun",
@@ -126,6 +133,16 @@ export default function OnboardingKyc() {
         <Pressable onPress={() => setConsented((value) => !value)}>
           <Card style={{ borderColor: consented ? colors.green : colors.line }}>
             <Text style={s.body}>{consented ? "✓ " : ""}I consent to verification of this document and storage of its keyed hash ({ONBOARDING_CONSENT_VERSION}).</Text>
+          </Card>
+        </Pressable>
+      </Section>
+
+      <Section title="Consumer and refund policy">
+        <Text style={s.muted}>The 30-minute dispute window pauses settlement; it never ends your statutory consumer rights.</Text>
+        <Button title="Read the full policy" secondary onPress={() => router.push("/consumer-policy" as never)} />
+        <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: policyAccepted }} onPress={() => setPolicyAccepted((value) => !value)}>
+          <Card style={{ borderColor: policyAccepted ? colors.green : colors.line }}>
+            <Text style={s.body}>{policyAccepted ? "✓ " : ""}I have read and acknowledge the Consumer, returns and refund policy ({CONSUMER_POLICY_VERSION}).</Text>
           </Card>
         </Pressable>
       </Section>

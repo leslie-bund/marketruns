@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TimestampSchema } from "./primitives.js";
 import { KycVerificationStatusSchema } from "./payments.js";
+import { CONSUMER_POLICY_VERSION } from "./consumer-policy.js";
 
 /**
  * Participant identity (ADR-0004 universal KYC, ADR-0015 auth seam). Every
@@ -28,6 +29,8 @@ export const ParticipantSchema = z.object({
   idDocumentHash: z.string().min(1),
   consentAt: TimestampSchema.optional(),
   consentVersion: z.string().min(1).optional(),
+  consumerPolicyAcceptedAt: TimestampSchema.optional(),
+  consumerPolicyVersion: z.string().min(1).optional(),
   /** Signed R2 reference of the onboarding facial capture. */
   facialCaptureRef: z.string().min(1).optional(),
   /** Markets this participant has joined. */
@@ -49,6 +52,7 @@ export const ParticipantOnboardedSchema = z.object({
   email: z.string().trim().email(),
   consentAt: TimestampSchema,
   consentVersion: z.string().min(1),
+  consumerPolicyVersion: z.literal(CONSUMER_POLICY_VERSION),
   idDocumentType: IdDocumentTypeSchema,
   idDocument: z.string().regex(/^\d{11}$/),
   /** The market the participant joins at onboarding. */

@@ -20,6 +20,7 @@ function onboardingRequest() {
     email: "deployed@example.com",
     consentAt: Date.now(),
     consentVersion: "kyc-onboarding-v1",
+    consumerPolicyVersion: "consumer-refund-v1",
     idDocumentType: "bvn",
     idDocument: "12345678901",
     market: "Balogun",

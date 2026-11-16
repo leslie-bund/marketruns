@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import { validateLocationWithinFence } from "@market-runs/domain";
-import { LocationFixSchema, ProductOfferedSchema, type ProductOffered } from "@market-runs/proto";
+import { CONSUMER_POLICY_VERSION, ConsumerPolicyAcceptanceRequestSchema, LocationFixSchema, ProductOfferedSchema, type ProductOffered } from "@market-runs/proto";
 import type { Env } from "../../config/env.js";
 import { errorResponse, expectCommand, parseClientCommand, refusal } from "../../do/runtime/index.js";
 import { LEGACY_REGISTRY_NAME, participantObjectName } from "../../do/participant-do.js";
@@ -104,6 +104,24 @@ export function productsRoute(): Hono<{ Bindings: Env }> {
 /** /participants/:participantId — the participant registry read path. */
 export function participantsRoute(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
+  app.post("/:participantId/consumer-policy-acceptance", async (c) => {
+    const participantId = decodeURIComponent(c.req.param("participantId") ?? "");
+    const who = c.get("participant");
+    if (who.source === "unauthenticated" || who.source === "anonymous") {
+      return errorResponse(401, "unauthorized", "a participant session is required");
+    }
+    if (who.id !== participantId) return errorResponse(403, "forbidden", "participants may accept policy only for themselves");
+    const parsed = ConsumerPolicyAcceptanceRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return errorResponse(400, "invalid-request", "consumer policy acceptance failed schema validation");
+    if (parsed.data.policyVersion !== CONSUMER_POLICY_VERSION) {
+      return errorResponse(409, "consumer-policy-version-required", "review and accept the current consumer and refund policy");
+    }
+    const registry = coreRegistry(c.env);
+    const acceptance = await registry.acceptConsumerPolicy(participantId, parsed.data.policyVersion);
+    if (!acceptance) return errorResponse(404, "not-found", "participant is unknown");
+    const durable = await registry.participant(participantId);
+    return c.json({ acceptance, participant: durable });
+  });
   app.all("/:participantId", async (c) => {
     const participantId = decodeURIComponent(c.req.param("participantId") ?? "");
     const who = c.get("participant");

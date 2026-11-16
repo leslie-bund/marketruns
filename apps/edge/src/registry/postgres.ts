@@ -59,7 +59,16 @@ export class PostgresCoreRegistry implements CoreRegistry {
 
   async participant(participantId: string): Promise<Participant | null> {
     return this.withSql(async (sql) => {
-      const rows = await sql`SELECT * FROM participant_profiles WHERE participant_id = ${participantId} LIMIT 1`;
+      const rows = await sql`
+        SELECT profile.*, acceptance.policy_version AS consumer_policy_version,
+          acceptance.accepted_at AS consumer_policy_accepted_at
+        FROM participant_profiles profile
+        LEFT JOIN LATERAL (
+          SELECT policy_version, accepted_at FROM consumer_policy_acceptances
+          WHERE participant_id = ${participantId}
+          ORDER BY accepted_at DESC LIMIT 1
+        ) acceptance ON true
+        WHERE profile.participant_id = ${participantId} LIMIT 1`;
       const row = rows[0];
       if (!row) return null;
       return {
@@ -73,10 +82,32 @@ export class PostgresCoreRegistry implements CoreRegistry {
         idDocumentHash: row.id_document_hash,
         ...(row.consent_at ? { consentAt: millis(row.consent_at) } : {}),
         ...(row.consent_version ? { consentVersion: row.consent_version } : {}),
+        ...(row.consumer_policy_accepted_at ? { consumerPolicyAcceptedAt: millis(row.consumer_policy_accepted_at) } : {}),
+        ...(row.consumer_policy_version ? { consumerPolicyVersion: row.consumer_policy_version } : {}),
         ...(row.facial_capture_ref ? { facialCaptureRef: row.facial_capture_ref } : {}),
         markets: row.markets,
         createdAt: millis(row.created_at),
       } as Participant;
+    });
+  }
+
+  async acceptConsumerPolicy(participantId: string, policyVersion: string) {
+    return this.withSql(async (sql) => {
+      const id = `consumer-policy-acceptance:${participantId}:${policyVersion}`;
+      await sql`
+        INSERT INTO consumer_policy_acceptances (id, participant_id, policy_version)
+        SELECT ${id}, ${participantId}, ${policyVersion}
+        WHERE EXISTS (SELECT 1 FROM participant_profiles WHERE participant_id = ${participantId})
+        ON CONFLICT (participant_id, policy_version) DO NOTHING`;
+      const rows = await sql`
+        SELECT participant_id, policy_version, accepted_at FROM consumer_policy_acceptances
+        WHERE participant_id = ${participantId} AND policy_version = ${policyVersion} LIMIT 1`;
+      const row = rows[0];
+      return row ? {
+        participantId: String(row.participant_id),
+        policyVersion: String(row.policy_version),
+        acceptedAt: millis(row.accepted_at),
+      } : null;
     });
   }
 

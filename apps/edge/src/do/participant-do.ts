@@ -174,6 +174,8 @@ export class ParticipantDO extends DurableObject<Env> {
       idDocumentHash,
       consentAt: command.consentAt,
       consentVersion: command.consentVersion,
+      consumerPolicyAcceptedAt: Date.now(),
+      consumerPolicyVersion: command.consumerPolicyVersion,
       markets: [command.market],
       createdAt: Date.now(),
     };

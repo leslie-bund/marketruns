@@ -1,4 +1,4 @@
-import type { Participant, Store } from "@market-runs/proto";
+import type { ConsumerPolicyAcceptance, Participant, Store } from "@market-runs/proto";
 import { PRESENCE_TTL_MS } from "@market-runs/proto";
 import type { CoreRegistry, MarketRecord, PresenceRecord } from "./types.js";
 
@@ -10,6 +10,7 @@ const SEEDS: MarketRecord[] = [
 interface MemoryState {
   markets: Map<string, MarketRecord>;
   participants: Map<string, Participant>;
+  consumerPolicyAcceptances: Map<string, ConsumerPolicyAcceptance>;
   stores: Map<string, Store>;
   runners: Set<string>;
   presence: Map<string, PresenceRecord>;
@@ -20,6 +21,7 @@ const globalRegistry = globalThis as typeof globalThis & { [key]?: MemoryState }
 const state: MemoryState = globalRegistry[key] ??= {
   markets: new Map(SEEDS.map((market) => [market.id, market])),
   participants: new Map(),
+  consumerPolicyAcceptances: new Map(),
   stores: new Map(),
   runners: new Set(),
   presence: new Map(),
@@ -27,6 +29,7 @@ const state: MemoryState = globalRegistry[key] ??= {
 
 const runnerKey = (marketId: string, participantId: string) => `${marketId}\u0000${participantId}`;
 const presenceKey = (marketId: string, participantId: string) => `${marketId}\u0000${participantId}`;
+const acceptanceKey = (participantId: string, policyVersion: string) => `${participantId}\u0000${policyVersion}`;
 
 /** Explicit dev/test adapter. It is never selected in the deployed default posture. */
 export class MemoryCoreRegistry implements CoreRegistry {
@@ -52,6 +55,21 @@ export class MemoryCoreRegistry implements CoreRegistry {
 
   async saveParticipant(participant: Participant) {
     state.participants.set(participant.id, structuredClone(participant));
+  }
+
+  async acceptConsumerPolicy(participantId: string, policyVersion: string) {
+    const participant = state.participants.get(participantId);
+    if (!participant) return null;
+    const key = acceptanceKey(participantId, policyVersion);
+    const acceptance = state.consumerPolicyAcceptances.get(key) ?? {
+      participantId,
+      policyVersion,
+      acceptedAt: Date.now(),
+    };
+    state.consumerPolicyAcceptances.set(key, acceptance);
+    participant.consumerPolicyAcceptedAt = acceptance.acceptedAt;
+    participant.consumerPolicyVersion = acceptance.policyVersion;
+    return structuredClone(acceptance);
   }
 
   async store(storeId: string) {

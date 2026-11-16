@@ -264,6 +264,7 @@ async function enrollRole(roleName) {
         email: role.email,
         consentAt: Date.now(),
         consentVersion: "kyc-onboarding-v1",
+      consumerPolicyVersion: "consumer-refund-v1",
         idDocumentType: "bvn",
         idDocument: "00000000000",
         market: MARKET,

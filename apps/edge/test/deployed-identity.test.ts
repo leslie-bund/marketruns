@@ -55,6 +55,7 @@ function onboardingCommand(participantId: string) {
     email: "deployed-buyer@example.com",
     consentAt: Date.now(),
     consentVersion: "kyc-onboarding-v1",
+    consumerPolicyVersion: "consumer-refund-v1",
     idDocumentType: "bvn",
     idDocument: "12345678901",
     market: "Balogun",
@@ -103,6 +104,14 @@ beforeEach(() => {
   vi.spyOn(PostgresCoreRegistry.prototype, "saveParticipant").mockImplementation(async (participant) => {
     durableProfile = structuredClone(participant);
     savedParticipants.push(structuredClone(participant));
+  });
+  vi.spyOn(PostgresCoreRegistry.prototype, "acceptConsumerPolicy").mockImplementation(async (participantId, policyVersion) => {
+    const acceptedAt = Date.now();
+    if (durableProfile?.id === participantId) {
+      durableProfile.consumerPolicyVersion = policyVersion;
+      durableProfile.consumerPolicyAcceptedAt = acceptedAt;
+    }
+    return { participantId, policyVersion, acceptedAt };
   });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -178,6 +187,7 @@ describe("internal identity KYC reconciliation", () => {
     idDocumentHash: "ab".repeat(32),
     consentAt: 1_761_000_000_000,
     consentVersion: "kyc-onboarding-v1",
+    consumerPolicyVersion: "consumer-refund-v1",
     markets: ["Balogun"],
     createdAt: 1_761_000_000_000,
   };

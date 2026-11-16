@@ -60,3 +60,15 @@ test("authenticated seller forms never inherit the Amina demo values", () => {
   assert.doesNotMatch(sellerJoin, /useState\("Amina's Fresh Store"\)|Stall B14/);
   assert.match(client, /\/store`\);\n    return body\.store/);
 });
+
+
+test("consumer policy is visible and requires an explicit, versioned acknowledgement", () => {
+  const policy = read("app/consumer-policy.tsx");
+  assert.match(kyc, /consumerPolicyVersion: CONSUMER_POLICY_VERSION/);
+  assert.match(kyc, /!policyAccepted/);
+  assert.match(policy, /I have read and acknowledge the Consumer, returns and refund policy/);
+  assert.match(policy, /acceptConsumerPolicy\(participant\.id, CONSUMER_POLICY_VERSION\)/);
+  assert.match(policy, /30-minute in-app dispute window|dispute window helps pause settlement/);
+  assert.match(roleGate, /!policyAccepted/);
+  assert.match(launch, /consumer-policy/);
+});

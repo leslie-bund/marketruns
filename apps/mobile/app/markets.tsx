@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
 import { Alert, Pressable, Text, View } from "react-native";
+import { CONSUMER_POLICY_VERSION } from "@market-runs/proto";
 import {
   joinMarket,
   listMarkets,
@@ -28,6 +29,7 @@ export default function Markets() {
   const destination = role === "seller" ? "/seller" : role === "runner" ? "/runner" : "/buyer";
   const finish = () => role ? router.replace(destination) : router.back();
   const kycEligible = participant?.kycStatus === "verified" || participant?.kycStatus === "preverified";
+  const policyAccepted = participant?.consumerPolicyVersion === CONSUMER_POLICY_VERSION && Boolean(participant.consumerPolicyAcceptedAt);
 
   const join = async (marketId: string) => {
     if (!participant) {
@@ -37,8 +39,8 @@ export default function Markets() {
       ]);
       return;
     }
-    if (!session || !kycEligible || (role && role !== participant.role)) {
-      Alert.alert("Sign in required", "Use your verified role and a live session before joining a market.");
+    if (!session || !kycEligible || !policyAccepted || (role && role !== participant.role)) {
+      Alert.alert("Account review required", "Sign in, verify your identity and acknowledge the current consumer policy before joining a market.");
       return;
     }
     setBusy(marketId);
@@ -60,7 +62,7 @@ export default function Markets() {
           const joined = participant?.markets.includes(market.id) ?? false;
           const isActive = active === market.id;
           const roleMatches = !role || !participant || role === participant.role;
-          const canEnter = !role || !participant || (joined && roleMatches && Boolean(session) && kycEligible);
+          const canEnter = !role || !participant || (joined && roleMatches && Boolean(session) && kycEligible && policyAccepted);
           return (
             <Pressable key={market.id} onPress={async () => { if (!canEnter) return; await setActiveMarket(market.id); finish(); }}>
               <Card style={isActive ? { borderColor: colors.green, borderWidth: 2 } : undefined}>

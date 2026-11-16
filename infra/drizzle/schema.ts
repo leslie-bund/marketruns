@@ -161,6 +161,20 @@ export const participantProfiles = pgTable(
   ],
 );
 
+export const consumerPolicyAcceptances = pgTable(
+  "consumer_policy_acceptances",
+  {
+    id: text("id").primaryKey(),
+    participantId: text("participant_id").notNull(),
+    policyVersion: text("policy_version").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("consumer_policy_acceptance_version_unique").on(table.participantId, table.policyVersion),
+    index("consumer_policy_acceptance_participant_idx").on(table.participantId, table.acceptedAt),
+  ],
+);
+
 export const markets = pgTable(
   "markets",
   {

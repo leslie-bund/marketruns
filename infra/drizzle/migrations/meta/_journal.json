@@ -162,6 +162,13 @@
       "when": 1794643963886,
       "tag": "0022_retained_media",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794791658341,
+      "tag": "0023_consumer_policy_acceptances",
+      "breakpoints": true
     }
   ]
 }
